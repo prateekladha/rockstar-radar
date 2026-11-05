@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import require_user
 from ..db import get_db
-from ..models import Order, User
+from ..models import BrokerConnection, Order, User
 
 router = APIRouter(prefix='/api', tags=['trading'])
 
@@ -98,6 +98,14 @@ async def place_order(request: Request, user: User = Depends(require_user),
         return JSONResponse({'error': 'Quantity must be greater than 0.'}, status_code=400)
     if entry <= 0 or (stop is not None and stop <= 0) or (target is not None and target <= 0):
         return JSONResponse({'error': 'Prices must be greater than 0.'}, status_code=400)
+    # Trading requires the user's OWN broker — never a teammate's/admin's shared broker.
+    own = (db.query(BrokerConnection)
+           .filter(BrokerConnection.user_id == user.id, BrokerConnection.broker == 'fyers',
+                   BrokerConnection.app_id.isnot(None), BrokerConnection.secret_enc.isnot(None))
+           .first())
+    if own is None:
+        return JSONResponse({'error': 'Connect your own broker before placing trades.',
+                             'need_broker': True}, status_code=403)
     o = Order(user_id=user.id, symbol=symbol, side=side, qty=qty, entry=entry,
               stop=stop, target=target, status='open', mode='paper',
               source=b.get('source', 'manual'), note=b.get('note'))

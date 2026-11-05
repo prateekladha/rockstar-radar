@@ -39,17 +39,17 @@ _DEMO = [
 ]
 
 
-def seed_demo_picks(db: Session, household_id: int) -> None:
+def seed_demo_picks(db: Session, user: User) -> None:
     # Demo picks are for the public marketing demo only. Real users get picks generated from the
     # live scanner during market hours (empty before the open).
     if os.environ.get('RADAR_DEMO') != '1':
         return
     today = now_ist().date().isoformat()
-    if db.query(SmartPick).filter_by(household_id=household_id, day=today).count() > 0:
+    if db.query(SmartPick).filter_by(user_id=user.id, day=today).count() > 0:
         return
     for sym, name, bias, focus, lp, sp in _DEMO:
-        db.add(SmartPick(household_id=household_id, day=today, symbol=sym, name=name,
-                         bias=bias, focus=1 if focus else 0, long_plan=lp, short_plan=sp))
+        db.add(SmartPick(user_id=user.id, household_id=user.household_id, day=today, symbol=sym,
+                         name=name, bias=bias, focus=1 if focus else 0, long_plan=lp, short_plan=sp))
     db.commit()
 
 
@@ -97,22 +97,22 @@ def _bias_for(r: dict) -> str:
     return 'both'
 
 
-def generate_smart_picks(db: Session, household_id: int, state: dict) -> None:
-    """Rebuild today's AUTO picks from the live scanner — only symbols that are genuinely setting
-    up (actionable state or a real score), ranked by score. Manual picks (source='manual') kept.
+def generate_smart_picks(db: Session, user: User, state: dict) -> None:
+    """Rebuild this user's AUTO picks from their effective feed — only symbols genuinely setting up
+    (actionable state or a real score), ranked by score. Manual picks (source='manual') kept.
     If nothing qualifies (e.g. pre-open or after close), today's auto picks are cleared."""
     rows = [r for r in (state.get('all') or [])
             if r.get('orh') and r.get('orl')
             and (r.get('state') in _PICK_STATES or (r.get('score') or 0) > 0)]
     rows.sort(key=lambda r: -(r.get('score') or 0))
     today = now_ist().date().isoformat()
-    db.query(SmartPick).filter_by(household_id=household_id, day=today, source='auto').delete()
+    db.query(SmartPick).filter_by(user_id=user.id, day=today, source='auto').delete()
     for i, r in enumerate(rows[:20]):
         lp, sp = _or_plans(r['orh'], r['orl'])
         bias = _bias_for(r)
         nm = _name_from_symbol(r['symbol'])
-        db.add(SmartPick(household_id=household_id, day=today, symbol=nm, name=nm, bias=bias,
-                         focus=1 if i < 5 else 0, source='auto',
+        db.add(SmartPick(user_id=user.id, household_id=user.household_id, day=today, symbol=nm,
+                         name=nm, bias=bias, focus=1 if i < 5 else 0, source='auto',
                          long_plan=lp if bias in ('long', 'both') else None,
                          short_plan=sp if bias in ('short', 'both') else None,
                          note=r.get('reason')))
@@ -123,17 +123,17 @@ def generate_smart_picks(db: Session, household_id: int, state: dict) -> None:
 def list_picks(user: User = Depends(require_user), db: Session = Depends(get_db),
                q: str = '', bias: str = '', page: int = Query(1, ge=1),
                page_size: int = Query(20, ge=1, le=100)):
-    seed_demo_picks(db, user.household_id)
-    # Real users: refresh today's shortlist from the live scanner (OR-based long/short plans).
+    seed_demo_picks(db, user)
+    # Refresh today's shortlist from the user's effective feed (their own broker, else shared).
     try:
         from .. import scanners
         state = scanners.radar_state(db, user)
         if state.get('data_mode') == 'live':
-            generate_smart_picks(db, user.household_id, state)
+            generate_smart_picks(db, user, state)
     except Exception as e:
         print(f'smart-pick generation skipped: {e}')
     today = now_ist().date().isoformat()
-    query = db.query(SmartPick).filter_by(household_id=user.household_id, day=today)
+    query = db.query(SmartPick).filter_by(user_id=user.id, day=today)
     if q:
         query = query.filter(SmartPick.symbol.ilike(f'%{q}%'))
     if bias:
@@ -151,7 +151,7 @@ async def add_pick(request: Request, admin: User = Depends(require_admin),
     b = await request.json()
     if not b.get('symbol'):
         return JSONResponse({'error': 'Symbol is required.'}, status_code=400)
-    db.add(SmartPick(household_id=admin.household_id, day=now_ist().date().isoformat(),
+    db.add(SmartPick(user_id=admin.id, household_id=admin.household_id, day=now_ist().date().isoformat(),
                      symbol=b['symbol'].upper(), name=b.get('name'), bias=b.get('bias', 'both'),
                      focus=1 if b.get('focus') else 0, source='manual',
                      long_plan=b.get('long_plan'), short_plan=b.get('short_plan'), note=b.get('note')))

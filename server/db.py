@@ -25,6 +25,7 @@ _ADDED_COLUMNS = {
     },
     'smart_picks': {
         "source": "VARCHAR(10) DEFAULT 'auto'",
+        'user_id': 'INTEGER',
     },
     'signal_logs': {
         'day': 'VARCHAR(10)',

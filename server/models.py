@@ -179,6 +179,7 @@ class SmartPick(Base):
     __tablename__ = 'smart_picks'
     id = Column(Integer, primary_key=True)
     household_id = Column(Integer, ForeignKey('households.id'), index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), index=True)   # whose feed produced this pick
     day = Column(String(10), index=True)     # YYYY-MM-DD
     symbol = Column(String(40))
     name = Column(String(120))

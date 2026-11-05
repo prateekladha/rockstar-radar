@@ -71,7 +71,7 @@ export default function Radar() {
         <Kpi label="Signals ready" val={off ? '—' : d.active_candidates} sub="setups to review" cls="live" />
         <Kpi label="Feed" cls={d.data_mode === 'live' ? 'live' : ''}
           val={off ? 'Off' : (d.data_mode === 'live' ? 'Live' : 'Demo')}
-          sub={off ? 'starting…' : (d.universe || feedLabel(d.feed_health))} />
+          sub={off ? 'starting…' : ((d.shared ? 'Shared · ' : '') + (d.universe || feedLabel(d.feed_health)))} />
         <Kpi label="Session" val={off ? '—' : (d.session_closed ? 'Closed' : 'Open')} sub={off ? '' : (d.server_time_ist || '').slice(11) + ' IST'} />
       </div>
 
