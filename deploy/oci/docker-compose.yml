@@ -17,7 +17,7 @@ services:
     environment:
       - SECRETS_DIR=/secrets
     volumes:
-      - secrets:/secrets
+      - /dev/shm/rockstar-radar:/secrets   # shared host tmpfs (RAM) — readable by all containers
     restart: "no"
 
   postgres:
@@ -29,7 +29,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-radar}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - secrets:/secrets:ro
+      - /dev/shm/rockstar-radar:/secrets:ro
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -55,7 +55,7 @@ services:
       - PUBLIC_BASE_URL=https://${DOMAIN}   # correct https origin for the FYERS/Google callbacks
     volumes:
       - radar_data:/app/data                # scanner pidfiles/logs + downloaded universe CSVs
-      - secrets:/secrets:ro                 # RAM-only secrets (app.env)
+      - /dev/shm/rockstar-radar:/secrets:ro # RAM-only secrets (app.env), shared host tmpfs
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -84,7 +84,5 @@ volumes:
   radar_data:
   caddy_data:
   caddy_config:
-  secrets:
-    driver_opts:
-      type: tmpfs
-      device: tmpfs      # RAM-only — secrets never written to disk
+# NOTE: secrets are shared via the host tmpfs /dev/shm/rockstar-radar (RAM, never on disk),
+# bind-mounted into the containers above — a tmpfs *named volume* is NOT shared between containers.

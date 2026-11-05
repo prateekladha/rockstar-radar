@@ -33,9 +33,32 @@ else
   sudo apt-get update -y && sudo apt-get install -y iptables-persistent || true
 fi
 
-# 3. Build + start (compose reads ./.env automatically).
+# 3. Shared RAM dir for secrets (tmpfs; cleared on reboot and re-populated by secrets-init).
+sudo mkdir -p /dev/shm/rockstar-radar
+
+# 4. systemd unit so the stack (incl. secrets-init repopulating /dev/shm) comes up on every boot.
+echo "▶ Installing boot-persistence systemd unit …"
+sudo tee /etc/systemd/system/rockstar.service >/dev/null <<UNIT
+[Unit]
+Description=Rockstar Radar
+Requires=docker.service
+After=docker.service network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$APP_DIR/deploy/oci
+ExecStartPre=/usr/bin/mkdir -p /dev/shm/rockstar-radar
+ExecStart=/usr/bin/docker compose up -d --build
+ExecStop=/usr/bin/docker compose down
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable rockstar.service
+
+# 5. Build + start.
 echo "▶ Building & starting containers …"
-sudo docker compose up -d --build
+sudo systemctl restart rockstar.service
 
 echo ""
 echo "✅ Deployed. Point ${DOMAIN} DNS at this VM's IP (if not already), give Caddy ~30s for the"
