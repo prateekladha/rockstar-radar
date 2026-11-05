@@ -11,10 +11,7 @@ services:
   secrets-init:
     build:
       context: ../..
-      args:
-        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}
-        VITE_POSTHOG_HOST: ${VITE_POSTHOG_HOST:-/ingest}
-    command: ["python", "deploy/oci/secrets_init.py"]
+      dockerfile: deploy/oci/Dockerfile.secrets   # minimal image with the OCI SDK only
     env_file:
       - .env                              # OCI_REGION + SECRET_OCID_* (non-secret pointers)
     environment:
