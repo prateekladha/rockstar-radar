@@ -194,7 +194,8 @@ class SmartPick(Base):
 
     def public(self):
         return {'id': self.id, 'day': self.day, 'symbol': self.symbol, 'name': self.name,
-                'bias': self.bias, 'focus': bool(self.focus),
+                'bias': self.bias, 'focus': bool(self.focus), 'source': self.source,
+                'pinned': self.source == 'pinned',
                 'long_plan': self.long_plan, 'short_plan': self.short_plan, 'note': self.note}
 
 

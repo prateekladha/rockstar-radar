@@ -203,6 +203,11 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 .segmented .seg:hover{color:var(--text);background:var(--surface-3)}
 .segmented .seg.on{border-color:var(--accent);background:var(--accent-bg);color:var(--accent-ink)}
 .segmented .segsub{font-size:11px;font-weight:600;color:var(--long-ink);text-transform:uppercase;letter-spacing:.05em}
+.chiprow{display:flex;flex-wrap:wrap;gap:8px}
+.pinchip{display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border-radius:999px;font-size:12.5px;font-weight:700;color:var(--accent-ink);background:var(--accent-bg);border:1px solid #2b4c8a}
+.pinchip .x{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;border:none;background:transparent;color:var(--accent-2);font-size:15px;line-height:1;cursor:pointer;transition:.12s}
+.pinchip .x:hover{background:var(--short-bg);color:var(--short-ink)}
+.panel.pinned{border-color:#2b4c8a;box-shadow:0 0 0 1px var(--accent-bg) inset,var(--sh)}
 .detail-row td{background:#0c1322;padding:14px 16px !important}
 .timeline{display:flex;flex-direction:column;gap:8px}
 .tl-item{display:flex;align-items:baseline;gap:12px;font-size:13px;flex-wrap:wrap}

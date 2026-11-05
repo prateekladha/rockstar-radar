@@ -43,7 +43,10 @@ services:
     build:
       context: ../..
       args:
-        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}
+        # PostHog PROJECT key is a public, publishable client key (shipped in the browser bundle),
+        # so it is safe to default here — no VM .env edit needed. Override via deploy/oci/.env if you
+        # ever rotate the project. Analytics are reverse-proxied through /ingest (first-party).
+        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-phc_qxLbJmnJPqmnzcD4sz82cFNM7g6sCi23Zt7q43BLhdUM}
         VITE_POSTHOG_HOST: ${VITE_POSTHOG_HOST:-/ingest}
     restart: unless-stopped
     env_file:

@@ -168,7 +168,7 @@ export function PlaceOrder({ preset, onClose, onDone }) {
   )
 }
 
-function SymbolSearch({ value, onPick }) {
+export function SymbolSearch({ value, onPick }) {
   const [q, setQ] = useState(value || '')
   const [opts, setOpts] = useState([])
   const [open, setOpen] = useState(false)

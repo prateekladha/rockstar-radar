@@ -20,6 +20,7 @@ from radar import universe as U
 from radar.control import ControlCenter
 from radar.utils import IST, now_ist
 
+from . import watchpins
 from .crypto import decrypt
 from .models import BrokerConnection, User
 
@@ -74,17 +75,23 @@ def _token_is_fresh_today(conn: BrokerConnection) -> bool:
     return ts.astimezone(IST).date() == now_ist().date()
 
 
-def _cc_for(owner_id: int, app_id: str, token: str, idx: str) -> ControlCenter:
-    """One scanner per broker owner (keyed by their user id)."""
+def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') -> ControlCenter:
+    """One scanner per broker owner (keyed by their user id). ``pins`` are the owner's manual
+    watchlist tickers (comma-joined, canonical) — priority-scanned and force-included even if
+    outside the chosen universe. They take effect on the owner's next scanner (re)start."""
     key = f'u{owner_id}'
     with _lock:
         cc = _scanners.get(key)
         if cc is None:
             cc = ControlCenter(demo=False, env_extra={
-                'FYERS_APP_ID': app_id, 'FYERS_ACCESS_TOKEN': token, 'RADAR_UNIVERSE_INDEX': idx})
+                'FYERS_APP_ID': app_id, 'FYERS_ACCESS_TOKEN': token, 'RADAR_UNIVERSE_INDEX': idx,
+                'RADAR_MORNING_PINS': pins})
             cc.scanner_port = _LIVE_PORT_BASE + (owner_id % 60)
             cc.pid_path = cc.root / 'data' / f'.scanner_live_{key}.pid'
             _scanners[key] = cc
+        else:
+            # Keep the owner's pins current so the next scan session picks up any changes.
+            cc.env_extra['RADAR_MORNING_PINS'] = pins
         try:
             if not cc.scanner_status()['running']:
                 cc.start_scanner()
@@ -114,7 +121,8 @@ def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
     """Scheduler entry point: start the owner's scanner if today's token is present."""
     if not _token_is_fresh_today(conn) or not conn.token_enc:
         return False
-    _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), _universe_index(conn.user))
+    _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), _universe_index(conn.user),
+            watchpins.pins_env(db, conn.user_id))
     return True
 
 
@@ -131,7 +139,8 @@ def radar_state(db: Session, user: User) -> dict:
         if conn.token_enc and _token_is_fresh_today(conn):
             # Shared feed reuses the owner's scanner + the owner's universe (one scanner per broker).
             use_idx = idx if source == 'own' else _universe_index(conn.user)
-            st = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), use_idx).live_state()
+            st = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), use_idx,
+                         watchpins.pins_env(db, conn.user_id)).live_state()
             st['data_mode'] = 'live'
             st['source'] = source
             st['shared'] = (source == 'shared')

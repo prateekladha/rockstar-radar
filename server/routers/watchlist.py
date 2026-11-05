@@ -1,12 +1,19 @@
-"""Smart watchlist — the daily auto-shortlist of intraday stocks with long/short plans."""
+"""Smart watchlist — the daily auto-shortlist of intraday stocks with long/short plans.
+
+On top of the auto shortlist, users can **pin** stocks by hand (see watchpins). Pinned stocks are
+priority-scanned by the user's feed and always sit at the top of the watchlist, ahead of the
+auto-ranked ideas — so a stock you care about is never missed while chasing the best opportunity.
+"""
 from __future__ import annotations
 import os
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from radar.utils import now_ist
 
+from .. import watchpins
 from ..auth import require_admin, require_user
 from ..db import get_db
 from ..models import SmartPick, User
@@ -97,26 +104,71 @@ def _bias_for(r: dict) -> str:
     return 'both'
 
 
-def generate_smart_picks(db: Session, user: User, state: dict) -> None:
-    """Rebuild this user's AUTO picks from their effective feed — only symbols genuinely setting up
-    (actionable state or a real score), ranked by score. Manual picks (source='manual') kept.
-    If nothing qualifies (e.g. pre-open or after close), today's auto picks are cleared."""
-    rows = [r for r in (state.get('all') or [])
-            if r.get('orh') and r.get('orl')
-            and (r.get('state') in _PICK_STATES or (r.get('score') or 0) > 0)]
-    rows.sort(key=lambda r: -(r.get('score') or 0))
+def _add_pick(db, user, today, *, symbol, name, bias, focus, source, lp, sp, note):
+    db.add(SmartPick(user_id=user.id, household_id=user.household_id, day=today, symbol=symbol,
+                     name=name, bias=bias, focus=focus, source=source,
+                     long_plan=lp if bias in ('long', 'both') else None,
+                     short_plan=sp if bias in ('short', 'both') else None, note=note))
+
+
+def refresh_picks(db: Session, user: User, state: dict | None) -> None:
+    """Rebuild this user's pinned + auto picks for today.
+
+    Pinned stocks (the user's manual watchlist) always come first, with live levels when their
+    opening range has formed. Auto picks follow — symbols genuinely setting up (actionable state or
+    a real score), ranked by score, excluding anything already pinned. Admin-authored manual picks
+    (source='manual') are left untouched.
+    """
     today = now_ist().date().isoformat()
-    db.query(SmartPick).filter_by(user_id=user.id, day=today, source='auto').delete()
-    for i, r in enumerate(rows[:20]):
-        lp, sp = _or_plans(r['orh'], r['orl'])
-        bias = _bias_for(r)
-        nm = _name_from_symbol(r['symbol'])
-        db.add(SmartPick(user_id=user.id, household_id=user.household_id, day=today, symbol=nm,
-                         name=nm, bias=bias, focus=1 if i < 5 else 0, source='auto',
-                         long_plan=lp if bias in ('long', 'both') else None,
-                         short_plan=sp if bias in ('short', 'both') else None,
-                         note=r.get('reason')))
+    live = bool(state) and state.get('data_mode') == 'live'
+    pins_bare = [watchpins.bare(p) for p in watchpins.get_pins(db, user.id)]
+    pin_set = set(pins_bare)
+
+    rows, rows_by_bare = [], {}
+    if live:
+        all_rows = state.get('all') or []
+        rows_by_bare = {watchpins.bare(r['symbol']): r for r in all_rows if r.get('symbol')}
+        rows = [r for r in all_rows if r.get('orh') and r.get('orl')
+                and (r.get('state') in _PICK_STATES or (r.get('score') or 0) > 0)]
+        rows.sort(key=lambda r: -(r.get('score') or 0))
+
+    db.query(SmartPick).filter(SmartPick.user_id == user.id, SmartPick.day == today,
+                               SmartPick.source.in_(('auto', 'pinned'))).delete(
+        synchronize_session=False)
+
+    # Pinned first — always shown, with live levels if the opening range exists yet.
+    for b in pins_bare:
+        r = rows_by_bare.get(b)
+        if r and r.get('orh') and r.get('orl'):
+            lp, sp = _or_plans(r['orh'], r['orl'])
+            bias = _bias_for(r)
+            note = r.get('reason') or 'Pinned — priority stock for today.'
+        else:
+            lp, sp, bias = None, None, 'both'
+            note = ('Pinned by you — priority-scanned. Levels appear once its opening range forms.'
+                    if live else 'Pinned by you — priority-scanned each session.')
+        _add_pick(db, user, today, symbol=b, name=b, bias=bias, focus=1, source='pinned',
+                  lp=lp, sp=sp, note=note)
+
+    # Auto shortlist (only from a live feed), skipping anything already pinned.
+    if live:
+        n = 0
+        for r in rows:
+            b = watchpins.bare(r['symbol'])
+            if b in pin_set:
+                continue
+            lp, sp = _or_plans(r['orh'], r['orl'])
+            _add_pick(db, user, today, symbol=b, name=b, bias=_bias_for(r),
+                      focus=1 if n < 5 else 0, source='auto', lp=lp, sp=sp, note=r.get('reason'))
+            n += 1
+            if n >= 20:
+                break
     db.commit()
+
+
+# Back-compat name (older callers/tests).
+def generate_smart_picks(db: Session, user: User, state: dict) -> None:
+    refresh_picks(db, user, state)
 
 
 @router.get('')
@@ -124,12 +176,16 @@ def list_picks(user: User = Depends(require_user), db: Session = Depends(get_db)
                q: str = '', bias: str = '', page: int = Query(1, ge=1),
                page_size: int = Query(20, ge=1, le=100)):
     seed_demo_picks(db, user)
-    # Refresh today's shortlist from the user's effective feed (their own broker, else shared).
+    # Refresh today's shortlist from the user's effective feed, and always sync pinned stocks
+    # (so a user's manual watchlist shows even before the open / outside market hours).
     try:
         from .. import scanners
         state = scanners.radar_state(db, user)
-        if state.get('data_mode') == 'live':
-            generate_smart_picks(db, user, state)
+    except Exception as e:
+        print(f'radar state unavailable for picks: {e}')
+        state = None
+    try:
+        refresh_picks(db, user, state)
     except Exception as e:
         print(f'smart-pick generation skipped: {e}')
     today = now_ist().date().isoformat()
@@ -138,7 +194,9 @@ def list_picks(user: User = Depends(require_user), db: Session = Depends(get_db)
         query = query.filter(SmartPick.symbol.ilike(f'%{q}%'))
     if bias:
         query = query.filter(SmartPick.bias == bias)
-    query = query.order_by(SmartPick.focus.desc(), SmartPick.symbol)
+    # Pinned first, then focus, then alphabetical.
+    pinned_first = case((SmartPick.source == 'pinned', 0), else_=1)
+    query = query.order_by(pinned_first, SmartPick.focus.desc(), SmartPick.symbol)
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     return {'items': [p.public() for p in items], 'total': total, 'page': page,
@@ -157,3 +215,35 @@ async def add_pick(request: Request, admin: User = Depends(require_admin),
                      long_plan=b.get('long_plan'), short_plan=b.get('short_plan'), note=b.get('note')))
     db.commit()
     return {'ok': True}
+
+
+# ---- manual pins: the user's own priority watchlist -------------------------------------------
+def _pins_payload(db: Session, user: User) -> dict:
+    pins = watchpins.get_pins(db, user.id)
+    return {'items': [{'symbol': watchpins.bare(p), 'canonical': p} for p in pins],
+            'max': watchpins.MAX_PINS}
+
+
+@router.get('/pins')
+def list_pins(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    return _pins_payload(db, user)
+
+
+@router.post('/pins')
+async def add_pin(request: Request, user: User = Depends(require_user),
+                  db: Session = Depends(get_db)):
+    b = await request.json()
+    symbol = (b.get('symbol') or '').strip()
+    if not symbol:
+        return JSONResponse({'error': 'Enter a stock symbol to pin.'}, status_code=400)
+    try:
+        watchpins.add_pin(db, user.id, symbol)
+    except watchpins.PinError as e:
+        return JSONResponse({'error': str(e)}, status_code=400)
+    return _pins_payload(db, user)
+
+
+@router.delete('/pins/{symbol}')
+def remove_pin(symbol: str, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    watchpins.remove_pin(db, user.id, symbol)
+    return _pins_payload(db, user)

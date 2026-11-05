@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import re
 import statistics
 import time
@@ -37,6 +38,12 @@ def load_morning_pins(config: dict, path: Path | None = None) -> list[str]:
     """Merge built-in pins and a paste-friendly daily text file, preserving order."""
     path = path or ROOT / 'data' / 'morning_rockstars.txt'
     tokens = list(config.get('morning_pins') or [])
+    # Per-user manual pins are injected into the scanner subprocess via env (RADAR_MORNING_PINS),
+    # not the shared config/file — this keeps each broker-owner's scanner isolated in the
+    # multi-tenant server while reusing the exact same priority + out-of-universe inclusion logic.
+    env_pins = os.environ.get('RADAR_MORNING_PINS', '')
+    if env_pins:
+        tokens.extend(re.split(r'[,\s]+', env_pins))
     if path.exists():
         for line in path.read_text(encoding='utf-8-sig').splitlines():
             line = line.split('#', 1)[0].strip()
