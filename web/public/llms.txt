@@ -1,0 +1,27 @@
+# Rockstar Radar
+
+> A real-time NSE (Indian market) intraday opening-range breakout (ORB) radar. Traders connect
+> their own broker and get ranked intraday setups with entry, stop-loss and targets, a smart daily
+> watchlist, and a trade journal. The user reviews and confirms every trade; paper-trading is the
+> default and the scanner never places real orders on its own.
+
+## What it is
+- Intraday opening-range breakout scanner for NSE (National Stock Exchange of India).
+- Scans liquid stocks live, builds each stock's opening range (09:15–09:20 IST), and ranks
+  breakout setups by strength with entry, stop-loss and target levels.
+- Smart watchlist: an auto-generated daily long/short shortlist with levels and invalidation.
+- Trade journal & insights: win rate, expectancy in R, equity curve.
+
+## Key facts
+- Markets: India / NSE intraday only (square off same day).
+- Brokers: bring your own account. FYERS supported today; Zerodha, Upstox, Angel One, Dhan, Groww,
+  Paytm Money and 5paisa planned.
+- Automation: semi-automatic — it prepares ranked setups; the user confirms every order. Paper mode
+  by default; it never fires real orders autonomously.
+- Compliance: SEBI requires a fresh broker login each trading day for all Indian brokers;
+  programmatic token refresh is not permitted, so the product uses a one-tap daily login.
+- Not investment advice. Short-term trading is risky.
+
+## Links
+- Home: https://intraday.live/
+- Source: https://github.com/prateekladha/rockstar-radar

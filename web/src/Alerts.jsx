@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api.js'
-import { Checkbox, label } from './ui.jsx'
+import { label } from './ui.jsx'
 
-const STATES = ['RETEST_READY', 'CONFIRMED', 'RETRACTED', 'FAILED']
 const okTime = (t) => !t || /^([01]?\d|2[0-3]):[0-5]\d$/.test(t)
 
 export default function Alerts() {
@@ -13,18 +12,25 @@ export default function Alerts() {
   useEffect(() => { load() }, [])
   if (!a) return <div className="empty">Loading alerts…</div>
 
+  const states = a.available_states || ['CONFIRMED', 'RETEST_READY', 'BREAKOUT_PENDING', 'READY']
+  const payload = (over = {}) => ({
+    enabled: a.enabled, states: a.states, min_score: a.min_score, channels: a.channels,
+    telegram_chat_id: a.telegram_chat_id, telegram_token: token || undefined,
+    quiet_from: a.quiet_from, quiet_to: a.quiet_to, ...over,
+  })
   const toggleState = (s) => {
     const has = (a.states || []).includes(s)
     setA({ ...a, states: has ? a.states.filter(x => x !== s) : [...(a.states || []), s] })
   }
+  // Master on/off — instant enable/disable of your alert (post-setup control).
+  const setEnabled = async (val) => {
+    setA({ ...a, enabled: val })
+    try { await api('/api/alerts', { method: 'PUT', body: payload({ enabled: val }) }); setMsg(val ? 'Alerts turned on' : 'Alerts paused') }
+    catch (e) { setMsg(e.message); load() }
+  }
   const save = async () => {
-    try {
-      await api('/api/alerts', { method: 'PUT', body: {
-        enabled: a.enabled, states: a.states, min_score: a.min_score,
-        channels: a.channels, telegram_chat_id: a.telegram_chat_id,
-        telegram_token: token || undefined, quiet_from: a.quiet_from, quiet_to: a.quiet_to } })
-      setMsg('Alert settings saved'); load()
-    } catch (e) { setMsg(e.message) }
+    try { await api('/api/alerts', { method: 'PUT', body: payload() }); setMsg('Alert rule saved'); load() }
+    catch (e) { setMsg(e.message) }
   }
   const test = async () => {
     const r = await api('/api/alerts/test', { method: 'POST' })
@@ -34,13 +40,16 @@ export default function Alerts() {
   return (
     <div className="rlayout" style={{ gridTemplateColumns: '1fr 1fr' }}>
       <div className="panel">
-        <div className="panel-h"><h2>Alert rules</h2></div>
+        <div className="panel-h"><h2>Your alert</h2><span className="spring" />
+          <button className={'toggle' + (a.enabled ? ' on' : '')} role="switch" aria-checked={a.enabled}
+            onClick={() => setEnabled(!a.enabled)}><span className="knob" />{a.enabled ? 'On' : 'Off'}</button>
+        </div>
         <div className="panel-b">
           {msg && <div className="banner ok">{msg}</div>}
-          <div className="field"><Checkbox checked={!!a.enabled} onChange={v => setA({ ...a, enabled: v })}>Alerts enabled</Checkbox></div>
-          <div className="field"><label>Alert on these signals</label>
+          <p className="note" style={{ marginTop: 0 }}>Set up the rule below and save it. Use the switch above to pause or resume alerts anytime.</p>
+          <div className="field"><label>Notify me on these signals</label>
             <div className="row" style={{ gap: 8 }}>
-              {STATES.map(s => (
+              {states.map(s => (
                 <button key={s} className={'chip ' + ((a.states || []).includes(s) ? s : '')}
                   style={{ cursor: 'pointer' }} onClick={() => toggleState(s)}>{label(s)}</button>
               ))}
@@ -59,7 +68,7 @@ export default function Alerts() {
                 value={a.quiet_to} onChange={e => setA({ ...a, quiet_to: e.target.value })} />
               {!okTime(a.quiet_to) && <div className="err-txt">Use 24h HH:MM</div>}</div>
           </div>
-          <button className="btn primary" disabled={!okTime(a.quiet_from) || !okTime(a.quiet_to)} onClick={save}>Save alerts</button>
+          <button className="btn primary" disabled={!okTime(a.quiet_from) || !okTime(a.quiet_to)} onClick={save}>Save alert rule</button>
         </div>
       </div>
 

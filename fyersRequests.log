@@ -2226,3 +2226,4 @@
 {"level":"DEBUG","location":"[get_call:172] fyersModel","message":{"Status Code":200,"API":"/history"},"timestamp":"2026-11-05 14:10:42,228+0530","service":"FyersAPIRequest"}
 {"level":"DEBUG","location":"[get_call:172] fyersModel","message":{"Status Code":200,"API":"/history"},"timestamp":"2026-11-05 14:10:44,734+0530","service":"FyersAPIRequest"}
 {"level":"DEBUG","location":"[get_call:172] fyersModel","message":{"Status Code":200,"API":"/quotes"},"timestamp":"2026-11-05 23:52:35,478+0530","service":"FyersAPIRequest"}
+{"level":"DEBUG","location":"[get_call:172] fyersModel","message":{"Status Code":200,"API":"/quotes"},"timestamp":"2026-11-06 01:05:07,430+0530","service":"FyersAPIRequest"}

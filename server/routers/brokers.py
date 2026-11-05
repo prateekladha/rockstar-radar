@@ -122,6 +122,16 @@ async def set_broker(request: Request, user: User = Depends(require_user),
         return JSONResponse({'error': 'That platform is not available yet.'}, status_code=400)
     app_id = (b.get('app_id') or '').strip()
     secret = (b.get('secret') or '').strip()
+    # A broker App ID belongs to exactly one account — block reuse across users.
+    if app_id:
+        taken = (db.query(BrokerConnection)
+                 .filter(BrokerConnection.app_id == app_id,
+                         BrokerConnection.user_id != user.id).first())
+        if taken:
+            return JSONResponse(
+                {'error': 'This App ID is already connected to another account. '
+                          'Each broker app can be linked to only one Rockstar Radar account.'},
+                status_code=409)
     # One active broker per user — drop any previous connection for a clean switch.
     for old in db.query(BrokerConnection).filter_by(user_id=user.id).all():
         if old.broker != platform:

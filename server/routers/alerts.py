@@ -12,6 +12,15 @@ from ..models import AlertConfig, User
 
 router = APIRouter(prefix='/api/alerts', tags=['alerts'])
 
+# You only alert on signals that mean "a trade is setting up" — never on negative outcomes
+# (RETRACTED/FAILED are not actionable, so they're not offered or stored).
+ALERT_STATES = ['CONFIRMED', 'RETEST_READY', 'BREAKOUT_PENDING', 'READY']
+
+
+def _clean_states(states) -> list[str]:
+    seen = [s for s in (states or []) if s in ALERT_STATES]
+    return seen or ['RETEST_READY', 'CONFIRMED']
+
 
 def _config(db: Session, user: User) -> AlertConfig:
     c = db.query(AlertConfig).filter_by(user_id=user.id).first()
@@ -26,7 +35,8 @@ def _config(db: Session, user: User) -> AlertConfig:
 @router.get('')
 def get_alerts(user: User = Depends(require_user), db: Session = Depends(get_db)):
     c = _config(db, user)
-    return {'enabled': bool(c.enabled), 'states': c.states or [], 'min_score': c.min_score,
+    return {'enabled': bool(c.enabled), 'states': _clean_states(c.states), 'min_score': c.min_score,
+            'available_states': ALERT_STATES,
             'channels': c.channels or {}, 'telegram_chat_id': c.telegram_chat_id or '',
             'has_telegram_token': bool(c.telegram_token_enc),
             'quiet_from': c.quiet_from or '', 'quiet_to': c.quiet_to or ''}
@@ -39,7 +49,7 @@ async def put_alerts(request: Request, user: User = Depends(require_user),
     c = _config(db, user)
     c.enabled = 1 if b.get('enabled', True) else 0
     if 'states' in b:
-        c.states = b['states']
+        c.states = _clean_states(b['states'])
     if 'min_score' in b:
         c.min_score = int(b['min_score'] or 0)
     if 'channels' in b:

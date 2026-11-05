@@ -205,6 +205,11 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 .tf{background:none;border:none;color:var(--dim);font:inherit;font-size:12px;font-weight:600;padding:5px 10px;border-radius:6px;cursor:pointer}
 .tf:hover{color:var(--text)}.tf.active{background:var(--accent);color:#fff}
 .input-bad{border-color:#8a2b42 !important}
+/* on/off toggle switch */
+.toggle{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--dim);border-radius:999px;padding:5px 12px 5px 6px;font:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:.15s}
+.toggle .knob{width:16px;height:16px;border-radius:50%;background:var(--faint);transition:.15s}
+.toggle.on{border-color:#1f6f49;background:var(--long-bg);color:var(--long-ink)}
+.toggle.on .knob{background:var(--long);box-shadow:0 0 0 3px #22c55e33}
 
 /* marketing landing */
 .mktg{max-width:1080px;margin:0 auto;padding:0 20px 60px}
