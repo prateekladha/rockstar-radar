@@ -232,6 +232,9 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 
 /* login */
 .login{min-height:100vh;display:grid;place-items:center;padding:20px}
+.login .card{position:relative}
+.link-back{position:absolute;top:14px;left:14px;background:none;border:none;color:var(--dim);font:inherit;font-size:13px;font-weight:600;cursor:pointer;padding:4px 6px;border-radius:6px}
+.link-back:hover{color:var(--text);background:var(--surface-3)}
 .login .card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:36px;box-shadow:var(--sh-lg);text-align:center}
 .login .mark{width:52px;height:52px;border-radius:14px;margin:0 auto 18px;display:grid;place-items:center;background:linear-gradient(145deg,#3b82f6,#1e40af);font-size:26px;box-shadow:0 6px 20px #2563eb55}
 .login h1{font-size:23px;margin-bottom:6px}.login p{color:var(--dim);margin:0 0 26px}

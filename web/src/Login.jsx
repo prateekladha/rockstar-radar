@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from './api.js'
 
 export default function Login({ onDevLogin }) {
   const [cfg, setCfg] = useState({ google: false, dev: false })
+  const nav = useNavigate()
   useEffect(() => { api('/auth/config').then(setCfg).catch(() => {}) }, [])
 
   return (
     <div className="login">
       <div className="card">
+        <button className="link-back" onClick={() => nav('/')}>← Home</button>
         <div className="mark">⚡</div>
         <h1>Rockstar Radar</h1>
         <p>NSE intraday opening-range radar. Sign in to continue.</p>

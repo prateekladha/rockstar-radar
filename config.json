@@ -24,7 +24,7 @@
   "retest_expiry_minutes": 20,
   "min_net_reward_risk": 2.0,
   "estimated_roundtrip_cost_pct": 0.15,
-  "capital_inr": 600000,
+  "capital_inr": 100000,
   "risk_pct": 1.0,
   "market_feed_stale_seconds": 30,
   "history_request_interval_seconds": 1.3,
