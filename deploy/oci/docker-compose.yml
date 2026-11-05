@@ -1,19 +1,41 @@
-# Rockstar Radar on OCI (Always-Free A1 VM). Three services, all free on one VM:
-#   postgres  — production database (persisted on a named volume)
-#   radar     — the FastAPI platform + React SPA (serves users, runs per-household scanners)
-#   caddy     — HTTPS reverse proxy (auto Let's Encrypt via sslip.io)
+# Rockstar Radar on OCI (Always-Free A1 VM). All free on one VM:
+#   secrets-init — one-shot: reads secrets from OCI Vault (instance principal) into a tmpfs (RAM)
+#   postgres     — production database (persisted on a named volume; password from the tmpfs)
+#   radar        — the FastAPI platform + React SPA (loads secrets from the tmpfs at boot)
+#   caddy        — HTTPS reverse proxy (auto Let's Encrypt for your domain)
 #
-# Config + secrets come from ./.env (chmod 600, gitignored, never baked into the image).
+# ./.env holds only NON-secret config (DOMAIN, Postgres user/db, OCI region, and SECRET_OCID_*
+# pointers to Vault). Actual secret VALUES never touch disk — they live in Vault and are fetched
+# into the RAM-only `secrets` volume on every boot.
 services:
+  secrets-init:
+    build:
+      context: ../..
+      args:
+        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}
+        VITE_POSTHOG_HOST: ${VITE_POSTHOG_HOST:-/ingest}
+    command: ["python", "deploy/oci/secrets_init.py"]
+    env_file:
+      - .env                              # OCI_REGION + SECRET_OCID_* (non-secret pointers)
+    environment:
+      - SECRETS_DIR=/secrets
+    volumes:
+      - secrets:/secrets
+    restart: "no"
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-radar}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /secrets/db_password   # from Vault via tmpfs — never on disk
       POSTGRES_DB: ${POSTGRES_DB:-radar}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - secrets:/secrets:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-radar} -d ${POSTGRES_DB:-radar}"]
       interval: 10s
@@ -22,25 +44,28 @@ services:
 
   radar:
     build:
-      context: ../..                     # project root (Dockerfile there)
+      context: ../..
       args:
-        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}     # public PostHog key (blank = analytics off)
+        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}
         VITE_POSTHOG_HOST: ${VITE_POSTHOG_HOST:-/ingest}
     restart: unless-stopped
     env_file:
-      - .env                             # GOOGLE_*, SESSION_SECRET, ENCRYPTION_KEY, RADAR_SCHED, …
+      - .env
     environment:
       - HOST=0.0.0.0
       - PORT=8080
-      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-radar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-radar}
+      - POSTGRES_HOST=postgres
       - PUBLIC_BASE_URL=https://${DOMAIN}   # correct https origin for the FYERS/Google callbacks
+    volumes:
+      - radar_data:/app/data                # scanner pidfiles/logs + downloaded universe CSVs
+      - secrets:/secrets:ro                 # RAM-only secrets (app.env)
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
-    volumes:
-      - radar_data:/app/data             # scanner pidfiles/logs + downloaded universe CSVs
     expose:
-      - "8080"                           # internal only; Caddy is the public entrypoint
+      - "8080"
 
   caddy:
     image: caddy:2
@@ -49,7 +74,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      - DOMAIN=${DOMAIN}                 # your real domain, e.g. intraday.live
+      - DOMAIN=${DOMAIN}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -62,3 +87,7 @@ volumes:
   radar_data:
   caddy_data:
   caddy_config:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs      # RAM-only — secrets never written to disk

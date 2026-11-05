@@ -25,3 +25,5 @@ psycopg[binary]>=3.1,<4
 requests>=2.31,<3
 # Load local .env for development (prod injects env via docker).
 python-dotenv>=1,<2
+# OCI SDK — used only by the secrets-init container to read OCI Vault via instance principal.
+oci>=2.100,<3

@@ -30,6 +30,7 @@ COPY . .
 COPY --from=web /web/dist ./web/dist
 
 EXPOSE 8080
-# Multi-tenant platform entrypoint. Real mode by default (users connect their own broker);
-# the market-open scheduler runs inside this process.
-CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Entrypoint loads RAM-only secrets (if secrets-init populated /secrets) then launches the app.
+# The market-open scheduler runs inside this process. secrets-init overrides this with the
+# secrets_init.py command in docker-compose.
+CMD ["sh", "/app/deploy/oci/entrypoint.sh"]
