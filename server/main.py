@@ -68,7 +68,10 @@ def auth_config():
 async def auth_google_login(request: Request):
     if not google_enabled():
         return JSONResponse({'error': 'Google sign-in is not configured.'}, status_code=400)
-    redirect_uri = str(request.url_for('auth_google_callback'))
+    # Prefer PUBLIC_BASE_URL so the redirect_uri EXACTLY matches what's registered in Google
+    # (avoids redirect_uri_mismatch behind a reverse proxy). Falls back to the request URL locally.
+    base = os.environ.get('PUBLIC_BASE_URL', '').strip().rstrip('/')
+    redirect_uri = (base + '/auth/google/callback') if base else str(request.url_for('auth_google_callback'))
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
