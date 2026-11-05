@@ -164,7 +164,7 @@ export default function Brokers() {
               <div className="kv"><span className="k">Live token</span><span className={'chip ' + (data.active.has_token ? 'CONFIRMED' : 'NONE')}>{data.active.has_token ? 'present' : 'none'}</span></div>
               {isOauth && !data.active.fresh_today && (
                 <div style={{ marginTop: 12 }}>
-                  <button className="btn accent" style={{ width: '100%', justifyContent: 'center' }} onClick={connect}>{data.active.has_token ? 'Log in for today' : 'Connect ' + (meta.label || '')}</button>
+                  <button className="btn accent" style={{ width: '100%', justifyContent: 'center' }} onClick={manual ? openManualLogin : connectAuto}>{data.active.has_token ? 'Log in for today' : 'Connect ' + (meta.label || '')}</button>
                   <div className="hint" style={{ marginTop: 8 }}>SEBI requires a fresh broker login every trading day — tokens can't be auto-renewed. Log in each morning (ideally before 9:15 IST) to start the scan. It's one tap on {meta.label}'s own page; we never see your password.</div>
                 </div>
               )}
