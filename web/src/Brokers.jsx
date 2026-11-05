@@ -90,7 +90,7 @@ export default function Brokers() {
   }
 
   return (
-    <div className="rlayout" style={{ gridTemplateColumns: '1.3fr 1fr' }}>
+    <div className="rlayout rl-wide">
       <div className="panel">
         <div className="panel-h"><h2>Your broker</h2>
           <span className="hint">One platform powers your data, quotes, history &amp; orders</span></div>

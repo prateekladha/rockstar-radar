@@ -44,6 +44,7 @@ h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.02em}button{font:inherit}
 
 /* kpis */
 .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:20px}
+.kpis.k4{grid-template-columns:repeat(4,1fr)}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px;box-shadow:var(--sh)}
 .kpi .label{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);font-weight:650}
 .kpi .val{font-size:30px;font-weight:720;font-family:var(--mono);letter-spacing:-1px;margin-top:6px;line-height:1}
@@ -56,6 +57,10 @@ h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.02em}button{font:inherit}
 .panel-h h2{font-size:15px}.panel-h .hint{font-size:12px;color:var(--dim)}
 .panel-b{padding:20px}
 .rlayout{display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start}
+.rlayout.rl-even{grid-template-columns:1fr 1fr}
+.rlayout.rl-wide{grid-template-columns:1.3fr 1fr}
+/* grid/flex children must be allowed to shrink, or wide tables force page overflow */
+.rlayout>*,.kpis>*{min-width:0}
 
 /* tickets */
 .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:20px}
@@ -250,9 +255,14 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 .steps{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-2);margin-bottom:16px}
 .center{min-height:100vh;display:grid;place-items:center;color:var(--dim)}
 
-@media(max-width:1000px){.kpis{grid-template-columns:repeat(2,1fr)}.rlayout{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr 1fr}.journal{max-height:40vh}}
+@media(max-width:1000px){.kpis,.kpis.k4{grid-template-columns:repeat(2,1fr)}.rlayout,.rlayout.rl-even,.rlayout.rl-wide{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr 1fr}.journal{max-height:40vh}}
 .modal{max-height:92vh;overflow:auto}
 @media(max-width:620px){.wrap{padding:12px}.kpis{grid-template-columns:1fr 1fr}.settings-grid{grid-template-columns:1fr}
   .user span:last-child{display:none}.panel-h{flex-wrap:wrap;gap:8px}.tickets{grid-template-columns:1fr}
-  .modal{max-width:100%}.tf-tabs{margin-left:0}.filterbar .searchbox input,.filterbar .sel-btn{min-width:120px}}
+  .modal{max-width:100%}.tf-tabs{margin-left:0}
+  /* filter controls stack full-width so nothing overflows the row */
+  .filterbar{gap:8px}
+  .filterbar .searchbox,.filterbar .sel{width:100%;flex:1 1 100%}
+  .filterbar .searchbox{display:flex}
+  .filterbar .searchbox input,.filterbar .sel,.filterbar .sel-btn,.filterbar input{width:100%;min-width:0;box-sizing:border-box}}
 @media(max-width:420px){.kpis{grid-template-columns:1fr}}

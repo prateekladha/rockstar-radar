@@ -27,7 +27,7 @@ export default function Trades() {
 
   return (
     <div>
-      <div className="kpis" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
+      <div className="kpis k4">
         <div className="kpi live"><div className="label">Realised P&L</div><div className="val" style={{ color: pnl.realised >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.realised)}</div><div className="sub">{pnl.trades} closed trades</div></div>
         <div className="kpi accent"><div className="label">Win rate</div><div className="val">{pnl.win_rate}%</div><div className="sub">{pnl.wins} winners</div></div>
         <div className="kpi"><div className="label">Open positions</div><div className="val">{pnl.open}</div><div className="sub">live now</div></div>

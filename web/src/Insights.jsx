@@ -32,7 +32,7 @@ export default function Insights() {
         <div className="panel-b"><EquityChart data={s.equity} /></div>
       </div>
 
-      <div className="rlayout" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="rlayout rl-even">
         <div className="panel"><div className="panel-h"><h2>By direction</h2></div>
           <div className="panel-b">
             <div className="planrow"><span className="pk up">Long</span><span className="pv mono">{s.long.total} trades · {s.long.win_rate}% win · {s.long.r}R</span></div>

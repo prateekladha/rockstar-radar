@@ -38,7 +38,7 @@ export default function Alerts() {
   }
 
   return (
-    <div className="rlayout" style={{ gridTemplateColumns: '1fr 1fr' }}>
+    <div className="rlayout rl-even">
       <div className="panel">
         <div className="panel-h"><h2>Your alert</h2><span className="spring" />
           <button className={'toggle' + (a.enabled ? ' on' : '')} role="switch" aria-checked={a.enabled}

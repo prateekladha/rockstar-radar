@@ -45,7 +45,7 @@ export default function Watchlist() {
             <button className="btn" onClick={() => setChartSym('NSE:' + p.symbol + '-EQ')}>Chart</button>
           </div>
           <div className="panel-b">
-            <div className="rlayout" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <div className="rlayout rl-even">
               <Plan title="Long" cls="up" plan={p.long_plan} />
               <Plan title="Short" cls="down" plan={p.short_plan} />
             </div>
