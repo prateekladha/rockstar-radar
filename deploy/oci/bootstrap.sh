@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
-# Run ON the OCI VM (Ubuntu ARM/x86). Installs Docker, opens the host firewall,
-# and brings up Caddy + the app with auto-HTTPS. Idempotent — safe to re-run.
+# Run ON the OCI VM (Ubuntu). Installs Docker, opens the host firewall, and brings up
+# Postgres + app + Caddy (auto-HTTPS). Idempotent — safe to re-run. Reads deploy/oci/.env.
 set -euo pipefail
 
-: "${PUBLIC_HOST:?Set PUBLIC_HOST, e.g. PUBLIC_HOST=129-153-1-2.sslip.io bash bootstrap.sh}"
 APP_DIR="${APP_DIR:-$HOME/rockstar_radar}"
+cd "$APP_DIR/deploy/oci"
 
-echo "▶ PUBLIC_HOST=$PUBLIC_HOST  APP_DIR=$APP_DIR"
+if [ ! -f .env ]; then
+  echo "✗ deploy/oci/.env not found. Copy .env.example to .env and fill it in first." >&2
+  exit 1
+fi
+# shellcheck disable=SC1091
+set -a; . ./.env; set +a
+: "${DOMAIN:?Set DOMAIN in .env, e.g. DOMAIN=intraday.live}"
 
-# 1. Docker (+ compose plugin) via the official convenience script.
+echo "▶ DOMAIN=$DOMAIN  APP_DIR=$APP_DIR"
+
+# 1. Docker (+ compose plugin).
 if ! command -v docker >/dev/null 2>&1; then
   echo "▶ Installing Docker …"
   curl -fsSL https://get.docker.com | sudo sh
   sudo usermod -aG docker "$USER" || true
 fi
 
-# 2. Open the VM's OS firewall for HTTP/HTTPS. OCI Ubuntu images block these by default
-#    in iptables — this is IN ADDITION to the OCI Security List / NSG rule in the console.
+# 2. Open the VM's OS firewall for HTTP/HTTPS (in addition to the OCI Security List rule).
 echo "▶ Opening ports 80/443 in the host firewall …"
 sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
 sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
@@ -26,13 +33,11 @@ else
   sudo apt-get update -y && sudo apt-get install -y iptables-persistent || true
 fi
 
-# 3. Bring the stack up (build the app image, start Caddy + app).
-cd "$APP_DIR/deploy/oci"
+# 3. Build + start (compose reads ./.env automatically).
 echo "▶ Building & starting containers …"
-sudo PUBLIC_HOST="$PUBLIC_HOST" docker compose up -d --build
+sudo docker compose up -d --build
 
 echo ""
-echo "✅ Deployed. Give Caddy ~30s to obtain a certificate, then open:"
-echo "   https://radar.$PUBLIC_HOST"
-echo ""
+echo "✅ Deployed. Point ${DOMAIN} DNS at this VM's IP (if not already), give Caddy ~30s for the"
+echo "   TLS cert, then open:  https://${DOMAIN}"
 echo "Logs:  sudo docker compose -f $APP_DIR/deploy/oci/docker-compose.yml logs -f"

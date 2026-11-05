@@ -1,6 +1,7 @@
-# Auto-HTTPS reverse proxy. {$PUBLIC_HOST} = your VM IP in dashed form + .sslip.io.
+# Auto-HTTPS reverse proxy for the real domain. {$DOMAIN} comes from the compose env (e.g. intraday.live).
+# Requires the domain's DNS A record(s) to point at this VM's public IP, and ports 80/443 open.
 
-radar.{$PUBLIC_HOST} {
+{$DOMAIN} {
 	encode gzip
 
 	# PostHog reverse proxy (first-party analytics at /ingest — dodges ad-blockers, no 3rd-party host).
@@ -19,7 +20,7 @@ radar.{$PUBLIC_HOST} {
 	reverse_proxy radar:8080
 }
 
-# Bare host (http://IP or the apex sslip host) -> redirect to the radar app.
-{$PUBLIC_HOST} {
-	redir https://radar.{$PUBLIC_HOST}{uri}
+# www -> apex redirect.
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri}
 }

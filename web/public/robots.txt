@@ -4,5 +4,4 @@ Allow: /
 Disallow: /api/
 Disallow: /auth/
 
-# Add an absolute Sitemap URL once a public domain is set, e.g.:
-# Sitemap: https://your-domain/sitemap.xml
+Sitemap: https://intraday.live/sitemap.xml

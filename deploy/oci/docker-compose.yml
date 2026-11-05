@@ -33,7 +33,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8080
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-radar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-radar}
-      - PUBLIC_BASE_URL=https://radar.${PUBLIC_HOST}   # correct https origin for the FYERS callback
+      - PUBLIC_BASE_URL=https://${DOMAIN}   # correct https origin for the FYERS/Google callbacks
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,7 +49,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      - PUBLIC_HOST=${PUBLIC_HOST}       # your VM IP, dashed, e.g. 129-153-1-2.sslip.io
+      - DOMAIN=${DOMAIN}                 # your real domain, e.g. intraday.live
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
