@@ -184,8 +184,8 @@ function Onboarding({ onDone }) {
 
         {step === 1 ? (
           <div style={{ textAlign: 'left' }}>
-            <div className="field"><label>First name</label><input autoFocus value={first} onChange={e => setFirst(e.target.value)} placeholder="Prateek" /></div>
-            <div className="field"><label>Last name</label><input value={last} onChange={e => setLast(e.target.value)} placeholder="Ladha" /></div>
+            <div className="field"><label>First name</label><input autoFocus value={first} onChange={e => setFirst(e.target.value)} placeholder="Your first name" /></div>
+            <div className="field"><label>Last name</label><input value={last} onChange={e => setLast(e.target.value)} placeholder="Your last name" /></div>
             <button className="btn primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}
               disabled={!first.trim()} onClick={() => setStep(2)}>Continue</button>
           </div>
@@ -194,7 +194,7 @@ function Onboarding({ onDone }) {
             <div className="field"><label>Platform</label>
               <Select value={b.platform} onChange={v => setB({ ...b, platform: v })} width={'100%'}
                 options={platforms.map(p => ({ value: p.id, label: p.label, disabled: p.status !== 'available' }))} /></div>
-            <div className="field"><label>App ID</label><input value={b.app_id} onChange={e => setB({ ...b, app_id: e.target.value })} placeholder="e.g. 8FSRQ10NOV-100" /></div>
+            <div className="field"><label>App ID</label><input value={b.app_id} onChange={e => setB({ ...b, app_id: e.target.value })} placeholder="e.g. ABCD1234-100" /></div>
             <div className="field"><label>Secret</label><input type="password" value={b.secret} onChange={e => setB({ ...b, secret: e.target.value })} autoComplete="off" placeholder="API secret" /></div>
             {callback && (
               <div className="field"><label>Redirect URL — register this in your {metaLabel} app</label>

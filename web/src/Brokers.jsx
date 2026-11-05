@@ -101,7 +101,7 @@ export default function Brokers() {
               value: p.id, label: p.label + (p.status !== 'available' ? ' · coming soon' : ''), disabled: p.status !== 'available' }))} />
           </div>
           <div className="field"><label>App ID</label>
-            <input value={appId} onChange={e => setAppId(e.target.value)} placeholder="e.g. 8FSRQ10NOV-100" /></div>
+            <input value={appId} onChange={e => setAppId(e.target.value)} placeholder="e.g. ABCD1234-100" /></div>
           <div className="field"><label>Secret {data.active?.has_secret ? '· saved, leave blank to keep' : ''}</label>
             <input type="password" value={secret} onChange={e => setSecret(e.target.value)} autoComplete="off" placeholder="API secret" /></div>
 
