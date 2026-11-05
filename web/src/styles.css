@@ -258,7 +258,10 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 @media(max-width:1000px){.kpis,.kpis.k4{grid-template-columns:repeat(2,1fr)}.rlayout,.rlayout.rl-even,.rlayout.rl-wide{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr 1fr}.journal{max-height:40vh}}
 .modal{max-height:92vh;overflow:auto}
 @media(max-width:620px){.wrap{padding:12px}.kpis{grid-template-columns:1fr 1fr}.settings-grid{grid-template-columns:1fr}
-  .user span:last-child{display:none}.panel-h{flex-wrap:wrap;gap:8px}.tickets{grid-template-columns:1fr}
+  .user span:last-child{display:none}
+  /* avatar-only on mobile — drop the pill chrome so it isn't a circle inside a circle */
+  .user{padding:0;border:none;background:none}
+  .panel-h{flex-wrap:wrap;gap:8px}.tickets{grid-template-columns:1fr}
   .modal{max-width:100%}.tf-tabs{margin-left:0}
   /* filter controls stack full-width so nothing overflows the row */
   .filterbar{gap:8px}
