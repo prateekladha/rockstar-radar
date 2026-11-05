@@ -23,3 +23,5 @@ cryptography>=42
 psycopg[binary]>=3.1,<4
 # Used for the FYERS refresh-token REST call.
 requests>=2.31,<3
+# Load local .env for development (prod injects env via docker).
+python-dotenv>=1,<2
