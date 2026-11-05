@@ -1,0 +1,64 @@
+# Rockstar Radar on OCI (Always-Free A1 VM). Three services, all free on one VM:
+#   postgres  — production database (persisted on a named volume)
+#   radar     — the FastAPI platform + React SPA (serves users, runs per-household scanners)
+#   caddy     — HTTPS reverse proxy (auto Let's Encrypt via sslip.io)
+#
+# Config + secrets come from ./.env (chmod 600, gitignored, never baked into the image).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-radar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-radar}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-radar} -d ${POSTGRES_DB:-radar}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  radar:
+    build:
+      context: ../..                     # project root (Dockerfile there)
+      args:
+        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}     # public PostHog key (blank = analytics off)
+        VITE_POSTHOG_HOST: ${VITE_POSTHOG_HOST:-/ingest}
+    restart: unless-stopped
+    env_file:
+      - .env                             # GOOGLE_*, SESSION_SECRET, ENCRYPTION_KEY, RADAR_SCHED, …
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-radar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-radar}
+      - PUBLIC_BASE_URL=https://radar.${PUBLIC_HOST}   # correct https origin for the FYERS callback
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - radar_data:/app/data             # scanner pidfiles/logs + downloaded universe CSVs
+    expose:
+      - "8080"                           # internal only; Caddy is the public entrypoint
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - PUBLIC_HOST=${PUBLIC_HOST}       # your VM IP, dashed, e.g. 129-153-1-2.sslip.io
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - radar
+
+volumes:
+  pgdata:
+  radar_data:
+  caddy_data:
+  caddy_config:

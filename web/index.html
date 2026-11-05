@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#0a0e16" />
+
+    <!-- Primary SEO -->
+    <title>Rockstar Radar — Intraday opening-range radar for Indian (NSE) markets</title>
+    <meta name="description" content="Rockstar Radar is a real-time NSE intraday opening-range breakout radar. Connect your own broker (FYERS, more coming) and get ranked intraday setups with entry, stop-loss and targets, a smart daily watchlist, and a full trade journal. You stay in control — paper-trading first." />
+    <meta name="keywords" content="NSE intraday, opening range breakout, ORB scanner, intraday trading India, FYERS API, intraday stock screener, trade journal, intraday signals, Nifty intraday" />
+    <meta name="author" content="Rockstar Radar" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="/" />
+
+    <!-- Open Graph / social (set BASE_URL + an og image before the public marketing push) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Rockstar Radar" />
+    <meta property="og:title" content="Rockstar Radar — Intraday opening-range radar for Indian markets" />
+    <meta property="og:description" content="Real-time NSE intraday breakout radar. Bring your own broker, get ranked setups with entry/stop/targets, a smart watchlist and a trade journal. You stay in control." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Rockstar Radar — Intraday opening-range radar for Indian markets" />
+    <meta name="twitter:description" content="Real-time NSE intraday breakout radar. Bring your own broker, get ranked setups with entry/stop/targets, a smart watchlist and a trade journal." />
+
+    <!-- Structured data (SEO + GEO: helps search engines and AI assistants understand the product) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "SoftwareApplication",
+          "name": "Rockstar Radar",
+          "applicationCategory": "FinanceApplication",
+          "operatingSystem": "Web",
+          "description": "A real-time NSE intraday opening-range breakout radar for Indian markets. Connect your own broker to get ranked intraday setups with entry, stop-loss and targets, a smart daily watchlist, and a trade journal. Paper-trading first; the user confirms every trade.",
+          "featureList": [
+            "Live opening-range breakout radar ranked by strength",
+            "Smart daily long/short watchlist with levels",
+            "Trade journal and performance insights (win rate, expectancy in R)",
+            "Bring your own broker (FYERS; more coming)"
+          ],
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "INR" }
+        },
+        {
+          "@type": "FAQPage",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "What is Rockstar Radar?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Rockstar Radar is a real-time intraday opening-range breakout (ORB) radar for Indian (NSE) markets. It scans liquid stocks live, ranks breakout setups, and shows entry, stop-loss and targets. You connect your own broker and confirm every trade yourself." }
+            },
+            {
+              "@type": "Question",
+              "name": "Which brokers does it support?",
+              "acceptedAnswer": { "@type": "Answer", "text": "FYERS is supported today, with Zerodha, Upstox, Angel One, Dhan, Groww, Paytm Money and 5paisa planned. You connect your own broker account; your login and data stay yours." }
+            },
+            {
+              "@type": "Question",
+              "name": "Does it place trades automatically?",
+              "acceptedAnswer": { "@type": "Answer", "text": "No. Rockstar Radar prepares ranked setups and paper trades by default; you review and confirm every order. It never fires real orders on its own." }
+            },
+            {
+              "@type": "Question",
+              "name": "Do I need to log in to my broker every day?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Yes. SEBI regulations require a fresh broker login each trading day for all Indian brokers; programmatic token refresh is not allowed. Rockstar Radar makes this a one-tap daily login." }
+            }
+          ]
+        }
+      ]
+    }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+*.pyc
+output/*
+!output/.gitkeep
+data/*
+!data/.gitkeep
+# Ship the NSE constituents reference (needed for company-name search); not a secret.
+!data/nifty500.csv
+# Node / built SPA (SPA is rebuilt in Docker / CI; node_modules never committed)
+web/node_modules/
+web/dist/
+.venv/
+.DS_Store

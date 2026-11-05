@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Rockstar Radar</title>
+<link rel="stylesheet" href="/static/app.css"/>
+</head><body>
+
+<div class="appbar">
+  <div class="brand"><span class="mark">⚡</span><div>Rockstar&nbsp;Radar<small>NSE intraday ORB</small></div></div>
+  {% if demo %}<span class="stpill" style="border-color:#6a561f;color:var(--warn-ink)">DEMO</span>{% endif %}
+  <span class="spring"></span>
+  <span class="mkt"><span class="dot" id="mktdot"></span><span id="mktlabel" class="dim">Market</span> <b id="clock">—</b></span>
+  <span class="stpill" id="connpill"><span class="dot {{ 'live' if conn.token_present else 'off' }}"></span><span>{{ 'Connected' if conn.token_present else 'Not connected' }}</span></span>
+  <span class="stpill" id="scanpill"><span class="dot {{ 'live' if scanner.running else 'off' }}"></span><span>{{ 'Scanner live' if scanner.running else 'Scanner off' }}</span></span>
+</div>
+
+<div class="wrap">
+  {% if msg %}<div class="banner ok">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="banner err">{{ err }}</div>{% endif %}
+  {% if demo %}<div class="banner warn">Demo mode — all prices and signals are simulated. No FYERS account or real money involved. This is to experience the product; live trading runs on your own machine.</div>{% endif %}
+
+  <div class="tabs">
+    <button class="tab active" data-view="radar">Radar</button>
+    <button class="tab" data-view="watchlist">Watchlist</button>
+    <button class="tab" data-view="settings">Settings</button>
+    <button class="tab" data-view="connect">Connect</button>
+  </div>
+
+  <!-- ============ RADAR ============ -->
+  <section class="view active" id="view-radar">
+    <div class="kpis">
+      <div class="kpi"><div class="label">Monitored</div><div class="val" id="k_mon">—</div><div class="sub">of 100 cap</div></div>
+      <div class="kpi accent"><div class="label">OR ready</div><div class="val" id="k_or">—</div><div class="sub">opening ranges anchored</div></div>
+      <div class="kpi"><div class="label">Baselines</div><div class="val" id="k_base">—</div><div class="sub">volume history</div></div>
+      <div class="kpi live"><div class="label">Ticks flowing</div><div class="val" id="k_ticks">—</div><div class="sub" id="k_feed">feed</div></div>
+      <div class="kpi"><div class="label">Active setups</div><div class="val" id="k_active">—</div><div class="sub">not trade advice</div></div>
+    </div>
+
+    <div id="tickets" class="tickets"></div>
+
+    <div class="rlayout">
+      <div class="panel">
+        <div class="panel-h"><h2>Live radar</h2><span class="hint" id="radarhint">—</span></div>
+        <div class="filterbar">
+          <input id="f_search" class="f-search" placeholder="Search symbol…" autocomplete="off"/>
+          <select id="f_source"><option value="">All sources</option><option value="MORNING">Morning picks</option><option value="AUTO">Auto</option></select>
+          <select id="f_side"><option value="">Any side</option><option value="LONG">Long</option><option value="SHORT">Short</option></select>
+          <select id="f_state"><option value="">All states</option><option value="active">Active only</option><option value="RETEST_READY">Retest ready</option><option value="CONFIRMED">Confirmed</option><option value="WATCH">Watch</option><option value="RISK_FAIL">Risk rejected</option></select>
+          <span class="spring"></span><span class="hint" id="f_count">—</span>
+        </div>
+        <div class="tbl-wrap tbl-scroll"><table>
+          <thead><tr><th>Symbol</th><th>Side</th><th>State</th><th class="num">Last</th><th class="num">ORH / ORL</th><th class="num">RVOL</th><th class="num">Score</th><th class="num">Entry / Stop / Target</th><th class="num">Qty · ₹Risk</th></tr></thead>
+          <tbody id="radarbody"><tr><td colspan="9"><div class="empty"><div class="big">Scanner idle</div>Start the scanner from the Connect tab to see live candidates.</div></td></tr></tbody>
+        </table></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><h2>Signal activity</h2><span class="hint" id="jcount">—</span></div>
+        <div id="journal" class="journal"><div class="empty">No signals yet.</div></div>
+      </div>
+    </div>
+    <p class="note">Signals are estimates, not orders — the scanner never trades. Verify MIS eligibility, spread, levels &amp; trend on your broker/TradingView. Intraday only: flat by 3:20 PM IST. Risk ≤ your configured % per trade.</p>
+  </section>
+
+  <!-- ============ WATCHLIST ============ -->
+  <section class="view" id="view-watchlist">
+    <div class="panel"><div class="panel-h"><h2>Morning Rockstar watchlist</h2><span class="hint">{{ watchlist_count }} valid · prioritised, still must pass every gate</span></div>
+      <div class="panel-b"><form method="post" action="/ui/watchlist">
+        <div class="field"><label>One NSE ticker per line (e.g. BHARTIARTL)</label>
+        <textarea name="symbols" spellcheck="false" placeholder="BHARTIARTL&#10;MCX&#10;SBIN">{{ watchlist_text }}</textarea></div>
+        <button class="btn primary" type="submit">Save watchlist</button>
+      </form></div></div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section class="view" id="view-settings">
+    <div class="panel"><div class="panel-h"><h2>Strategy &amp; risk</h2><span class="hint">Applied on next scanner start</span></div>
+      <div class="panel-b"><form method="post" action="/ui/config">
+        <div class="settings-grid">
+          {% for key, value in cfg.items() %}
+          <div class="field"><label>{{ key }}</label><input name="{{ key }}" value="{{ value }}"/></div>
+          {% endfor %}
+        </div>
+        <div style="margin-top:16px"><button class="btn primary" type="submit">Save settings</button></div>
+      </form></div></div>
+  </section>
+
+  <!-- ============ CONNECT ============ -->
+  <section class="view" id="view-connect">
+    <div class="grid2">
+      <div class="panel"><div class="panel-h"><h2>FYERS connection</h2><span class="hint">Token renews daily ~06:30 IST</span></div>
+        <div class="panel-b">
+          <div class="kv"><span class="k">App</span><span class="chip {{ 'CONFIRMED' if conn.app_configured else 'FAILED' }}">{{ 'configured' if conn.app_configured else 'missing' }}</span></div>
+          <div class="kv"><span class="k">App ID</span><span class="mono">{{ conn.app_id or '—' }}</span></div>
+          <div class="kv"><span class="k">Access token</span><span class="chip {{ 'CONFIRMED' if conn.token_present else 'FAILED' }}">{{ 'connected' if conn.token_present else 'not connected' }}</span></div>
+          <div class="kv"><span class="k">Last live check</span><span class="mono">{% if conn.last_check %}{{ '✓' if conn.last_check.ok else '✕' }} {{ conn.last_check.at }}{% else %}—{% endif %}</span></div>
+          <div class="row" style="margin-top:16px">
+            <a class="btn primary" href="{{ auth_url }}" target="_blank" rel="noreferrer">{{ 'Reconnect FYERS' if conn.token_present else 'Connect FYERS' }}</a>
+            <form method="post" action="/ui/connection/test" style="display:inline"><button class="btn" type="submit">Test connection</button></form>
+          </div>
+          {% if not redirect_ok %}<div class="banner warn" style="margin-top:14px">For one-click login, set this app's Redirect URL on <a href="https://myapi.fyers.in/" target="_blank">myapi.fyers.in</a> to <code>{{ callback_url }}</code> and <code>FYERS_REDIRECT_URI</code> in <code>.env</code>. Otherwise use manual paste below.</div>{% endif %}
+          <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">Manual paste</summary>
+            <form method="post" action="/ui/login/paste" class="row" style="margin-top:10px">
+              <input name="redirect_url" placeholder="Paste the full redirect URL"/><button class="btn" type="submit">Submit</button></form></details>
+        </div></div>
+
+      <div class="panel"><div class="panel-h"><h2>Scanner</h2><span class="hint">First start builds today's universe (minutes)</span></div>
+        <div class="panel-b">
+          <div class="kv"><span class="k">Status</span><span class="chip {{ 'CONFIRMED' if scanner.running else 'FAILED' }}">{{ 'running' if scanner.running else 'stopped' }}</span></div>
+          <div class="kv"><span class="k">Uptime</span><span class="mono">{{ uptime or '—' }}</span></div>
+          <div class="row" style="margin-top:16px">
+            <form method="post" action="/ui/scanner/start" style="display:inline"><button class="btn good btn-lg" type="submit" {{ 'disabled' if scanner.running or (not conn.token_present and not demo) }}>▶ Start scanner</button></form>
+            <form method="post" action="/ui/scanner/stop" style="display:inline"><button class="btn danger" type="submit" {{ 'disabled' if not scanner.running }}>■ Stop</button></form>
+            {% if scanner.running %}<span class="spring"></span><a href="http://127.0.0.1:{{ scanner.scanner_port }}/" target="_blank">Raw radar ↗</a>{% endif %}
+          </div>
+
+          <div style="height:22px"></div>
+          <div class="panel-h" style="padding:0 0 14px;border:none"><h2 style="font-size:14px">Telegram alerts</h2></div>
+          <div class="kv"><span class="k">Bot token</span><span class="chip {{ 'CONFIRMED' if telegram.bot_token_present else 'NONE' }}">{{ 'set' if telegram.bot_token_present else 'not set' }}</span></div>
+          <div class="kv"><span class="k">Chat ID</span><span class="mono">{{ telegram.chat_id or '—' }}</span></div>
+          <form method="post" action="/ui/telegram" style="margin-top:12px">
+            <div class="field"><label>Bot token (@BotFather)</label><input name="bot_token" type="password" autocomplete="off" placeholder="123456:ABC-…"/></div>
+            <div class="field"><label>Chat ID</label><input name="chat_id" placeholder="e.g. 83729104"/></div>
+            <div class="row"><button class="btn primary" type="submit">Save Telegram</button>
+              <button class="btn" formaction="/ui/telegram/test" type="submit">Send test</button></div>
+          </form>
+          <p class="note">Full tickets (entry/stop/target, qty, ₹risk) push to your phone when a signal fires. Restart the scanner after saving.</p>
+        </div></div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body></html>

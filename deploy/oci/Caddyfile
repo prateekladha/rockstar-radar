@@ -1,0 +1,25 @@
+# Auto-HTTPS reverse proxy. {$PUBLIC_HOST} = your VM IP in dashed form + .sslip.io.
+
+radar.{$PUBLIC_HOST} {
+	encode gzip
+
+	# PostHog reverse proxy (first-party analytics at /ingest — dodges ad-blockers, no 3rd-party host).
+	handle_path /ingest/static/* {
+		reverse_proxy https://us-assets.i.posthog.com {
+			header_up Host us-assets.i.posthog.com
+		}
+	}
+	handle_path /ingest/* {
+		reverse_proxy https://us.i.posthog.com {
+			header_up Host us.i.posthog.com
+		}
+	}
+
+	# Everything else -> the app.
+	reverse_proxy radar:8080
+}
+
+# Bare host (http://IP or the apex sslip host) -> redirect to the radar app.
+{$PUBLIC_HOST} {
+	redir https://radar.{$PUBLIC_HOST}{uri}
+}
