@@ -140,6 +140,9 @@ function Onboarding({ onDone }) {
   const [callback, setCallback] = useState('')
   const [copied, setCopied] = useState(false)
   const [b, setB] = useState({ platform: 'fyers', app_id: '', secret: '' })
+  const [manual, setManual] = useState(false)
+  const [redirect, setRedirect] = useState('')
+  const [testMsg, setTestMsg] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -153,22 +156,32 @@ function Onboarding({ onDone }) {
   }, [])
 
   const metaLabel = (platforms.find(p => p.id === b.platform) || {}).label || 'your broker'
+  const isOauth = b.platform === 'fyers'
   const copyCallback = async () => {
     try { await navigator.clipboard.writeText(callback); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* blocked */ }
   }
+  const test = async () => {
+    setTestMsg({ ok: true, t: 'Testing…' })
+    try { const r = await api('/api/brokers/test', { method: 'POST', body: { platform: b.platform, app_id: b.app_id, secret: b.secret } }); setTestMsg({ ok: r.ok, t: r.message }) }
+    catch (e) { setTestMsg({ ok: false, t: e.message }) }
+  }
 
-  // withBroker=true: save creds, mark onboarded, then hand off to the FYERS login (leaves the SPA
-  // and returns to /brokers?connected=1 — onboarding is already complete so we land in the app).
+  // withBroker: save creds (+ redirect for an existing app), mark onboarded, then connect.
+  // Auto mode -> hand off to the FYERS login (returns to /brokers?connected=1). Manual mode (user's
+  // own redirect) -> land in the app; the login is completed from the Broker page (open + paste).
   const finish = async (withBroker) => {
     setErr('')
     if (withBroker && (!b.app_id.trim() || !b.secret.trim())) {
       setErr('Enter your App ID and Secret, or skip for now.'); return
     }
+    if (withBroker && manual && !redirect.trim()) {
+      setErr('Enter your app\'s registered redirect URL (or switch to "Register our URL").'); return
+    }
     setBusy(true)
     try {
-      if (withBroker) await api('/api/brokers', { method: 'PUT', body: b })
+      if (withBroker) await api('/api/brokers', { method: 'PUT', body: { ...b, redirect_uri: manual ? redirect : '' } })
       await api('/api/onboarding', { method: 'POST', body: { first_name: first, last_name: last } })
-      if (withBroker) { window.location.href = '/api/brokers/login'; return }
+      if (withBroker && !manual) { window.location.href = '/api/brokers/login'; return }
       onDone()
     } catch (e) { setErr(e.message); setBusy(false) }
   }
@@ -196,18 +209,41 @@ function Onboarding({ onDone }) {
                 options={platforms.map(p => ({ value: p.id, label: p.label, disabled: p.status !== 'available' }))} /></div>
             <div className="field"><label>App ID</label><input value={b.app_id} onChange={e => setB({ ...b, app_id: e.target.value })} placeholder="e.g. ABCD1234-100" /></div>
             <div className="field"><label>Secret</label><input type="password" value={b.secret} onChange={e => setB({ ...b, secret: e.target.value })} autoComplete="off" placeholder="API secret" /></div>
-            {callback && (
-              <div className="field"><label>Redirect URL — register this in your {metaLabel} app</label>
-                <div className="copyfield"><code>{callback}</code>
-                  <button type="button" className="btn" onClick={copyCallback}>{copied ? 'Copied' : 'Copy'}</button></div>
-                <div className="hint" style={{ marginTop: 6 }}>We fill this in for you — paste it as the redirect URI in your API app.</div>
+
+            {isOauth && (
+              <div className="field"><label>How do you want to connect?</label>
+                <div className="segmented">
+                  <button type="button" className={'seg' + (!manual ? ' on' : '')} onClick={() => setManual(false)}>Register our URL <span className="segsub">recommended</span></button>
+                  <button type="button" className={'seg' + (manual ? ' on' : '')} onClick={() => setManual(true)}>I have an app with its own redirect</button>
+                </div>
               </div>
             )}
+
+            {!manual ? (
+              callback && (
+                <div className="field"><label>Redirect URL — add this to your {metaLabel} app</label>
+                  <div className="copyfield"><code>{callback}</code>
+                    <button type="button" className="btn" onClick={copyCallback}>{copied ? 'Copied' : 'Copy'}</button></div>
+                  <div className="hint" style={{ marginTop: 6 }}>We fill this in for you — paste it as the redirect URI in your API app.</div>
+                </div>
+              )
+            ) : (
+              <div className="field"><label>Your app's registered redirect URL</label>
+                <input value={redirect} onChange={e => setRedirect(e.target.value)} placeholder="http://127.0.0.1:8765/auth/callback" />
+                <div className="hint" style={{ marginTop: 6 }}>Use the redirect already set in your app — nothing to change on the broker side. You'll complete the one-time login from the Broker page after this.</div>
+              </div>
+            )}
+
+            {testMsg && <div className={'banner ' + (testMsg.ok ? 'ok' : 'err')} style={{ textAlign: 'left' }}>{testMsg.t}</div>}
+
             <button className="btn primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}
-              disabled={busy} onClick={() => finish(true)}>{busy ? 'Connecting…' : 'Connect & finish'}</button>
+              disabled={busy} onClick={() => finish(true)}>{busy ? 'Working…' : (manual ? 'Save & finish' : 'Connect & finish')}</button>
             <div className="row" style={{ marginTop: 10, justifyContent: 'space-between' }}>
               <button className="btn" disabled={busy} onClick={() => setStep(1)}>← Back</button>
-              <button className="btn" disabled={busy} onClick={() => finish(false)}>Skip for now</button>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="btn" disabled={busy} onClick={test}>Test connection</button>
+                <button className="btn" disabled={busy} onClick={() => finish(false)}>Skip for now</button>
+              </div>
             </div>
           </div>
         )}
