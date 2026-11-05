@@ -97,6 +97,7 @@ export function PlaceOrder({ preset, onClose, onDone }) {
     qty: preset?.qty ? String(preset.qty) : '', entry: preset?.entry != null ? String(preset.entry) : '',
     stop: preset?.stop != null ? String(preset.stop) : '', target: preset?.target != null ? String(preset.target) : '' })
   const [touched, setTouched] = useState({})
+  const [mode, setMode] = useState('paper')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const set = (k, v) => setO({ ...o, [k]: v })
@@ -116,7 +117,7 @@ export function PlaceOrder({ preset, onClose, onDone }) {
     setTouched({ symbol: 1, qty: 1, entry: 1, stop: 1, target: 1 })
     if (!valid) return
     setBusy(true)
-    try { await api('/api/orders', { method: 'POST', body: { ...o, source: preset ? 'signal' : 'manual' } }); onDone() }
+    try { await api('/api/orders', { method: 'POST', body: { ...o, mode, source: preset ? 'signal' : 'manual' } }); onDone() }
     catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
 
@@ -132,7 +133,7 @@ export function PlaceOrder({ preset, onClose, onDone }) {
   return (
     <div className="scrim" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <div className="panel-h"><h2>Place order</h2><span className="hint">paper</span><span className="spring" />
+        <div className="panel-h"><h2>Place order</h2><span className="hint">{mode}</span><span className="spring" />
           <button className="btn" onClick={onClose}>Close</button></div>
         <div className="panel-b">
           {err && <div className="banner err">{err}</div>}
@@ -149,9 +150,18 @@ export function PlaceOrder({ preset, onClose, onDone }) {
             <Num k="stop" lbl="Stop" ph="price" />
             <Num k="target" lbl="Target" ph="price" />
           </div>
-          <button className="btn primary btn-lg" style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
-            disabled={busy || !valid} onClick={submit}>Place paper order</button>
-          <p className="note">Paper order — tracked for your P&amp;L and journal. Live routing uses your connected broker.</p>
+          <div className="field"><label>Order mode</label>
+            <div className="segmented">
+              <button type="button" className={'seg' + (mode === 'paper' ? ' on' : '')} onClick={() => setMode('paper')}>Paper <span className="segsub">simulated</span></button>
+              <button type="button" className={'seg' + (mode === 'live' ? ' on' : '')} onClick={() => setMode('live')}>Live <span className="segsub">real money</span></button>
+            </div>
+          </div>
+          {mode === 'live' && <div className="banner warn">⚠️ Live order — this places a <strong>real order on your broker</strong> the moment you confirm. Needs today's broker login. Risk is capped at your limit.</div>}
+          <button className={'btn btn-lg ' + (mode === 'live' ? 'good' : 'primary')} style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
+            disabled={busy || !valid} onClick={submit}>{busy ? 'Placing…' : (mode === 'live' ? 'Place LIVE order' : 'Place paper order')}</button>
+          <p className="note">{mode === 'live'
+            ? 'Routed to your own connected broker (INTRADAY). You confirm every order; nothing fires on its own.'
+            : 'Paper order — tracked for your P&L and journal. Switch to Live to route to your broker.'}</p>
         </div>
       </div>
     </div>

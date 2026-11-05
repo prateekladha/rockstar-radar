@@ -30,6 +30,9 @@ _ADDED_COLUMNS = {
     'signal_logs': {
         'day': 'VARCHAR(10)',
     },
+    'orders': {
+        'broker_order_id': 'VARCHAR(64)',
+    },
 }
 
 

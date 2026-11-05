@@ -149,6 +149,7 @@ class Order(Base):
     status = Column(String(12), default='open', index=True)   # open | closed | cancelled
     mode = Column(String(8), default='paper')                  # paper | live
     source = Column(String(16), default='manual')              # signal | manual
+    broker_order_id = Column(String(64))                        # broker's order id (live orders)
     pnl = Column(Float)                      # realised ₹ when closed
     result_r = Column(Float)                 # realised R multiple when closed
     note = Column(Text)
