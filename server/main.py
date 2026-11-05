@@ -238,6 +238,12 @@ if WEB_DIST.exists():
 
     @app.get('/{full_path:path}', response_class=HTMLResponse)
     def spa(full_path: str):
+        # Serve real files that live at the dist root (favicon.svg, robots.txt, sitemap.xml, …)
+        # before falling back to the SPA shell. Guard against path traversal.
+        if full_path:
+            candidate = (WEB_DIST / full_path).resolve()
+            if candidate.is_file() and str(candidate).startswith(str(WEB_DIST.resolve()) + os.sep):
+                return FileResponse(str(candidate))
         index = WEB_DIST / 'index.html'
         if index.exists():
             # Never cache index.html — it points at hashed asset files; caching it would
