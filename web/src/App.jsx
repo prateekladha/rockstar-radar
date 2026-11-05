@@ -87,7 +87,7 @@ function Shell({ user, onLogout }) {
           </div>
           {menu && (
             <div className="menu">
-              <div className="mhead"><div className="nm">{user.name}<span className="rolechip">{user.role}</span></div><div className="em">{user.email}</div></div>
+              <div className="mhead"><div className="nm"><span className="nm-txt">{user.name}</span><span className="rolechip">{user.role}</span></div><div className="em">{user.email}</div></div>
               {menuItems.map(([p, lbl, icon]) => (
                 <button key={p} className="mitem" onClick={() => go(p)}><span>{icon}</span>{lbl}</button>
               ))}
