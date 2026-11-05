@@ -248,7 +248,8 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 .login .card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:36px;box-shadow:var(--sh-lg);text-align:center}
 .login .mark{width:52px;height:52px;border-radius:14px;margin:0 auto 18px;display:grid;place-items:center;background:linear-gradient(145deg,#3b82f6,#1e40af);font-size:26px;box-shadow:0 6px 20px #2563eb55}
 .login h1{font-size:23px;margin-bottom:6px}.login p{color:var(--dim);margin:0 0 26px}
-.gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:13px;border-radius:var(--r-sm);border:1px solid var(--border-2);background:#fff;color:#1f2430;font-weight:650;cursor:pointer}
+.gbtn,.gbtn:hover{color:#1f2430}
+.gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:13px;border-radius:var(--r-sm);border:1px solid var(--border-2);background:#fff;font-weight:650;cursor:pointer}
 .gbtn:hover{background:#f1f3f6}
 .login .alt{margin-top:14px;font-size:12px;color:var(--faint)}
 .login .foot{margin-top:26px;font-size:11px;color:var(--faint);line-height:1.5}
