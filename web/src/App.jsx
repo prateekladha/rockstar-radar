@@ -14,6 +14,7 @@ import Insights from './Insights.jsx'
 import Journal from './Journal.jsx'
 import Family from './Family.jsx'
 import Landing from './Landing.jsx'
+import Support from './Support.jsx'
 
 const NAV = [['/radar', 'Radar'], ['/watchlist', 'Watchlist'], ['/trades', 'Trades'], ['/journal', 'Journal'], ['/insights', 'Insights']]
 const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings']
@@ -59,6 +60,7 @@ function RouteTracker() {
 
 function Shell({ user, onLogout }) {
   const [menu, setMenu] = useState(false)
+  const [support, setSupport] = useState(false)
   const menuRef = useRef(null)
   const nav = useNavigate()
   const loc = useLocation()
@@ -90,11 +92,14 @@ function Shell({ user, onLogout }) {
                 <button key={p} className="mitem" onClick={() => go(p)}><span>{icon}</span>{lbl}</button>
               ))}
               <div className="msep" />
+              <button className="mitem" onClick={() => { setMenu(false); setSupport(true) }}><span>💬</span>Contact &amp; support</button>
               <button className="mitem danger" onClick={onLogout}><span>⎋</span>Log out</button>
             </div>
           )}
         </div>
       </div>
+
+      {support && <Support onClose={() => setSupport(false)} />}
 
       <div className="wrap">
         {onAccount ? (

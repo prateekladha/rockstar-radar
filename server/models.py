@@ -215,3 +215,15 @@ class BrokerConnection(Base):
     status = Column(String(16), default='disconnected')
     updated_at = Column(DateTime, default=_now, onupdate=_now)
     user = relationship('User', back_populates='broker_connections')
+
+
+class SupportMessage(Base):
+    """A query/issue/feature-request raised by a user from inside the product.
+    Stored durably here AND delivered to the owner's Telegram (best-effort)."""
+    __tablename__ = 'support_messages'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), index=True)
+    kind = Column(String(16), default='question')   # question | issue | feature
+    message = Column(Text)
+    delivered = Column(Integer, default=0)          # 1 if Telegram delivery succeeded
+    created_at = Column(DateTime, default=_now, index=True)
