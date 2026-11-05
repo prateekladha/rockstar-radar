@@ -236,14 +236,14 @@ function Onboarding({ onDone }) {
 
             {testMsg && <div className={'banner ' + (testMsg.ok ? 'ok' : 'err')} style={{ textAlign: 'left' }}>{testMsg.t}</div>}
 
-            <button className="btn primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}
-              disabled={busy} onClick={() => finish(true)}>{busy ? 'Working…' : (manual ? 'Save & finish' : 'Connect & finish')}</button>
+            <div className="row" style={{ gap: 10, flexWrap: 'nowrap' }}>
+              <button className="btn outline" style={{ flex: 'none' }} disabled={busy} onClick={test}>Test connection</button>
+              <button className="btn primary btn-lg" style={{ flex: 1, justifyContent: 'center' }}
+                disabled={busy} onClick={() => finish(true)}>{busy ? 'Working…' : (manual ? 'Save & finish' : 'Connect & finish')}</button>
+            </div>
             <div className="row" style={{ marginTop: 10, justifyContent: 'space-between' }}>
               <button className="btn" disabled={busy} onClick={() => setStep(1)}>← Back</button>
-              <div className="row" style={{ gap: 8 }}>
-                <button className="btn" disabled={busy} onClick={test}>Test connection</button>
-                <button className="btn" disabled={busy} onClick={() => finish(false)}>Skip for now</button>
-              </div>
+              <button className="btn" disabled={busy} onClick={() => finish(false)}>Skip for now</button>
             </div>
           </div>
         )}
