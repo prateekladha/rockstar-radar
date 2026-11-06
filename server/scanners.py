@@ -85,9 +85,14 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') ->
         if cc is None:
             cc = ControlCenter(demo=False, env_extra={
                 'FYERS_APP_ID': app_id, 'FYERS_ACCESS_TOKEN': token, 'RADAR_UNIVERSE_INDEX': idx,
-                'RADAR_MORNING_PINS': pins})
+                'RADAR_MORNING_PINS': pins, 'RADAR_SCANNER_ID': key})
             cc.scanner_port = _LIVE_PORT_BASE + (owner_id % 60)
+            # Per-owner working files so concurrent brokers never collide (separate FYERS API lock —
+            # each account has its own REST quota — plus separate selection, pid and log).
             cc.pid_path = cc.root / 'data' / f'.scanner_live_{key}.pid'
+            cc.selection_path = cc.root / 'data' / f'today100_{key}.json'
+            cc.lock_path = cc.root / 'data' / f'.fyers_api_{key}.lock'
+            cc.scanner_out_path = cc.root / 'data' / f'scanner_{key}.out'
             _scanners[key] = cc
         else:
             # A fresh daily login mints a NEW access token. A long-running scanner subprocess keeps

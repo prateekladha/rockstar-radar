@@ -28,6 +28,10 @@ def main():
     parser.add_argument('--config', default=str(ROOT / 'config.json'))
     parser.add_argument('--universe', default=str(ROOT / 'data' / 'nifty500.csv'))
     parser.add_argument('--selection', default=str(ROOT / 'data' / 'today100.json'))
+    # Per-account API lock. Different FYERS accounts have separate REST quotas, so in the
+    # multi-tenant server each broker-owner's scanner gets its own lock (the server passes this)
+    # — a global lock would wrongly block the 2nd owner. Defaults to the single shared lock.
+    parser.add_argument('--lock', default=str(ROOT / 'data' / '.fyers_api_process.lock'))
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--force', action='store_true', help='Refresh baseline cache (warmup)')
     parser.add_argument('--day', help='YYYY-MM-DD for audit, defaults to local trading day')
@@ -39,7 +43,7 @@ def main():
         # 'app' (Control Center) must NOT hold the API lock: it spawns the scanner
         # subprocess which takes the lock itself. 'demo' makes no API calls.
         if args.command not in ('demo', 'app'):
-            lock_path = ROOT / 'data' / '.fyers_api_process.lock'
+            lock_path = Path(args.lock)
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             api_lock = lock_path.open('a+')
             try:

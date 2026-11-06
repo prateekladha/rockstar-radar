@@ -189,9 +189,24 @@ def prepare_selection(adapter, config: dict, universe_path: Path, output_path: P
             candidate.append((sym, industry))
     print(f'{len(candidate)} stocks pass initial price threshold; fetching cached 20-session '
           'daily liquidity histories. This may take several minutes with the free API.')
+    # Shared across broker-owners on purpose: daily OHLC history is market data (account-independent),
+    # so sharing saves REST calls. Writes are atomic + reads tolerant so concurrent scanners can't
+    # corrupt or trip over a half-written file.
     cache_path = ROOT / 'data' / f'daily_cache_{today.isoformat()}.json'
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache = json.loads(cache_path.read_text(encoding='utf-8')) if cache_path.exists() else {}
+
+    def _read_cache() -> dict:
+        try:
+            return json.loads(cache_path.read_text(encoding='utf-8')) if cache_path.exists() else {}
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _write_cache(obj: dict) -> None:
+        tmp = cache_path.with_suffix(f'.tmp.{os.getpid()}')
+        tmp.write_text(json.dumps(obj), encoding='utf-8')
+        os.replace(tmp, cache_path)
+
+    cache = _read_cache()
     profiles = []
     frm = int((market_dt(today - timedelta(days=55), '00:00')).timestamp())
     # midnight at cutoff excluding current day prevents intraday lookahead.
@@ -208,13 +223,13 @@ def prepare_selection(adapter, config: dict, universe_path: Path, output_path: P
             except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError):
                 # Preserve successful cache entries and STOP. Previously all
                 # provider failures were swallowed, causing 400+ more calls.
-                cache_path.write_text(json.dumps(cache), encoding='utf-8')
+                _write_cache(cache)
                 raise
             except Exception as e:
                 print(f'  Skipped {sym}: {type(e).__name__} ({e})')
                 cache[sym] = []
             if i % 10 == 0:
-                cache_path.write_text(json.dumps(cache), encoding='utf-8')
+                _write_cache(cache)
                 print(f'  {i}/{len(candidate)} daily histories completed')
         bars = []
         for row in cache[sym]:
@@ -225,7 +240,7 @@ def prepare_selection(adapter, config: dict, universe_path: Path, output_path: P
         p = compute_daily_profile(sym, industry, bars, today)
         if p:
             profiles.append(p)
-    cache_path.write_text(json.dumps(cache), encoding='utf-8')
+    _write_cache(cache)
     chosen = choose_top100(profiles, config, pins)
     selected = {p.symbol for p in chosen}
     if pins:

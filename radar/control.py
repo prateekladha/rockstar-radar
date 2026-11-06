@@ -96,6 +96,10 @@ class ControlCenter:
         self.watchlist_path = self.root / 'data' / 'morning_rockstars.txt'
         self.universe_path = self.root / 'data' / 'nifty500.csv'
         self.selection_path = self.root / 'data' / 'today100.json'
+        # Per-account FYERS API lock + per-scanner log. In the multi-tenant server these are made
+        # owner-specific (see server.scanners) so concurrent brokers never collide on one lock/file.
+        self.lock_path = self.root / 'data' / '.fyers_api_process.lock'
+        self.scanner_out_path = self.root / 'data' / 'scanner.out'
         self.scanner_port = int(os.environ.get('RADAR_SCANNER_PORT', '8899'))
         self.pid_path = self.root / 'data' / f'.scanner_{self.scanner_port}.pid'
         self._proc: Optional[subprocess.Popen] = None
@@ -291,12 +295,15 @@ class ControlCenter:
                 and not self.connection_status()['token_present']):
             raise ControlError('Connect FYERS (login) before starting the scanner.')
         self.pid_path.parent.mkdir(parents=True, exist_ok=True)
-        log = (self.root / 'data' / 'scanner.out').open('ab')
+        self.scanner_out_path.parent.mkdir(parents=True, exist_ok=True)
+        log = self.scanner_out_path.open('ab')
         env = {**os.environ, **{k: str(v) for k, v in self.env_extra.items() if v is not None}}
+        cmd = [sys.executable, str(self.root / 'launch.py'), command, '--port', str(self.scanner_port)]
+        if not self.demo:
+            # Isolate this scanner's selection + API lock (per broker-owner in the server).
+            cmd += ['--selection', str(self.selection_path), '--lock', str(self.lock_path)]
         proc = subprocess.Popen(
-            [sys.executable, str(self.root / 'launch.py'), command,
-             '--port', str(self.scanner_port)],
-            cwd=str(self.root), stdout=log, stderr=subprocess.STDOUT,
+            cmd, cwd=str(self.root), stdout=log, stderr=subprocess.STDOUT,
             start_new_session=True, env=env)
         self._proc = proc
         self._started_at = time.time()

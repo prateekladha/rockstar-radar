@@ -2,6 +2,7 @@
 from __future__ import annotations
 import csv
 import json
+import os
 import threading
 import time
 from dataclasses import asdict
@@ -21,9 +22,23 @@ class SessionJournal:
         self.day = day
         self.root = ROOT / 'output'
         self.root.mkdir(exist_ok=True)
+        # Per-scanner suffix (e.g. 'u1') so concurrent broker-owners keep separate audit CSVs and a
+        # clean restore-on-restart. Empty for the single-user app → unchanged filenames.
+        self.suffix = os.environ.get('RADAR_SCANNER_ID', '').strip()
         self.lock = threading.RLock()
         self.bar_ids = set()
         self.anchor_ids = set()
+
+    def _fn(self, kind: str) -> str:
+        return f'{kind}_{self.day}{("_" + self.suffix) if self.suffix else ""}.csv'
+
+    @property
+    def candles_path(self) -> Path:
+        return self.root / self._fn('fy_history_candles')
+
+    @property
+    def events_path(self) -> Path:
+        return self.root / self._fn('signals')
 
     def _write(self, filename: str, header: list[str], row: list):
         path = self.root / filename
@@ -36,7 +51,7 @@ class SessionJournal:
                 writer.writerow(row)
 
     def event(self, sig: Signal):
-        self._write(f'signals_{self.day}.csv',
+        self._write(self._fn('signals'),
                     ['time_ist','symbol','side','status','score','last_seen_price','rvol',
                      'orb_level','note','entry','stop','target','estimated_net_rr',
                      'delivered_time_ist','detection_lag_seconds'],
@@ -49,7 +64,7 @@ class SessionJournal:
             return
         self.anchor_ids.add(symbol)
         delay = round((observed - market_dt(self.day, '09:20')).total_seconds(), 1)
-        self._write(f'or_anchor_delays_{self.day}.csv',
+        self._write(self._fn('or_anchor_delays'),
                     ['symbol','ready_time_ist','delay_from_0920_seconds'],
                     [symbol, observed.isoformat(), delay])
 
@@ -59,7 +74,7 @@ class SessionJournal:
             if key in self.bar_ids:
                 return
             self.bar_ids.add(key)
-        self._write(f'fy_history_candles_{self.day}.csv',
+        self._write(self._fn('fy_history_candles'),
                     ['bar_start_ist','symbol','open','high','low','close','volume'],
                     [bar.at.isoformat(),symbol,bar.open,bar.high,bar.low,bar.close,bar.volume])
 
@@ -77,8 +92,8 @@ def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
     Never accepts candles from a different day, selected universe or an unfinished bar.
     """
     observed = (observed_at or now_ist()).astimezone(IST)
-    candles_path = journal.root / f'fy_history_candles_{journal.day}.csv'
-    events_path = journal.root / f'signals_{journal.day}.csv'
+    candles_path = journal.candles_path
+    events_path = journal.events_path
     restored_candles = 0
     restored_events = 0
     if candles_path.exists():

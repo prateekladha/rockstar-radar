@@ -76,9 +76,13 @@ def remove_member(mid: int, user: User = Depends(require_user), db: Session = De
         return JSONResponse({'error': 'Member not found.'}, status_code=404)
     if m.id == user.id:
         return JSONResponse({'error': 'You can\'t remove yourself.'}, status_code=400)
+    # Only guard against orphaning the household of its last admin. A pending invite or any
+    # non-last admin is freely removable by another admin.
     if m.role == 'admin':
-        return JSONResponse({'error': 'This member is an admin. Change their role to Trader first, '
-                             'then remove them.'}, status_code=400)
+        admins = db.query(User).filter_by(household_id=user.household_id, role='admin').count()
+        if admins <= 1:
+            return JSONResponse({'error': 'This is the only admin. Make someone else an admin '
+                                 'first, then remove this one.'}, status_code=400)
     # Remove dependent rows first — Postgres enforces the foreign keys, so a bare user delete would
     # fail (this is why removal "silently" failed on prod). Relationship cascades cover
     # Watchlist/Settings/BrokerConnection; the rest we clear explicitly.
