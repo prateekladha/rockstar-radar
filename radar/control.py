@@ -263,9 +263,17 @@ class ControlCenter:
     def _pid_alive(self, pid: int) -> bool:
         try:
             os.kill(pid, 0)
-            return True
         except (OSError, ProcessLookupError):
             return False
+        # Guard against PID reuse: pid files live on a persisted volume and survive container
+        # restarts, while PIDs reset each container — so a stale pid can collide with an unrelated
+        # new process and falsely read as "running", leaving the scanner never started. Verify the
+        # process really is a scanner. Linux-only (/proc); elsewhere fall back to the liveness check.
+        try:
+            cmdline = Path(f'/proc/{pid}/cmdline').read_bytes().replace(b'\x00', b' ')
+        except (OSError, ValueError):
+            return True  # no /proc (e.g. macOS dev) — can't verify, trust liveness
+        return b'launch.py' in cmdline
 
     def _read_pid(self) -> Optional[int]:
         if self.pid_path.exists():
