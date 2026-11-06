@@ -363,7 +363,16 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
             if symbol in missing_anchors and not engine.states[symbol].opening:
                 anchor_attempts[symbol] = now
         except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError) as e:
-            engine.halt('FYERS API access unavailable: ' + str(e)[:160])
+            # User-facing halt reason — no CLI/dev hints. Technical detail stays in the server log.
+            if isinstance(e, ApiAuthError):
+                reason = ('Your broker session has expired. Log in to your broker for today to '
+                          'resume the live scan.')
+            elif isinstance(e, ApiPermissionError):
+                reason = ('Your broker app is missing Market Data (quotes & history) permission. '
+                          'Enable it in your broker app, then restart the scan.')
+            else:
+                reason = 'Live broker data is temporarily unavailable. Please try again shortly.'
+            engine.halt(reason)
             print('FATAL: FYERS data API unavailable; stopping live confirmation. '
                   'Do not trade from cached Radar statuses. ' + str(e)[:160])
             return

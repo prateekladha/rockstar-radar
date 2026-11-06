@@ -90,8 +90,25 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') ->
             cc.pid_path = cc.root / 'data' / f'.scanner_live_{key}.pid'
             _scanners[key] = cc
         else:
-            # Keep the owner's pins current so the next scan session picks up any changes.
-            cc.env_extra['RADAR_MORNING_PINS'] = pins
+            # A fresh daily login mints a NEW access token. A long-running scanner subprocess keeps
+            # the token it was spawned with, so without this it would keep hitting the broker with a
+            # stale/expired token (WS -300 "Please provide valid token", history -16) and the feed
+            # never resumes. Detect a credential change and recycle the scanner so it picks up the
+            # new token. (Universe changes likewise need a fresh selection.)
+            cur = cc.env_extra
+            changed = (cur.get('FYERS_ACCESS_TOKEN') != token
+                       or cur.get('FYERS_APP_ID') != app_id
+                       or cur.get('RADAR_UNIVERSE_INDEX') != idx)
+            cur['FYERS_ACCESS_TOKEN'] = token
+            cur['FYERS_APP_ID'] = app_id
+            cur['RADAR_UNIVERSE_INDEX'] = idx
+            cur['RADAR_MORNING_PINS'] = pins
+            if changed:
+                try:
+                    if cc.scanner_status()['running']:
+                        cc.stop_scanner()
+                except Exception as e:
+                    print(f'scanner stop before token refresh skipped ({key}): {e}')
         try:
             if not cc.scanner_status()['running']:
                 cc.start_scanner()

@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import require_user
 from ..db import get_db
-from ..models import Household, User
+from ..models import (AlertConfig, BrokerConnection, Household, Order, Settings, SignalLog,
+                      SmartPick, SupportMessage, User, Watchlist)
 
 router = APIRouter(prefix='/api/family', tags=['family'])
 MANAGERS = {'admin'}
@@ -71,7 +72,19 @@ def remove_member(mid: int, user: User = Depends(require_user), db: Session = De
     if user.role not in MANAGERS:
         return JSONResponse({'error': 'Only an owner/admin can remove members.'}, status_code=403)
     m = db.query(User).filter_by(id=mid, household_id=user.household_id).first()
-    if m and m.id != user.id and m.role != 'admin':
-        db.delete(m)
-        db.commit()
+    if m is None:
+        return JSONResponse({'error': 'Member not found.'}, status_code=404)
+    if m.id == user.id:
+        return JSONResponse({'error': 'You can\'t remove yourself.'}, status_code=400)
+    if m.role == 'admin':
+        return JSONResponse({'error': 'This member is an admin. Change their role to Trader first, '
+                             'then remove them.'}, status_code=400)
+    # Remove dependent rows first — Postgres enforces the foreign keys, so a bare user delete would
+    # fail (this is why removal "silently" failed on prod). Relationship cascades cover
+    # Watchlist/Settings/BrokerConnection; the rest we clear explicitly.
+    for Model in (Order, SmartPick, SignalLog, SupportMessage, AlertConfig, BrokerConnection,
+                  Settings, Watchlist):
+        db.query(Model).filter_by(user_id=m.id).delete(synchronize_session=False)
+    db.delete(m)
+    db.commit()
     return {'ok': True}
