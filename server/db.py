@@ -32,6 +32,9 @@ _ADDED_COLUMNS = {
     },
     'orders': {
         'broker_order_id': 'VARCHAR(64)',
+        "order_type": "VARCHAR(8) DEFAULT 'limit'",
+        'fill_price': 'FLOAT',
+        'filled_at': 'TIMESTAMP',
     },
 }
 

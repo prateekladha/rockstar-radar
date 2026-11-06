@@ -8,46 +8,80 @@ const money = (x) => (x == null ? '—' : (x < 0 ? '-₹' : '₹') + Math.abs(Ma
 export default function Trades() {
   const [pnl, setPnl] = useState(null)
   const [positions, setPositions] = useState([])
+  const [running, setRunning] = useState(0)
+  const [working, setWorking] = useState([])
   const [orders, setOrders] = useState(null)
   const [f, setF] = useState({ q: '', status: '', side: '' })
   const [page, setPage] = useState(1)
   const [place, setPlace] = useState(false)
 
-  const load = async () => {
+  // Self-updating: positions/working/P&L refresh on a timer so running P&L and auto fills/closes
+  // (paper from the live feed, live from the broker) show up on their own.
+  const refreshLive = async () => {
     setPnl(await api('/api/pnl'))
-    setPositions((await api('/api/positions')).items)
+    const p = await api('/api/positions'); setPositions(p.items); setRunning(p.running_pnl)
+    setWorking((await api('/api/working-orders')).items)
+  }
+  const loadOrders = async () => {
     const p = new URLSearchParams({ ...f, page, page_size: 10 })
     setOrders(await api('/api/orders?' + p.toString()))
   }
-  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t) }, [f, page])
+  useEffect(() => { refreshLive(); const t = setInterval(refreshLive, 5000); return () => clearInterval(t) }, [])
+  useEffect(() => { const t = setTimeout(loadOrders, 250); return () => clearTimeout(t) }, [f, page])
 
-  const close = async (id) => { await api(`/api/orders/${id}/close`, { method: 'POST', body: {} }); load() }
+  const close = async (id) => { await api(`/api/orders/${id}/close`, { method: 'POST', body: {} }); refreshLive(); loadOrders() }
+  const cancel = async (id) => { await api(`/api/orders/${id}/cancel`, { method: 'POST' }); refreshLive(); loadOrders() }
+  const afterPlace = () => { setPlace(false); refreshLive(); loadOrders() }
   if (!pnl || !orders) return <div className="empty">Loading…</div>
   const pages = Math.max(1, Math.ceil(orders.total / orders.page_size))
 
   return (
     <div>
       <div className="kpis k4">
-        <div className="kpi live"><div className="label">Realised P&L</div><div className="val" style={{ color: pnl.realised >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.realised)}</div><div className="sub">{pnl.trades} closed trades</div></div>
+        <div className="kpi"><div className="label">Realised P&L</div><div className="val" style={{ color: pnl.realised >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.realised)}</div><div className="sub">{pnl.trades} closed trades</div></div>
+        <div className="kpi live"><div className="label">Running P&L <span className="livedot" /></div><div className="val" style={{ color: running >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(running)}</div><div className="sub">{pnl.open} open · updates live</div></div>
         <div className="kpi accent"><div className="label">Win rate</div><div className="val">{pnl.win_rate}%</div><div className="sub">{pnl.wins} winners</div></div>
-        <div className="kpi"><div className="label">Open positions</div><div className="val">{pnl.open}</div><div className="sub">live now</div></div>
-        <div className="kpi"><div className="label">Trades</div><div className="val">{pnl.trades}</div><div className="sub">total closed</div></div>
+        <div className="kpi"><div className="label">Working</div><div className="val">{pnl.working}</div><div className="sub">orders not yet filled</div></div>
       </div>
 
+      {working.length > 0 && (
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-h"><h2>Working orders</h2>
+            <span className="hint">Not filled yet — waiting for your entry. Cancel any time.</span></div>
+          <div className="tbl-wrap" style={{ maxHeight: 'none' }}>
+            <table>
+              <thead><tr><th>Symbol</th><th>Side</th><th className="num">Qty</th><th className="num">Entry</th>
+                <th className="num">Stop</th><th className="num">Target</th><th>Mode</th><th></th></tr></thead>
+              <tbody>
+                {working.map(o => (
+                  <tr key={o.id}><td className="sym-cell">{bare(o.symbol)}</td>
+                    <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
+                    <td className="num">{o.qty}</td><td className="num">{fmt(o.entry)}</td>
+                    <td className="num">{fmt(o.stop)}</td><td className="num">{fmt(o.target)}</td>
+                    <td><span className="chip WATCH">{o.mode === 'live' ? 'Live · working' : 'Paper · working'}</span></td>
+                    <td className="num"><button className="btn" onClick={() => cancel(o.id)}>Cancel</button></td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="panel" style={{ marginBottom: 16 }}>
-        <div className="panel-h"><h2>Open positions</h2><span className="spring" />
+        <div className="panel-h"><h2>Open positions</h2>
+          <span className="hint">Filled · P&L updates live</span><span className="spring" />
           <button className="btn primary" onClick={() => setPlace(true)}>+ New order</button></div>
         <div className="tbl-wrap" style={{ maxHeight: 'none' }}>
           <table>
-            <thead><tr><th>Symbol</th><th>Side</th><th className="num">Qty</th><th className="num">Entry</th>
-              <th className="num">Stop</th><th className="num">Target</th><th className="num">Unrealised</th><th></th></tr></thead>
+            <thead><tr><th>Symbol</th><th>Side</th><th className="num">Qty</th><th className="num">Fill</th>
+              <th className="num">Stop</th><th className="num">Target</th><th className="num">Running P&L</th><th></th></tr></thead>
             <tbody>
               {positions.length ? positions.map(o => (
                 <tr key={o.id}><td className="sym-cell">{bare(o.symbol)}</td>
                   <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
-                  <td className="num">{o.qty}</td><td className="num">{fmt(o.entry)}</td>
+                  <td className="num">{o.qty}</td><td className="num">{fmt(o.fill_price != null ? o.fill_price : o.entry)}</td>
                   <td className="num">{fmt(o.stop)}</td><td className="num">{fmt(o.target)}</td>
-                  <td className="num">{o.unrealized != null ? money(o.unrealized) : '—'}</td>
+                  <td className={'num ' + (o.unrealized != null ? (o.unrealized >= 0 ? 'up' : 'down') : '')}>{o.unrealized != null ? money(o.unrealized) : '—'}</td>
                   <td className="num"><button className="btn danger" onClick={() => close(o.id)}>Close</button></td></tr>
               )) : <tr><td colSpan="8"><div className="empty">No open positions. Place an order or act on a radar signal.</div></td></tr>}
             </tbody>
@@ -63,7 +97,9 @@ export default function Trades() {
           <Select value={f.side} onChange={v => { setPage(1); setF({ ...f, side: v }) }} options={[
             { value: '', label: 'Any side' }, { value: 'LONG', label: 'Long' }, { value: 'SHORT', label: 'Short' }]} />
           <Select value={f.status} onChange={v => { setPage(1); setF({ ...f, status: v }) }} options={[
-            { value: '', label: 'All statuses' }, { value: 'open', label: 'Open' }, { value: 'closed', label: 'Closed' }]} />
+            { value: '', label: 'All statuses' }, { value: 'pending', label: 'Working' },
+            { value: 'open', label: 'Open' }, { value: 'closed', label: 'Closed' },
+            { value: 'cancelled', label: 'Cancelled' }]} />
           <span className="spring" /><span className="hint">{orders.total} orders</span>
         </div>
         <div className="tbl-wrap">
@@ -76,8 +112,8 @@ export default function Trades() {
                   <td className="sym-cell">{bare(o.symbol)}</td>
                   <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
                   <td className="num">{o.qty}</td>
-                  <td className="num">{fmt(o.entry)} → {o.exit_price != null ? fmt(o.exit_price) : '—'}</td>
-                  <td><span className={'chip ' + (o.status === 'closed' ? (o.pnl >= 0 ? 'CONFIRMED' : 'FAILED') : 'WATCH')}>{label(o.status)}</span></td>
+                  <td className="num">{fmt(o.fill_price != null ? o.fill_price : o.entry)} → {o.exit_price != null ? fmt(o.exit_price) : '—'}</td>
+                  <td><span className={'chip ' + statusChip(o)}>{statusLabel(o.status)}</span></td>
                   <td className={'num ' + (o.pnl >= 0 ? 'up' : 'down')}>{o.pnl != null ? money(o.pnl) : '—'}</td>
                   <td className={'num ' + ((o.result_r || 0) >= 0 ? 'up' : 'down')}>{o.result_r != null ? o.result_r + 'R' : '—'}</td></tr>
               ))}
@@ -87,9 +123,18 @@ export default function Trades() {
         {pages > 1 && <Pager page={orders.page} pages={pages} onPage={setPage} />}
       </div>
 
-      {place && <PlaceOrder onClose={() => setPlace(false)} onDone={() => { setPlace(false); load() }} />}
+      {place && <PlaceOrder onClose={() => setPlace(false)} onDone={afterPlace} />}
     </div>
   )
+}
+
+const statusLabel = (s) => ({ pending: 'Working', open: 'Open', closed: 'Closed',
+  cancelled: 'Cancelled', rejected: 'Rejected' }[s] || s)
+function statusChip(o) {
+  if (o.status === 'closed') return (o.pnl >= 0 ? 'CONFIRMED' : 'FAILED')
+  if (o.status === 'open') return 'READY'
+  if (o.status === 'cancelled' || o.status === 'rejected') return 'STALE'
+  return 'WATCH'  // pending / working
 }
 
 export function PlaceOrder({ preset, onClose, onDone }) {

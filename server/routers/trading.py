@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from ..auth import require_user
 from ..db import get_db
 from ..models import BrokerConnection, Order, User
+from ..watchpins import bare as _bare
 
 router = APIRouter(prefix='/api', tags=['trading'])
 
@@ -125,6 +126,7 @@ async def place_order(request: Request, user: User = Depends(require_user),
     mode = (b.get('mode') or 'paper').lower()
     if mode not in ('paper', 'live'):
         mode = 'paper'
+    order_type = (b.get('order_type') or 'limit').lower()
     broker_oid = None
     if mode == 'live':
         from .. import scanners
@@ -136,31 +138,82 @@ async def place_order(request: Request, user: User = Depends(require_user),
         try:
             broker_oid = place_live_order(own.app_id, decrypt(own.token_enc) or '', symbol=symbol,
                                           side=side, qty=qty, entry=entry, stop=stop, target=target,
-                                          order_type=(b.get('order_type') or 'limit'))
+                                          order_type=order_type)
         except OrderError as e:
             return JSONResponse({'error': 'Broker rejected the order: ' + str(e)}, status_code=400)
 
+    # New orders start as PENDING (working). They become `open` only when actually filled — paper by
+    # the live feed (below / by the engine), live by broker sync. Only truly-closed orders book P&L.
     o = Order(user_id=user.id, symbol=symbol, side=side, qty=qty, entry=entry,
-              stop=stop, target=target, status='open', mode=mode, broker_order_id=broker_oid,
-              source=b.get('source', 'manual'), note=b.get('note'))
+              stop=stop, target=target, status='pending', order_type=order_type, mode=mode,
+              broker_order_id=broker_oid, source=b.get('source', 'manual'), note=b.get('note'))
     db.add(o)
     db.commit()
     db.refresh(o)
+    # Paper: if the market has already traded through the entry, fill it immediately so it shows as
+    # an open position at once (otherwise the engine fills it on its next pass, within seconds).
+    if mode == 'paper':
+        try:
+            from ..order_engine import _price_map, process_paper
+            px = _price_map(db, user).get(_bare(symbol))
+            if px is not None and process_paper(o, px):
+                db.commit()
+                db.refresh(o)
+        except Exception as e:
+            print(f'immediate paper fill skipped: {e}')
     return o.public()
 
 
 @router.post('/orders/{oid}/close')
 async def close_order(oid: int, request: Request, user: User = Depends(require_user),
                       db: Session = Depends(get_db)):
-    o = db.query(Order).filter_by(id=oid, user_id=user.id, status='open').first()
+    from ..order_engine import _price_map, mark_closed
+    o = db.query(Order).filter_by(id=oid, user_id=user.id).first()
     if o is None:
-        return JSONResponse({'error': 'Open order not found.'}, status_code=404)
+        return JSONResponse({'error': 'Order not found.'}, status_code=404)
+    if o.status != 'open':
+        return JSONResponse({'error': 'Only a filled, open position can be closed. A working order '
+                             'that has not filled yet should be cancelled instead.'}, status_code=400)
     b = await request.json()
-    exit_price = float(b.get('exit_price') or o.target or o.entry)
-    o.exit_price = exit_price
-    o.status = 'closed'
+    live_px = _price_map(db, user).get(_bare(o.symbol))
+    # Live: square off at the broker (user-initiated — the only place we fire an exit order).
+    if o.mode == 'live':
+        from .. import scanners
+        from ..broker_orders import OrderError, square_off_live
+        from ..crypto import decrypt
+        own = scanners._own_broker(db, user)
+        if own is None or not own.token_enc or not scanners._token_is_fresh_today(own):
+            return JSONResponse({'error': 'Log in to your broker for today to close this live '
+                                 'position.', 'need_login': True}, status_code=403)
+        try:
+            square_off_live(own.app_id, decrypt(own.token_enc) or '', symbol=o.symbol,
+                            side=o.side, qty=o.qty)
+        except OrderError as e:
+            return JSONResponse({'error': 'Broker rejected the square-off: ' + str(e)}, status_code=400)
+    exit_price = float(b.get('exit_price') or live_px or o.target or o.fill_price or o.entry)
+    mark_closed(o, exit_price)
+    db.commit()
+    return o.public()
+
+
+@router.post('/orders/{oid}/cancel')
+async def cancel_order(oid: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    o = db.query(Order).filter_by(id=oid, user_id=user.id, status='pending').first()
+    if o is None:
+        return JSONResponse({'error': 'No working order to cancel (it may already be filled or '
+                             'closed).'}, status_code=404)
+    if o.mode == 'live' and o.broker_order_id:
+        from .. import scanners
+        from ..broker_orders import OrderError, cancel_live_order
+        from ..crypto import decrypt
+        own = scanners._own_broker(db, user)
+        if own and own.token_enc and scanners._token_is_fresh_today(own):
+            try:
+                cancel_live_order(own.app_id, decrypt(own.token_enc) or '', o.broker_order_id)
+            except OrderError as e:
+                return JSONResponse({'error': 'Broker rejected the cancel: ' + str(e)}, status_code=400)
+    o.status = 'cancelled'
     o.closed_at = datetime.utcnow()
-    o.pnl, o.result_r = _close_fields(o.side, o.entry, o.stop or o.entry, exit_price, o.qty)
     db.commit()
     return o.public()
 
@@ -184,16 +237,39 @@ def list_orders(user: User = Depends(require_user), db: Session = Depends(get_db
 
 @router.get('/positions')
 def positions(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    open_orders = db.query(Order).filter_by(user_id=user.id, status='open').order_by(Order.created_at.desc()).all()
-    return {'items': [o.public() for o in open_orders], 'total': len(open_orders)}
+    """Filled, open positions with self-updating (unrealised) P&L from the live feed."""
+    from ..order_engine import _price_map
+    pm = _price_map(db, user)
+    open_orders = (db.query(Order).filter_by(user_id=user.id, status='open')
+                   .order_by(Order.created_at.desc()).all())
+    items = [o.public(last_price=pm.get(_bare(o.symbol))) for o in open_orders]
+    running = round(sum((i['unrealized'] or 0) for i in items), 2)
+    return {'items': items, 'total': len(items), 'running_pnl': running}
+
+
+@router.get('/working-orders')
+def working_orders(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Working (pending, not-yet-filled) orders — these are cancellable, not closable."""
+    rows = (db.query(Order).filter_by(user_id=user.id, status='pending')
+            .order_by(Order.created_at.desc()).all())
+    return {'items': [o.public() for o in rows], 'total': len(rows)}
 
 
 @router.get('/pnl')
 def pnl(user: User = Depends(require_user), db: Session = Depends(get_db)):
     seed_demo_orders(db, user)
+    # Realised P&L counts ONLY genuinely-closed trades (entered AND exited) — never working/pending
+    # or cancelled orders.
     closed = db.query(Order).filter_by(user_id=user.id, status='closed').all()
     realised = round(sum(o.pnl or 0 for o in closed), 2)
     wins = [o for o in closed if (o.pnl or 0) > 0]
     open_count = db.query(Order).filter_by(user_id=user.id, status='open').count()
-    return {'realised': realised, 'trades': len(closed), 'open': open_count,
-            'wins': len(wins), 'win_rate': round(100 * len(wins) / len(closed), 1) if closed else 0}
+    working = db.query(Order).filter_by(user_id=user.id, status='pending').count()
+    from ..order_engine import _price_map
+    pm = _price_map(db, user)
+    open_orders = db.query(Order).filter_by(user_id=user.id, status='open').all()
+    running = round(sum((o.public(last_price=pm.get(_bare(o.symbol)))['unrealized'] or 0)
+                        for o in open_orders), 2)
+    return {'realised': realised, 'trades': len(closed), 'open': open_count, 'working': working,
+            'running_pnl': running, 'wins': len(wins),
+            'win_rate': round(100 * len(wins) / len(closed), 1) if closed else 0}

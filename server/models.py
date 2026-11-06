@@ -146,10 +146,15 @@ class Order(Base):
     stop = Column(Float)
     target = Column(Float)
     exit_price = Column(Float)
-    status = Column(String(12), default='open', index=True)   # open | closed | cancelled
+    # Lifecycle: pending (working/unfilled -> Cancel) -> open (filled position -> Close)
+    #            -> closed. Or pending -> cancelled / rejected. Only `closed` counts toward P&L.
+    status = Column(String(12), default='pending', index=True)
+    order_type = Column(String(8), default='limit')            # market | limit (entry trigger)
     mode = Column(String(8), default='paper')                  # paper | live
     source = Column(String(16), default='manual')              # signal | manual
     broker_order_id = Column(String(64))                        # broker's order id (live orders)
+    fill_price = Column(Float)               # actual entry fill price (set when it fills -> open)
+    filled_at = Column(DateTime)             # when it filled
     pnl = Column(Float)                      # realised ₹ when closed
     result_r = Column(Float)                 # realised R multiple when closed
     note = Column(Text)
@@ -160,18 +165,20 @@ class Order(Base):
         return None
 
     def public(self, last_price=None):
-        rps = self.risk_per_share()
         unreal = None
-        if self.status == 'open' and last_price and self.qty:
-            unreal = round((last_price - self.entry) * self.qty * (1 if self.side == 'LONG' else -1), 2)
+        basis = self.fill_price if self.fill_price is not None else self.entry
+        if self.status == 'open' and last_price and self.qty and basis is not None:
+            unreal = round((last_price - basis) * self.qty * (1 if self.side == 'LONG' else -1), 2)
         return {
             'id': self.id, 'created_at': self.created_at.isoformat() if self.created_at else None,
             'closed_at': self.closed_at.isoformat() if self.closed_at else None,
+            'filled_at': self.filled_at.isoformat() if self.filled_at else None,
             'symbol': self.symbol, 'side': self.side, 'qty': self.qty,
             'entry': self.entry, 'stop': self.stop, 'target': self.target,
-            'exit_price': self.exit_price, 'status': self.status, 'mode': self.mode,
-            'source': self.source, 'pnl': self.pnl, 'result_r': self.result_r,
-            'unrealized': unreal, 'note': self.note,
+            'fill_price': self.fill_price, 'exit_price': self.exit_price,
+            'status': self.status, 'order_type': self.order_type, 'mode': self.mode,
+            'working': self.status == 'pending', 'source': self.source,
+            'pnl': self.pnl, 'result_r': self.result_r, 'unrealized': unreal, 'note': self.note,
         }
 
 

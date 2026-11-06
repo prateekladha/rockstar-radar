@@ -31,15 +31,19 @@ async def lifespan(_app: FastAPI):
     import asyncio
     init_db()
     register_google()
-    sched_task = None
+    sched_task = engine_task = None
     if os.environ.get('RADAR_SCHED', '1') != '0':
         from .scheduler import run_scheduler
         sched_task = asyncio.create_task(run_scheduler())
+    if os.environ.get('RADAR_ORDER_ENGINE', '1') != '0':
+        from .order_engine import run_order_engine
+        engine_task = asyncio.create_task(run_order_engine())
     try:
         yield
     finally:
-        if sched_task:
-            sched_task.cancel()
+        for t in (sched_task, engine_task):
+            if t:
+                t.cancel()
 
 
 app = FastAPI(title='Rockstar Radar', lifespan=lifespan)
