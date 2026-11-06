@@ -1,21 +1,28 @@
 """Per-user radar data source.
 
 Feed priority for a user:
-  1. Their OWN connected broker (if registered) — their feed/watchlist come from their broker only.
-  2. Else the household's shared broker (the admin's) — read-only shared feed + watchlist.
-  3. Else need_broker (or the RADAR_DEMO marketing feed).
+  1. Their OWN connected broker, when its feed is actually healthy — their own live feed.
+  2. Else the household's shared broker (prefer the admin's) — read-only shared feed + watchlist.
+     This is the FALLBACK when a user's own broker is down (expired/auth-failed/rate-limited), so a
+     teammate still sees the market via the owner's already-running scanner (no extra FYERS load).
+  3. Else need_login (reconnect CTA) / need_broker (or the RADAR_DEMO marketing feed).
 
-Each distinct broker runs ONE scanner, keyed by the broker's owner (so the admin's own feed and a
-teammate's shared feed reuse the same scanner — never two sessions on one token). SEBI requires a
-fresh broker login each trading day; a stale token = need_login.
+Trading always requires the user's OWN broker (see routers/trading.py) — the shared fallback is for
+read-only market data only.
+
+Each distinct broker runs ONE scanner, keyed by the broker's owner. SEBI requires a fresh broker
+login each trading day; a stale OR runtime-rejected token = need_login. Feed health comes from the
+scanner's own status signal (radar.health), not just DB token freshness.
 """
 from __future__ import annotations
 import os
+import socket
 import threading
 from datetime import timezone
 
 from sqlalchemy.orm import Session
 
+from radar import health
 from radar import universe as U
 from radar.control import ControlCenter
 from radar.utils import IST, now_ist
@@ -27,7 +34,17 @@ from .models import BrokerConnection, User
 _demo: ControlCenter | None = None
 _scanners: dict[str, ControlCenter] = {}   # key "u<owner_id>" -> ControlCenter
 _lock = threading.Lock()
-_LIVE_PORT_BASE = 8950
+
+
+def _free_port() -> int:
+    """An OS-assigned free localhost port. Replaces the old `base + owner_id % 60` scheme, which
+    collided whenever two owner ids were congruent mod 60 and hard-capped concurrent scanners at 60."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
 
 
 def _demo_cc() -> ControlCenter:
@@ -50,13 +67,16 @@ def _own_broker(db: Session, user: User) -> BrokerConnection | None:
             .first())
 
 
-def _household_broker(db: Session, household_id: int) -> BrokerConnection | None:
-    """The household's shared broker — prefer the admin's, and a freshly-logged-in one."""
-    return (db.query(BrokerConnection).join(User, BrokerConnection.user_id == User.id)
-            .filter(User.household_id == household_id, BrokerConnection.broker == 'fyers',
-                    BrokerConnection.app_id.isnot(None), BrokerConnection.secret_enc.isnot(None))
-            .order_by(User.role.asc(), BrokerConnection.token_refreshed_at.desc())
-            .first())
+def _household_broker(db: Session, household_id: int,
+                      exclude_user_id: int | None = None) -> BrokerConnection | None:
+    """The household's shared broker — prefer an admin's, freshly-logged-in one. ``exclude_user_id``
+    skips the caller's own broker so the shared feed is a genuine fallback to someone else's."""
+    q = (db.query(BrokerConnection).join(User, BrokerConnection.user_id == User.id)
+         .filter(User.household_id == household_id, BrokerConnection.broker == 'fyers',
+                 BrokerConnection.app_id.isnot(None), BrokerConnection.secret_enc.isnot(None)))
+    if exclude_user_id is not None:
+        q = q.filter(BrokerConnection.user_id != exclude_user_id)
+    return q.order_by(User.role.asc(), BrokerConnection.token_refreshed_at.desc()).first()
 
 
 def _universe_index(user: User) -> str:
@@ -86,7 +106,6 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') ->
             cc = ControlCenter(demo=False, env_extra={
                 'FYERS_APP_ID': app_id, 'FYERS_ACCESS_TOKEN': token, 'RADAR_UNIVERSE_INDEX': idx,
                 'RADAR_MORNING_PINS': pins, 'RADAR_SCANNER_ID': key})
-            cc.scanner_port = _LIVE_PORT_BASE + (owner_id % 60)
             # Per-owner working files so concurrent brokers never collide (separate FYERS API lock —
             # each account has its own REST quota — plus separate selection, pid and log).
             cc.pid_path = cc.root / 'data' / f'.scanner_live_{key}.pid'
@@ -109,6 +128,7 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') ->
             cur['RADAR_UNIVERSE_INDEX'] = idx
             cur['RADAR_MORNING_PINS'] = pins
             if changed:
+                health.clear_health(key)   # fresh creds get a clean slate; re-reports on (re)start
                 try:
                     if cc.scanner_status()['running']:
                         cc.stop_scanner()
@@ -116,6 +136,7 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') ->
                     print(f'scanner stop before token refresh skipped ({key}): {e}')
         try:
             if not cc.scanner_status()['running']:
+                cc.scanner_port = _free_port()   # a fresh free port on every (re)start
                 cc.start_scanner()
         except Exception as e:
             print(f'live scanner start skipped ({key}): {e}')
@@ -139,9 +160,27 @@ def connected_brokers(db: Session) -> list[BrokerConnection]:
             .all())
 
 
+def _auth_failed_health(conn: BrokerConnection) -> dict | None:
+    """The scanner's last runtime health IF it says 'needs re-login' and the user hasn't logged in
+    again since (a login newer than the failure clears it). None otherwise."""
+    h = health.read_health(f'u{conn.user_id}')
+    if not h or not h.get('need_login'):
+        return None
+    h_at = health.health_at(h)
+    tok = conn.token_refreshed_at
+    if tok is not None:
+        tok = tok if tok.tzinfo else tok.replace(tzinfo=timezone.utc)
+        if h_at and tok > h_at:
+            return None   # logged in after the failure — give the new token a chance
+    return h
+
+
 def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
-    """Scheduler entry point: start the owner's scanner if today's token is present."""
+    """Scheduler/supervisor entry point: start the owner's scanner if today's token is present and it
+    hasn't already runtime-failed auth (don't restart into the same -15/-16 until they re-login)."""
     if not _token_is_fresh_today(conn) or not conn.token_enc:
+        return False
+    if _auth_failed_health(conn):
         return False
     _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), _universe_index(conn.user),
             watchpins.pins_env(db, conn.user_id))
@@ -152,32 +191,80 @@ def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
 start_for_household = start_for_broker
 
 
-def radar_state(db: Session, user: User) -> dict:
-    """Opportunities from the user's effective broker (own first, else the household's shared one)."""
-    idx = _universe_index(user)
+def _need_login_state(conn, source, label, reason=None) -> dict:
+    if not reason:
+        reason = (('Your broker session has expired. SEBI requires a fresh login each trading day — '
+                   'log in to resume your scan.') if source == 'own' else
+                  'The shared feed will resume once your team admin logs in to the broker today.')
+    return {'offline': True, 'need_login': True, 'data_mode': 'none', 'source': source,
+            'shared': source == 'shared', 'universe': label, 'broker': conn.broker, 'reason': reason}
+
+
+def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
+    """Try one broker's feed. Returns (status, state) where status is:
+       'live'/'starting' → usable (return as-is); 'need_login' → prompt reconnect; 'down' → feed
+       unavailable (e.g. rate-limited) — caller may fall back to another broker."""
     label = U.label_for(idx)
-    conn, source = effective_broker(db, user)
-    if conn:
-        if conn.token_enc and _token_is_fresh_today(conn):
-            # Shared feed reuses the owner's scanner + the owner's universe (one scanner per broker).
-            use_idx = idx if source == 'own' else _universe_index(conn.user)
-            st = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), use_idx,
-                         watchpins.pins_env(db, conn.user_id)).live_state()
-            st['data_mode'] = 'live'
-            st['source'] = source
-            st['shared'] = (source == 'shared')
-            st['universe'] = U.label_for(use_idx)
-            st['broker'] = conn.broker
+    if not (conn.token_enc and _token_is_fresh_today(conn)):
+        return 'need_login', _need_login_state(conn, source, label)
+    h = _auth_failed_health(conn)
+    if h:
+        return 'need_login', _need_login_state(conn, source, label, h.get('reason'))
+
+    cc = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), idx,
+                 watchpins.pins_env(db, conn.user_id))
+    st = cc.live_state()
+
+    if st.get('offline'):
+        # Process running but dashboard not up yet = warming up (selection in progress). Not a
+        # failure — show "starting". A truly dead scanner falls through to 'down'.
+        if 'starting' in (st.get('reason') or '').lower():
+            st.update({'data_mode': 'live', 'source': source, 'shared': source == 'shared',
+                       'universe': label, 'broker': conn.broker})
+            return 'starting', st
+        return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
+                        'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
+                        'reason': st.get('reason') or 'Live feed is starting up…'}
+
+    fh = (st.get('feed_health') or '')
+    if st.get('halted') or fh.startswith('HALTED'):
+        low = fh.lower()
+        if any(k in low for k in ('expired', 'log in', 'login', 'valid token', 'session')):
+            return 'need_login', _need_login_state(conn, source, label, fh.replace('HALTED — ', ''))
+        return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
+                        'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
+                        'reason': fh.replace('HALTED — ', '') or 'Live feed temporarily unavailable.'}
+
+    st.update({'data_mode': 'live', 'source': source, 'shared': source == 'shared',
+               'universe': label, 'broker': conn.broker})
+    return 'live', st
+
+
+def radar_state(db: Session, user: User) -> dict:
+    """The user's radar feed. Prefer their OWN broker; if it's down (expired/auth/rate-limited), fall
+    back to the household's shared broker so they still see the market (read-only)."""
+    label = U.label_for(_universe_index(user))
+    own = _own_broker(db, user)
+    fallback_state = None   # best non-usable state to show if nothing is usable
+
+    if own:
+        status, st = _feed_for(db, own, user, 'own', _universe_index(user))
+        if status in ('live', 'starting'):
             return st
-        # Broker registered but no fresh token today (SEBI daily login).
-        if source == 'own':
-            reason = ('Your broker session has expired. SEBI requires a fresh login each trading '
-                      'day — log in to resume your scan.')
-        else:
-            reason = ('The shared feed will resume once your team admin logs in to the broker today.')
-        return {'offline': True, 'need_login': True, 'data_mode': 'none', 'source': source,
-                'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
-                'reason': reason}
+        fallback_state = st   # own is down — try the shared feed, else show this
+
+    shared = _household_broker(db, user.household_id, exclude_user_id=user.id)
+    if shared:
+        status, st = _feed_for(db, shared, user, 'shared', _universe_index(shared.user))
+        if status in ('live', 'starting'):
+            if own:
+                st['fallback'] = True   # tell the UI this is the shared feed because own is down
+            return st
+        if fallback_state is None:
+            fallback_state = st
+
+    if fallback_state is not None:
+        return fallback_state
     if os.environ.get('RADAR_DEMO') == '1':
         st = _demo_cc().live_state()
         st['data_mode'] = 'demo'

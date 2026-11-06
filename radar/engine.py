@@ -527,7 +527,7 @@ class RadarEngine:
                 counts[r['state']] += 1
             return {'mode': self.mode, 'session': self.session.isoformat(),
                     'server_time_ist': now.strftime('%Y-%m-%d %H:%M:%S'),
-                    'feed_health': self.feed_health,
+                    'feed_health': self.feed_health, 'halted': self.halted,
                     'new_signals_stop': self.config['new_signals_stop'],
                     'session_closed': self.mode == 'LIVE' and now >= market_dt(self.session, self.config['new_signals_stop']) + timedelta(minutes=self.config['retest_expiry_minutes']),
                     'monitored': len(rows),

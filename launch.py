@@ -143,6 +143,18 @@ def main():
                 raise ValueError('Run audit after 15:35 IST for full-session completed data.')
             audit_day(FyersAdapter(cfg), cfg, day)
     except (ValueError, OSError, RuntimeError) as e:
+        # Record a health signal the web process can read: an auth/token failure during selection or
+        # live run means this broker needs a fresh login (Reconnect CTA + shared-feed fallback).
+        if args.command in ('run', 'prepare', 'live', 'warmup'):
+            from radar.health import write_health
+            msg = str(e).lower()
+            is_auth = any(k in msg for k in ('token expired', 'token expired/invalid', 'valid token',
+                                             '(-15)', '(-16)', 'auth'))
+            write_health(os.environ.get('RADAR_SCANNER_ID', ''),
+                         ok=False, need_login=is_auth,
+                         reason=('Your broker session has expired. Log in to your broker for today '
+                                 'to resume the live scan.') if is_auth
+                         else 'Live broker data is temporarily unavailable.')
         print(f'ERROR: {e}', file=sys.stderr)
         sys.exit(2)
     finally:

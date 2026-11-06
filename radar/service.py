@@ -215,6 +215,11 @@ def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
 
 
 def start_live(config: dict, selection_path: Path, port: int):
+    # Selection already succeeded (it made FYERS calls), so the token is valid as the feed launches.
+    # The web process reads this to show a real "live" vs a Reconnect CTA.
+    from .health import write_health
+    _scanner_id = os.environ.get('RADAR_SCANNER_ID', '')
+    write_health(_scanner_id, ok=True)
     p, info = read_selection(selection_path)
     today = now_ist().date()
     if p.get('for_session') != today.isoformat():
@@ -388,6 +393,8 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
             else:
                 reason = 'Live broker data is temporarily unavailable. Please try again shortly.'
             engine.halt(reason)
+            # Signal the web process: auth -> Reconnect CTA + shared-feed fallback; others -> fall back.
+            write_health(_scanner_id, ok=False, need_login=isinstance(e, ApiAuthError), reason=reason)
             print('FATAL: FYERS data API unavailable; stopping live confirmation. '
                   'Do not trade from cached Radar statuses. ' + str(e)[:160])
             return

@@ -24,7 +24,10 @@ from .db import SessionLocal
 
 _REMIND_AT = os.environ.get('RADAR_SCHED_REMIND_HHMM', '08:30')
 _START_AT = os.environ.get('RADAR_SCHED_START_HHMM', '09:08')
+_SUPERVISE_UNTIL = os.environ.get('RADAR_SCHED_SUPERVISE_UNTIL_HHMM', '15:35')
+_SUPERVISE_EVERY_MIN = int(os.environ.get('RADAR_SCHED_SUPERVISE_EVERY_MIN', '2'))
 _done: dict[str, str] = {}  # action -> last YYYY-MM-DD it ran
+_last_supervise_min: int | None = None
 
 
 def _hhmm(dt) -> str:
@@ -74,6 +77,26 @@ def _start_all_scanners() -> None:
         db.close()
 
 
+def _supervise_scanners() -> None:
+    """Auto-restart any scanner that should be running but isn't (crashed/OOM) — but never one that
+    runtime-failed auth (start_for_broker skips those until the user re-logs in). Quiet unless it acts."""
+    db = SessionLocal()
+    try:
+        restarted = 0
+        for c in scanners.connected_brokers(db):
+            try:
+                cc = scanners._scanners.get(f'u{c.user_id}')
+                was_running = bool(cc and cc.scanner_status()['running'])
+                if not was_running and scanners.start_for_broker(db, c):
+                    restarted += 1
+            except Exception as e:
+                print(f'[scheduler] supervise failed (conn {c.id}): {e}')
+        if restarted:
+            print(f'[scheduler] supervisor restarted {restarted} scanner(s)')
+    finally:
+        db.close()
+
+
 async def run_scheduler() -> None:
     print(f'[scheduler] on — login reminder {_REMIND_AT} IST, scanner start {_START_AT} IST (trading days)')
     while True:
@@ -86,6 +109,13 @@ async def run_scheduler() -> None:
                     await asyncio.to_thread(_remind_logins)
                 if hhmm >= _START_AT and _run_once('start', today):
                     await asyncio.to_thread(_start_all_scanners)
+                # Supervisor: during market hours, keep scanners up (restart crashes) every few min.
+                global _last_supervise_min
+                if _START_AT <= hhmm <= _SUPERVISE_UNTIL:
+                    cur_min = now.hour * 60 + now.minute
+                    if _last_supervise_min is None or cur_min - _last_supervise_min >= _SUPERVISE_EVERY_MIN:
+                        _last_supervise_min = cur_min
+                        await asyncio.to_thread(_supervise_scanners)
         except Exception as e:  # the loop must survive anything
             print(f'[scheduler] tick error: {e}')
         await asyncio.sleep(30)

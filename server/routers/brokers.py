@@ -99,6 +99,12 @@ def _save_tokens(c: BrokerConnection, access: str, refresh: str) -> None:
         c.refresh_enc = encrypt(refresh)
     c.token_refreshed_at = datetime.now(timezone.utc)
     c.status = 'connected'
+    # Fresh login clears any prior "needs re-login" health so the scanner gets a clean restart.
+    try:
+        from radar.health import clear_health
+        clear_health(f'u{c.user_id}')
+    except Exception:
+        pass
 
 
 @router.get('')

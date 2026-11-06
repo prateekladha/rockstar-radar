@@ -65,6 +65,13 @@ export default function Radar() {
 
   return (
     <>
+      {d.fallback && (
+        <div className="banner warn" style={{ marginBottom: 14 }}>
+          Your own broker feed is offline — showing your household's shared feed (view-only).{' '}
+          <a onClick={() => nav('/brokers')} style={{ cursor: 'pointer', fontWeight: 700 }}>Reconnect your broker →</a>
+          {'  '}Trading needs your own broker.
+        </div>
+      )}
       <div className="kpis">
         <Kpi label="Monitored" val={off ? '—' : d.monitored} sub="stocks tracked" />
         <Kpi label="Ready" val={off ? '—' : d.anchors_ready} sub="opening ranges set" cls="accent" />
