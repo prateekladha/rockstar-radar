@@ -10,6 +10,7 @@ register it in their broker app.
 """
 from __future__ import annotations
 import os
+import re
 import secrets
 from urllib.parse import parse_qs, urlsplit
 
@@ -66,6 +67,14 @@ def _parse_auth_code(text: str) -> tuple[str, str]:
         code = (q.get('auth_code') or q.get('code') or [''])[0]
         return code, (q.get('state') or [''])[0]
     return text, ''
+
+
+def _user_safe(msg: str) -> str:
+    """Strip developer/CLI hints (e.g. 'Run: python launch.py …') from broker error text so
+    nothing terminal-oriented ever reaches the end user."""
+    msg = re.sub(r"\.?\s*Run[:`]?\s*`?python\s+launch\.py[^\n`]*`?\.?", '', msg or '',
+                 flags=re.IGNORECASE).strip()
+    return msg or 'The broker rejected the request.'
 
 
 def _active(db: Session, user: User) -> BrokerConnection | None:
@@ -180,17 +189,35 @@ async def test_broker(request: Request, user: User = Depends(require_user),
     # Real quote call only possible with a saved live token.
     if c and c.broker == 'fyers' and c.token_enc and not form_secret:
         try:
-            from radar.fyers import ApiError, FyersAdapter
+            from radar.fyers import (ApiAuthError, ApiError, ApiPermissionError,
+                                     ApiRateLimitError, FyersAdapter)
             os.environ['FYERS_APP_ID'] = c.app_id
             os.environ['FYERS_ACCESS_TOKEN'] = decrypt(c.token_enc) or ''
             data = FyersAdapter({}).request('quotes', {'symbols': 'NSE:SBIN-EQ'})
             ok = any(x.get('s') == 'ok' for x in data.get('d', []))
-            return {'ok': ok, 'message': 'Live market data is reachable — you are connected.'
-                    if ok else 'Quote check failed — your token may have expired. Reconnect.'}
-        except ApiError as e:
-            return {'ok': False, 'message': str(e)[:160]}
-        except Exception as e:
-            return {'ok': False, 'message': f'{type(e).__name__}: {e}'[:160]}
+            if ok:
+                return {'ok': True, 'message': 'Live market data is reachable — you are connected.'}
+            return {'ok': False, 'need_login': True,
+                    'message': 'Quote check failed — your broker session looks expired. '
+                               'Click "Log in for today" to reconnect.'}
+        except ApiAuthError:
+            # Token expired/invalid — the daily SEBI login is required. Never surface CLI hints.
+            return {'ok': False, 'need_login': True,
+                    'message': 'Your FYERS session has expired. SEBI requires a fresh broker login '
+                               'each trading day — click "Log in for today" to reconnect.'}
+        except ApiPermissionError:
+            return {'ok': False, 'message': 'Your FYERS app is connected, but its Market Data '
+                    '(quotes & history) permission isn\'t enabled. Turn it on in your FYERS app '
+                    'settings, then test again.'}
+        except ApiRateLimitError:
+            return {'ok': False, 'message': 'FYERS is rate-limiting right now. Wait a few seconds '
+                    'and test again.'}
+        except ApiError:
+            return {'ok': False, 'message': 'Could not verify live data with FYERS. Try logging in '
+                    'for today, then test again.'}
+        except Exception:
+            return {'ok': False, 'message': 'Could not reach FYERS right now. Please try again in a '
+                    'moment.'}
 
     return {'ok': True, 'message': 'Credentials look good. Click Connect to log in and stream '
             'live data.'}
@@ -261,7 +288,7 @@ async def broker_login_finish(request: Request, user: User = Depends(require_use
     try:
         access, refresh = exchange_code(c.app_id, decrypt(c.secret_enc) or '', redirect, auth_code)
     except Exception as e:
-        return JSONResponse({'error': 'The broker rejected the login: ' + str(e)[:140]},
+        return JSONResponse({'error': 'The broker rejected the login: ' + _user_safe(str(e))[:140]},
                             status_code=400)
     _save_tokens(c, access, refresh)
     db.commit()
