@@ -18,6 +18,10 @@ Base = declarative_base()
 # Lightweight additive migrations: columns added to models after a table already exists.
 # (SQLAlchemy create_all never ALTERs existing tables.) table -> {column: SQL type}.
 _ADDED_COLUMNS = {
+    'households': {
+        "trading_mode": "VARCHAR(8) DEFAULT 'paper'",
+        'auto_paper_trade': 'INTEGER DEFAULT 0',
+    },
     'broker_connections': {
         'refresh_enc': 'TEXT',
         'pin_enc': 'TEXT',

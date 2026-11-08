@@ -89,6 +89,32 @@ def fetch_positions(app_id: str, access_token: str) -> dict:
     return out
 
 
+def fetch_funds(app_id: str, access_token: str) -> float:
+    """Available trading balance (₹) from the broker, for live position sizing + eligibility.
+    Returns the usable cash; raises OrderError if the broker call fails."""
+    try:
+        resp = _model(app_id, access_token).funds()
+    except Exception as e:
+        raise OrderError(f'{type(e).__name__}: {e}'[:160]) from e
+    if not isinstance(resp, dict) or resp.get('s') != 'ok':
+        raise OrderError(str((resp or {}).get('message', 'funds lookup failed'))[:160])
+    rows = resp.get('fund_limit') or []
+    avail = clear = None
+    for r in rows:
+        title = (r.get('title') or '').lower()
+        amt = r.get('equityAmount', r.get('amount'))
+        if amt is None:
+            continue
+        if 'available' in title:
+            avail = float(amt)
+        elif 'clear' in title:
+            clear = float(amt)
+    val = avail if avail is not None else clear
+    if val is None:
+        raise OrderError('Could not read available balance from the broker.')
+    return round(float(val), 2)
+
+
 def cancel_live_order(app_id: str, access_token: str, broker_order_id: str) -> None:
     """Cancel a working order at the broker. User-initiated only."""
     try:

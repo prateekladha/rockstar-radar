@@ -14,6 +14,29 @@ MANAGERS = {'admin'}
 ASSIGNABLE = {'admin', 'trader'}
 
 
+@router.get('/settings')
+def household_settings(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    hh = db.get(Household, user.household_id)
+    return {'can_manage': user.role in MANAGERS, **(hh.settings_public() if hh else
+            {'trading_mode': 'paper', 'auto_paper_trade': False})}
+
+
+@router.patch('/settings')
+async def set_household_settings(request: Request, user: User = Depends(require_user),
+                                db: Session = Depends(get_db)):
+    if user.role not in MANAGERS:
+        return JSONResponse({'error': 'Only an owner/admin can change trading settings.'},
+                            status_code=403)
+    b = await request.json()
+    hh = db.get(Household, user.household_id)
+    if 'trading_mode' in b:
+        hh.trading_mode = 'live' if b.get('trading_mode') == 'live' else 'paper'
+    if 'auto_paper_trade' in b:
+        hh.auto_paper_trade = 1 if b.get('auto_paper_trade') else 0
+    db.commit()
+    return {'can_manage': True, **hh.settings_public()}
+
+
 @router.get('')
 def family(user: User = Depends(require_user), db: Session = Depends(get_db)):
     members = db.query(User).filter_by(household_id=user.household_id).all()

@@ -137,16 +137,30 @@ function statusChip(o) {
   return 'WATCH'  // pending / working
 }
 
+// Module-level so its identity is stable across PlaceOrder re-renders — otherwise React remounts the
+// <input> on every keystroke and the field loses focus (the bug this fixes).
+function NumField({ lbl, ph, value, bad, onChange, onBlur }) {
+  return (
+    <div className="field" style={{ flex: 1 }}>
+      <label>{lbl}</label>
+      <input inputMode="decimal" className={bad ? 'input-bad' : ''} value={value}
+        onChange={e => onChange(e.target.value.replace(/[^\d.]/g, ''))} onBlur={onBlur} placeholder={ph} />
+      {bad && <div className="err-txt">{bad}</div>}
+    </div>
+  )
+}
+
 export function PlaceOrder({ preset, onClose, onDone }) {
   const [o, setO] = useState({ symbol: preset?.symbol || '', side: preset?.side || 'LONG',
     qty: preset?.qty ? String(preset.qty) : '', entry: preset?.entry != null ? String(preset.entry) : '',
     stop: preset?.stop != null ? String(preset.stop) : '', target: preset?.target != null ? String(preset.target) : '' })
   const [touched, setTouched] = useState({})
-  const [mode, setMode] = useState('paper')
+  const [mode, setMode] = useState('paper')   // read-only; set at household level by the admin
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const set = (k, v) => setO({ ...o, [k]: v })
-  const mark = (k) => setTouched({ ...touched, [k]: true })
+  useEffect(() => { api('/api/me').then(m => setMode(m?.household?.trading_mode || 'paper')).catch(() => {}) }, [])
+  const set = (k, v) => setO(prev => ({ ...prev, [k]: v }))
+  const mark = (k) => setTouched(prev => ({ ...prev, [k]: true }))
 
   const isNum = (v) => v !== '' && !isNaN(Number(v))
   const errs = {
@@ -157,56 +171,44 @@ export function PlaceOrder({ preset, onClose, onDone }) {
     target: o.target !== '' && (!isNum(o.target) || Number(o.target) <= 0) ? 'Must be a price > 0' : '',
   }
   const valid = !errs.symbol && !errs.qty && !errs.entry && !errs.stop && !errs.target
+  const live = mode === 'live'
 
   const submit = async () => {
     setTouched({ symbol: 1, qty: 1, entry: 1, stop: 1, target: 1 })
     if (!valid) return
     setBusy(true)
-    try { await api('/api/orders', { method: 'POST', body: { ...o, mode, source: preset ? 'signal' : 'manual' } }); onDone() }
+    try { await api('/api/orders', { method: 'POST', body: { ...o, source: preset ? 'signal' : 'manual' } }); onDone() }
     catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
 
-  const Num = ({ k, lbl, ph }) => (
-    <div className="field" style={{ flex: 1 }}>
-      <label>{lbl}</label>
-      <input inputMode="decimal" className={touched[k] && errs[k] ? 'input-bad' : ''} value={o[k]}
-        onChange={e => set(k, e.target.value.replace(/[^\d.]/g, ''))} onBlur={() => mark(k)} placeholder={ph} />
-      {touched[k] && errs[k] && <div className="err-txt">{errs[k]}</div>}
-    </div>
-  )
-
+  const tb = (k) => touched[k] && errs[k]
   return (
     <div className="scrim" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <div className="panel-h"><h2>Place order</h2><span className="hint">{mode}</span><span className="spring" />
-          <button className="btn" onClick={onClose}>Close</button></div>
+        <div className="panel-h"><h2>Place order</h2>
+          <span className={'chip ' + (live ? 'SHORT' : 'READY')}>{live ? 'LIVE' : 'Paper'}</span>
+          <span className="spring" /><button className="btn" onClick={onClose}>Close</button></div>
         <div className="panel-b">
           {err && <div className="banner err">{err}</div>}
           <div className="field"><label>Stock</label>
             <SymbolSearch value={o.symbol} onPick={v => { set('symbol', v); mark('symbol') }} />
-            {touched.symbol && errs.symbol && <div className="err-txt">{errs.symbol}</div>}</div>
+            {tb('symbol') && <div className="err-txt">{errs.symbol}</div>}</div>
           <div className="row">
             <div className="field" style={{ flex: 1 }}><label>Side</label>
               <Select value={o.side} onChange={v => set('side', v)} options={[{ value: 'LONG', label: 'Long' }, { value: 'SHORT', label: 'Short' }]} /></div>
-            <Num k="qty" lbl="Quantity" ph="e.g. 100" />
+            <NumField lbl="Quantity" ph="e.g. 100" value={o.qty} bad={tb('qty')} onChange={v => set('qty', v)} onBlur={() => mark('qty')} />
           </div>
           <div className="row">
-            <Num k="entry" lbl="Entry" ph="price" />
-            <Num k="stop" lbl="Stop" ph="price" />
-            <Num k="target" lbl="Target" ph="price" />
+            <NumField lbl="Entry" ph="price" value={o.entry} bad={tb('entry')} onChange={v => set('entry', v)} onBlur={() => mark('entry')} />
+            <NumField lbl="Stop" ph="price" value={o.stop} bad={tb('stop')} onChange={v => set('stop', v)} onBlur={() => mark('stop')} />
+            <NumField lbl="Target" ph="price" value={o.target} bad={tb('target')} onChange={v => set('target', v)} onBlur={() => mark('target')} />
           </div>
-          <div className="field"><label>Order mode</label>
-            <div className="segmented">
-              <button type="button" className={'seg' + (mode === 'paper' ? ' on' : '')} onClick={() => setMode('paper')}>Paper <span className="segsub">simulated</span></button>
-              <button type="button" className={'seg' + (mode === 'live' ? ' on' : '')} onClick={() => setMode('live')}>Live <span className="segsub">real money</span></button>
-            </div>
-          </div>
-          {mode === 'live' && <div className="banner warn">⚠️ Live order — this places a <strong>real order on your broker</strong> the moment you confirm. Needs today's broker login. Risk is capped at your limit.</div>}
-          <button className={'btn btn-lg ' + (mode === 'live' ? 'good' : 'primary')} style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
-            disabled={busy || !valid} onClick={submit}>{busy ? 'Placing…' : (mode === 'live' ? 'Place LIVE order' : 'Place paper order')}</button>
-          <p className="note">{mode === 'live'
-            ? 'Routed to your own connected broker (INTRADAY). You confirm every order; nothing fires on its own.'
-            : 'Paper order — tracked for your P&L and journal. Switch to Live to route to your broker.'}</p>
+          {live
+            ? <div className="banner warn">⚠️ <strong>Live mode</strong> (set by your admin) — this places a <strong>real order on your broker</strong>. Needs today's broker login; capital & risk are checked against your broker balance.</div>
+            : <div className="banner">📝 <strong>Paper mode</strong> (set by your admin) — simulated against the live feed. Fills, exits and P&L are tracked, no real money.</div>}
+          <button className={'btn btn-lg ' + (live ? 'good' : 'primary')} style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
+            disabled={busy || !valid} onClick={submit}>{busy ? 'Placing…' : (live ? 'Place LIVE order' : 'Place paper order')}</button>
+          <p className="note">An admin changes paper/live for the whole household in Settings → Trading.</p>
         </div>
       </div>
     </div>

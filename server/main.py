@@ -109,8 +109,11 @@ def auth_logout(request: Request):
 
 # ----------------------------------------------------------------- per-user API
 @app.get('/api/me')
-def api_me(user: User = Depends(require_user)):
-    return user.public()
+def api_me(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    from .models import Household
+    hh = db.get(Household, user.household_id)
+    return {**user.public(), 'household': hh.settings_public() if hh else
+            {'trading_mode': 'paper', 'auto_paper_trade': False}}
 
 
 @app.post('/api/onboarding')

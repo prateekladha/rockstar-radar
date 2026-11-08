@@ -108,39 +108,58 @@ async def place_order(request: Request, user: User = Depends(require_user),
         return JSONResponse({'error': 'Connect your own broker before placing trades.',
                              'need_broker': True}, status_code=403)
 
-    # Risk ceiling (hard): ₹ risk must be <= risk_pct of capital (per-user Settings, else config).
+    # Trading mode is a HOUSEHOLD setting (admin-controlled), not a per-order choice.
+    from ..models import Household
+    hh = db.get(Household, user.household_id)
+    mode = (hh.trading_mode if hh else 'paper') or 'paper'
+    order_type = (b.get('order_type') or 'limit').lower()
+
     from radar.utils import load_config
     cfg = load_config()
     sdata = (user.settings.data if user.settings else {}) or {}
-    capital = float(sdata.get('capital_inr', cfg.get('capital_inr', 0)) or 0)
     risk_pct = float(sdata.get('risk_pct', cfg.get('risk_pct', 0)) or 0)
-    max_risk = capital * risk_pct / 100 if (capital and risk_pct) else 0
-    if stop and max_risk:
-        risk_amt = abs(entry - stop) * qty
-        if risk_amt > max_risk + 1e-6:
-            return JSONResponse({'error': f'This trade risks ₹{round(risk_amt):,} — over your limit '
-                                 f'of ₹{round(max_risk):,} ({risk_pct}% of ₹{round(capital):,}). '
-                                 'Lower the quantity or tighten the stop.'}, status_code=400)
 
-    # Order mode: paper (default) or live. Live places a REAL order on the user's own broker.
-    mode = (b.get('mode') or 'paper').lower()
-    if mode not in ('paper', 'live'):
-        mode = 'paper'
-    order_type = (b.get('order_type') or 'limit').lower()
     broker_oid = None
     if mode == 'live':
         from .. import scanners
-        from ..broker_orders import OrderError, place_live_order
+        from ..broker_orders import OrderError, fetch_funds, place_live_order
         from ..crypto import decrypt
         if not own.token_enc or not scanners._token_is_fresh_today(own):
             return JSONResponse({'error': 'Log in to your broker for today before placing a live '
                                  'order.', 'need_login': True}, status_code=403)
+        # Live capital comes from the BROKER (not Settings). Insufficient funds -> clear message,
+        # never a silent fall back to paper.
+        token = decrypt(own.token_enc) or ''
         try:
-            broker_oid = place_live_order(own.app_id, decrypt(own.token_enc) or '', symbol=symbol,
-                                          side=side, qty=qty, entry=entry, stop=stop, target=target,
-                                          order_type=order_type)
+            capital = fetch_funds(own.app_id, token)
+        except OrderError as e:
+            return JSONResponse({'error': 'Could not read your broker balance to place a live '
+                                 'order: ' + str(e)}, status_code=400)
+        cost = entry * qty
+        if capital <= 0 or cost > capital + 1e-6:
+            return JSONResponse({'error': f'Insufficient broker balance for this live trade. Needs '
+                                 f'~₹{round(cost):,} but your available balance is ₹{round(capital):,}. '
+                                 'Add funds or reduce the quantity.'}, status_code=400)
+        max_risk = capital * risk_pct / 100 if risk_pct else 0
+        if stop and max_risk and abs(entry - stop) * qty > max_risk + 1e-6:
+            return JSONResponse({'error': f'This trade risks ₹{round(abs(entry - stop) * qty):,} — '
+                                 f'over your limit of ₹{round(max_risk):,} ({risk_pct}% of your broker '
+                                 f'balance ₹{round(capital):,}). Lower the quantity or tighten the '
+                                 'stop.'}, status_code=400)
+        try:
+            broker_oid = place_live_order(own.app_id, token, symbol=symbol, side=side, qty=qty,
+                                          entry=entry, stop=stop, target=target, order_type=order_type)
         except OrderError as e:
             return JSONResponse({'error': 'Broker rejected the order: ' + str(e)}, status_code=400)
+    else:
+        # Paper risk ceiling uses the user's configured capital (Settings, else config).
+        capital = float(sdata.get('capital_inr', cfg.get('capital_inr', 0)) or 0)
+        max_risk = capital * risk_pct / 100 if (capital and risk_pct) else 0
+        if stop and max_risk and abs(entry - stop) * qty > max_risk + 1e-6:
+            return JSONResponse({'error': f'This trade risks ₹{round(abs(entry - stop) * qty):,} — '
+                                 f'over your limit of ₹{round(max_risk):,} ({risk_pct}% of '
+                                 f'₹{round(capital):,}). Lower the quantity or tighten the stop.'},
+                                status_code=400)
 
     # New orders start as PENDING (working). They become `open` only when actually filled — paper by
     # the live feed (below / by the engine), live by broker sync. Only truly-closed orders book P&L.

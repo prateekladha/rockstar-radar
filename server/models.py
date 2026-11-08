@@ -25,8 +25,15 @@ class Household(Base):
     __tablename__ = 'households'
     id = Column(Integer, primary_key=True)
     name = Column(String(120), nullable=False, default='My Household')
+    # Admin-controlled, applies to the whole household:
+    trading_mode = Column(String(8), default='paper')       # paper | live
+    auto_paper_trade = Column(Integer, default=0)           # algo auto-trades on paper (RETEST_READY)
     created_at = Column(DateTime, default=_now)
     users = relationship('User', back_populates='household', cascade='all, delete-orphan')
+
+    def settings_public(self) -> dict:
+        return {'trading_mode': self.trading_mode or 'paper',
+                'auto_paper_trade': bool(self.auto_paper_trade)}
 
 
 class User(Base):
