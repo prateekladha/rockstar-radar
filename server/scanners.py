@@ -33,6 +33,7 @@ from .models import BrokerConnection, User
 
 _demo: ControlCenter | None = None
 _scanners: dict[str, ControlCenter] = {}   # key "u<owner_id>" -> ControlCenter
+_sim_ccs: dict[int, ControlCenter] = {}    # user_id -> their accelerated sim ControlCenter
 _lock = threading.Lock()
 
 
@@ -57,6 +58,53 @@ def _demo_cc() -> ControlCenter:
     except Exception as e:  # never block the UI
         print(f'demo scanner start skipped: {e}')
     return _demo
+
+
+def _sim_speed(user: User) -> str:
+    data = (user.settings.data if user.settings else None) or {}
+    try:
+        return str(int(float(data.get('sim_speed', 30) or 30)))
+    except (TypeError, ValueError):
+        return '30'
+
+
+def _sim_cc_for(user: User) -> ControlCenter:
+    """The user's accelerated simulation scanner (no FYERS, no login)."""
+    key = f'sim{user.id}'
+    start, end = (user.sim_start or '09:15'), (user.sim_end or '15:30')
+    with _lock:
+        cc = _sim_ccs.get(user.id)
+        env = {'RADAR_SIM_START': start, 'RADAR_SIM_END': end,
+               'RADAR_SIM_SPEED': _sim_speed(user), 'RADAR_SCANNER_ID': key}
+        if cc is None:
+            cc = ControlCenter(demo=False, sim=True, env_extra=env)
+            cc.pid_path = cc.root / 'data' / f'.sim_{key}.pid'
+            cc.scanner_out_path = cc.root / 'data' / f'sim_{key}.out'
+            _sim_ccs[user.id] = cc
+        else:
+            cc.env_extra.update(env)
+        try:
+            if not cc.scanner_status()['running']:
+                cc.scanner_port = _free_port()
+                cc.start_scanner()
+        except Exception as e:
+            print(f'sim scanner start skipped ({key}): {e}')
+        return cc
+
+
+def stop_sim(user_id: int) -> None:
+    """Stop a user's sim scanner (on disabling sim, or to restart with fresh settings)."""
+    with _lock:
+        cc = _sim_ccs.get(user_id)
+    if cc:
+        try:
+            cc.stop_scanner()
+        except Exception as e:
+            print(f'sim stop skipped (u{user_id}): {e}')
+
+
+def any_sim_active(db: Session) -> bool:
+    return db.query(User).filter(User.sim_enabled == 1).count() > 0
 
 
 def _own_broker(db: Session, user: User) -> BrokerConnection | None:
@@ -265,8 +313,19 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
 
 
 def radar_state(db: Session, user: User) -> dict:
-    """The user's radar feed. Prefer their OWN broker; if it's down (expired/auth/rate-limited), fall
-    back to the household's shared broker so they still see the market (read-only)."""
+    """The user's radar feed. Simulation (if on) takes over; else prefer their OWN broker, falling back
+    to the household's shared broker if their own is down (expired/auth/rate-limited)."""
+    if user.sim_enabled:
+        st = _sim_cc_for(user).live_state()
+        if st.get('offline'):
+            reason = (st.get('reason') or '').lower()
+            st['data_mode'] = 'none'
+            st['reason'] = ('Simulation is starting…' if 'starting' in reason
+                            else st.get('reason') or 'Simulation starting…')
+        else:
+            st['data_mode'] = 'live'
+        st.update({'source': 'sim', 'sim': True, 'universe': 'Simulation', 'broker': 'sim'})
+        return st
     label = U.label_for(_universe_index(user))
     own = _own_broker(db, user)
     fallback_state = None   # best non-usable state to show if nothing is usable

@@ -65,6 +65,11 @@ export default function Radar() {
 
   return (
     <>
+      {d.sim && (
+        <div className="banner" style={{ marginBottom: 14, borderColor: '#2b4c8a' }}>
+          🎓 <strong>Practice simulation</strong> — a synthetic accelerated session, not the live market. All trades are paper. Turn it off in Settings → Practice simulation.
+        </div>
+      )}
       {d.rate_limited && (
         <div className="banner warn" style={{ marginBottom: 14 }}>
           ⏳ <strong>Broker API daily limit reached.</strong> {d.reason}

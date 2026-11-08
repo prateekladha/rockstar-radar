@@ -87,9 +87,10 @@ def validate_config_patch(patch: dict) -> dict:
 
 class ControlCenter:
     def __init__(self, config_path: Optional[Path] = None, root: Optional[Path] = None,
-                 demo: bool = False, env_extra: Optional[dict] = None):
+                 demo: bool = False, sim: bool = False, env_extra: Optional[dict] = None):
         self.root = root or ROOT
         self.demo = demo   # cloud beta: run the simulated scanner, no FYERS credentials
+        self.sim = sim     # per-user accelerated practice/testing feed (no FYERS, no login)
         self.env_extra = env_extra or {}   # per-user broker token + universe for the subprocess
         self.config_path = Path(config_path) if config_path else self.root / 'config.json'
         self.env_path = self.root / '.env'
@@ -298,8 +299,8 @@ class ControlCenter:
     def start_scanner(self) -> dict:
         if self.scanner_status()['running']:
             raise ControlError('Scanner is already running.')
-        command = 'demo' if self.demo else 'run'
-        if (not self.demo and not self.env_extra.get('FYERS_ACCESS_TOKEN')
+        command = 'sim' if self.sim else ('demo' if self.demo else 'run')
+        if (not self.demo and not self.sim and not self.env_extra.get('FYERS_ACCESS_TOKEN')
                 and not self.connection_status()['token_present']):
             raise ControlError('Connect FYERS (login) before starting the scanner.')
         self.pid_path.parent.mkdir(parents=True, exist_ok=True)
@@ -307,7 +308,7 @@ class ControlCenter:
         log = self.scanner_out_path.open('ab')
         env = {**os.environ, **{k: str(v) for k, v in self.env_extra.items() if v is not None}}
         cmd = [sys.executable, str(self.root / 'launch.py'), command, '--port', str(self.scanner_port)]
-        if not self.demo:
+        if not self.demo and not self.sim:
             # Isolate this scanner's selection + API lock (per broker-owner in the server).
             cmd += ['--selection', str(self.selection_path), '--lock', str(self.lock_path)]
         proc = subprocess.Popen(

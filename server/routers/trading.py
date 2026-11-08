@@ -17,6 +17,17 @@ from ..watchpins import bare as _bare
 
 router = APIRouter(prefix='/api', tags=['trading'])
 
+
+def _scope(query, user: User, mode: str):
+    """Scope a user's orders to one context so paper, live and simulation never mix.
+    In simulation (user.sim_enabled) -> only sim orders; otherwise real orders of the given mode."""
+    if user.sim_enabled:
+        return query.filter(Order.sim == 1)
+    query = query.filter(Order.sim == 0)
+    if mode in ('paper', 'live'):
+        query = query.filter(Order.mode == mode)
+    return query
+
 # Demo closed trades so a new user's Journal / Insights / P&L are populated.
 _SAMPLE = [
     ('NSE:BHARTIARTL-EQ', 'LONG', 1004.7, 1003.0, 1015.0, 1015.0),
@@ -99,17 +110,21 @@ async def place_order(request: Request, user: User = Depends(require_user),
         return JSONResponse({'error': 'Quantity must be greater than 0.'}, status_code=400)
     if entry <= 0 or (stop is not None and stop <= 0) or (target is not None and target <= 0):
         return JSONResponse({'error': 'Prices must be greater than 0.'}, status_code=400)
-    # Trading requires the user's OWN broker — never a teammate's/admin's shared broker.
-    own = (db.query(BrokerConnection)
-           .filter(BrokerConnection.user_id == user.id, BrokerConnection.broker == 'fyers',
-                   BrokerConnection.app_id.isnot(None), BrokerConnection.secret_enc.isnot(None))
-           .first())
-    if own is None:
-        return JSONResponse({'error': 'Connect your own broker before placing trades.',
-                             'need_broker': True}, status_code=403)
+    # Simulation is self-contained: paper only, no broker needed.
+    sim = bool(user.sim_enabled)
+    own = None
+    if not sim:
+        # Trading requires the user's OWN broker — never a teammate's/admin's shared broker.
+        own = (db.query(BrokerConnection)
+               .filter(BrokerConnection.user_id == user.id, BrokerConnection.broker == 'fyers',
+                       BrokerConnection.app_id.isnot(None), BrokerConnection.secret_enc.isnot(None))
+               .first())
+        if own is None:
+            return JSONResponse({'error': 'Connect your own broker before placing trades.',
+                                 'need_broker': True}, status_code=403)
 
-    # Trading mode is a PER-USER setting (an admin sets it on the team page), not a per-order choice.
-    mode = (user.trading_mode or 'paper')
+    # Mode is a PER-USER setting (admin-set on the team page); simulation forces paper.
+    mode = 'paper' if sim else (user.trading_mode or 'paper')
     order_type = (b.get('order_type') or 'limit').lower()
 
     from radar.utils import load_config
@@ -163,7 +178,8 @@ async def place_order(request: Request, user: User = Depends(require_user),
     # the live feed (below / by the engine), live by broker sync. Only truly-closed orders book P&L.
     o = Order(user_id=user.id, symbol=symbol, side=side, qty=qty, entry=entry,
               stop=stop, target=target, status='pending', order_type=order_type, mode=mode,
-              broker_order_id=broker_oid, source=b.get('source', 'manual'), note=b.get('note'))
+              sim=1 if sim else 0, broker_order_id=broker_oid,
+              source=b.get('source', 'manual'), note=b.get('note'))
     db.add(o)
     db.commit()
     db.refresh(o)
@@ -237,10 +253,10 @@ async def cancel_order(oid: int, user: User = Depends(require_user), db: Session
 
 @router.get('/orders')
 def list_orders(user: User = Depends(require_user), db: Session = Depends(get_db),
-                q: str = '', status: str = '', side: str = '',
+                q: str = '', status: str = '', side: str = '', mode: str = '',
                 page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)):
     seed_demo_orders(db, user)
-    query = db.query(Order).filter_by(user_id=user.id)
+    query = _scope(db.query(Order).filter_by(user_id=user.id), user, mode)
     if q:
         query = query.filter(Order.symbol.ilike(f'%{q}%'))
     if status:
@@ -253,11 +269,12 @@ def list_orders(user: User = Depends(require_user), db: Session = Depends(get_db
 
 
 @router.get('/positions')
-def positions(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    """Filled, open positions with self-updating (unrealised) P&L from the live feed."""
+def positions(user: User = Depends(require_user), db: Session = Depends(get_db), mode: str = ''):
+    """Filled, open positions with self-updating (unrealised) P&L from the feed — scoped to the
+    selected context (paper / live / simulation)."""
     from ..order_engine import _price_map
     pm = _price_map(db, user)
-    open_orders = (db.query(Order).filter_by(user_id=user.id, status='open')
+    open_orders = (_scope(db.query(Order).filter_by(user_id=user.id, status='open'), user, mode)
                    .order_by(Order.created_at.desc()).all())
     items = [o.public(last_price=pm.get(_bare(o.symbol))) for o in open_orders]
     running = round(sum((i['unrealized'] or 0) for i in items), 2)
@@ -265,28 +282,27 @@ def positions(user: User = Depends(require_user), db: Session = Depends(get_db))
 
 
 @router.get('/working-orders')
-def working_orders(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    """Working (pending, not-yet-filled) orders — these are cancellable, not closable."""
-    rows = (db.query(Order).filter_by(user_id=user.id, status='pending')
+def working_orders(user: User = Depends(require_user), db: Session = Depends(get_db), mode: str = ''):
+    """Working (pending, not-yet-filled) orders — cancellable, scoped to the selected context."""
+    rows = (_scope(db.query(Order).filter_by(user_id=user.id, status='pending'), user, mode)
             .order_by(Order.created_at.desc()).all())
     return {'items': [o.public() for o in rows], 'total': len(rows)}
 
 
 @router.get('/pnl')
-def pnl(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def pnl(user: User = Depends(require_user), db: Session = Depends(get_db), mode: str = ''):
     seed_demo_orders(db, user)
-    # Realised P&L counts ONLY genuinely-closed trades (entered AND exited) — never working/pending
-    # or cancelled orders.
-    closed = db.query(Order).filter_by(user_id=user.id, status='closed').all()
+    # Realised P&L counts ONLY genuinely-closed trades, scoped to paper / live / simulation.
+    closed = _scope(db.query(Order).filter_by(user_id=user.id, status='closed'), user, mode).all()
     realised = round(sum(o.pnl or 0 for o in closed), 2)
     wins = [o for o in closed if (o.pnl or 0) > 0]
-    open_count = db.query(Order).filter_by(user_id=user.id, status='open').count()
-    working = db.query(Order).filter_by(user_id=user.id, status='pending').count()
+    open_q = _scope(db.query(Order).filter_by(user_id=user.id, status='open'), user, mode)
+    open_orders = open_q.all()
+    working = _scope(db.query(Order).filter_by(user_id=user.id, status='pending'), user, mode).count()
     from ..order_engine import _price_map
     pm = _price_map(db, user)
-    open_orders = db.query(Order).filter_by(user_id=user.id, status='open').all()
     running = round(sum((o.public(last_price=pm.get(_bare(o.symbol)))['unrealized'] or 0)
                         for o in open_orders), 2)
-    return {'realised': realised, 'trades': len(closed), 'open': open_count, 'working': working,
-            'running_pnl': running, 'wins': len(wins),
+    return {'realised': realised, 'trades': len(closed), 'open': len(open_orders), 'working': working,
+            'running_pnl': running, 'wins': len(wins), 'sim': bool(user.sim_enabled),
             'win_rate': round(100 * len(wins) / len(closed), 1) if closed else 0}

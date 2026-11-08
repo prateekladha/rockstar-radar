@@ -203,6 +203,10 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 .segmented .seg:hover{color:var(--text);background:var(--surface-3)}
 .segmented .seg.on{border-color:var(--accent);background:var(--accent-bg);color:var(--accent-ink)}
 .segmented .segsub{font-size:11px;font-weight:600;color:var(--long-ink);text-transform:uppercase;letter-spacing:.05em}
+.modepill{display:inline-flex;gap:0;margin-right:12px;border:1px solid var(--border-2);border-radius:999px;overflow:hidden;background:var(--surface-2)}
+.modepill button{background:none;border:none;color:var(--dim);font:inherit;font-size:12px;font-weight:700;padding:5px 14px;cursor:pointer}
+.modepill button.on{background:var(--accent);color:#fff}
+.modepill button.on.live{background:var(--short-ink)}
 .livedot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--long-ink);margin-left:5px;vertical-align:middle;animation:livepulse 1.6s ease-in-out infinite}
 @keyframes livepulse{0%,100%{opacity:1}50%{opacity:.25}}
 .chiprow{display:flex;flex-wrap:wrap;gap:8px}

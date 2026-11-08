@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, fmt, bare, fmtDateTime } from './api.js'
 import { Pager } from './Watchlist.jsx'
 import { Select, SearchInput, label } from './ui.jsx'
+import { useViewMode } from './viewmode.js'
 
 const money = (x) => (x == null ? '—' : (x < 0 ? '-₹' : '₹') + Math.abs(Math.round(x)).toLocaleString('en-IN'))
 
@@ -15,19 +16,20 @@ export default function Trades() {
   const [page, setPage] = useState(1)
   const [place, setPlace] = useState(false)
 
+  const mode = useViewMode()   // global Paper/Actual toggle — scopes every number on this page
   // Self-updating: positions/working/P&L refresh on a timer so running P&L and auto fills/closes
-  // (paper from the live feed, live from the broker) show up on their own.
+  // show up on their own.
   const refreshLive = async () => {
-    setPnl(await api('/api/pnl'))
-    const p = await api('/api/positions'); setPositions(p.items); setRunning(p.running_pnl)
-    setWorking((await api('/api/working-orders')).items)
+    setPnl(await api('/api/pnl?mode=' + mode))
+    const p = await api('/api/positions?mode=' + mode); setPositions(p.items); setRunning(p.running_pnl)
+    setWorking((await api('/api/working-orders?mode=' + mode)).items)
   }
   const loadOrders = async () => {
-    const p = new URLSearchParams({ ...f, page, page_size: 10 })
+    const p = new URLSearchParams({ ...f, mode, page, page_size: 10 })
     setOrders(await api('/api/orders?' + p.toString()))
   }
-  useEffect(() => { refreshLive(); const t = setInterval(refreshLive, 5000); return () => clearInterval(t) }, [])
-  useEffect(() => { const t = setTimeout(loadOrders, 250); return () => clearTimeout(t) }, [f, page])
+  useEffect(() => { refreshLive(); const t = setInterval(refreshLive, 5000); return () => clearInterval(t) }, [mode])
+  useEffect(() => { const t = setTimeout(loadOrders, 250); return () => clearTimeout(t) }, [f, page, mode])
 
   const close = async (id) => { await api(`/api/orders/${id}/close`, { method: 'POST', body: {} }); refreshLive(); loadOrders() }
   const cancel = async (id) => { await api(`/api/orders/${id}/cancel`, { method: 'POST' }); refreshLive(); loadOrders() }
@@ -158,7 +160,7 @@ export function PlaceOrder({ preset, onClose, onDone }) {
   const [mode, setMode] = useState('paper')   // read-only; set at household level by the admin
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => { api('/api/me').then(m => setMode(m?.trading_mode || 'paper')).catch(() => {}) }, [])
+  useEffect(() => { api('/api/me').then(m => setMode(m?.sim_enabled ? 'paper' : (m?.trading_mode || 'paper'))).catch(() => {}) }, [])
   const set = (k, v) => setO(prev => ({ ...prev, [k]: v }))
   const mark = (k) => setTouched(prev => ({ ...prev, [k]: true }))
 

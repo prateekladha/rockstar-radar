@@ -46,6 +46,10 @@ class User(Base):
     trading_mode = Column(String(8), default='paper')          # paper | live
     auto_paper_trade = Column(Integer, default=0)              # algo auto-trades on paper
     telegram_chat_id = Column(String(64))                      # for daily reconnect reminders
+    # Practice/testing feed simulation (per-user, no admin needed, no broker needed).
+    sim_enabled = Column(Integer, default=0)
+    sim_start = Column(String(5), default='09:15')             # HH:MM — sim session open (real clock)
+    sim_end = Column(String(5), default='15:30')               # HH:MM — sim session close
     created_at = Column(DateTime, default=_now)
     last_login = Column(DateTime, default=_now)
 
@@ -158,6 +162,7 @@ class Order(Base):
     status = Column(String(12), default='pending', index=True)
     order_type = Column(String(8), default='limit')            # market | limit (entry trigger)
     mode = Column(String(8), default='paper')                  # paper | live
+    sim = Column(Integer, default=0)                           # placed in the practice simulation?
     source = Column(String(16), default='manual')              # signal | manual
     broker_order_id = Column(String(64))                        # broker's order id (live orders)
     fill_price = Column(Float)               # actual entry fill price (set when it fills -> open)

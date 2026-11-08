@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createChart } from 'lightweight-charts'
 import { api, bare } from './api.js'
+import { useViewMode } from './viewmode.js'
 
 const money = (x) => (x == null ? '—' : (x < 0 ? '-₹' : '₹') + Math.abs(Math.round(x)).toLocaleString('en-IN'))
 
 export default function Insights() {
   const [s, setS] = useState(null)
-  useEffect(() => { api('/api/insights').then(setS).catch(() => {}) }, [])
+  const mode = useViewMode()
+  useEffect(() => { setS(null); api('/api/insights?mode=' + mode).then(setS).catch(() => {}) }, [mode])
   if (!s) return <div className="empty">Loading insights…</div>
   if (!s.trades) return <div className="empty"><div className="big">No trades yet</div>Your performance shows up here once you've taken a few trades.</div>
 
@@ -25,6 +27,13 @@ export default function Insights() {
         <strong> 1R = entry − stop-loss</strong> (the amount at risk). Hitting your stop is −1R;
         making twice your risk is +2R. <strong>Expectancy</strong> is the average R you earn per
         trade — positive means your system has an edge, independent of position size.
+      </div>
+
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <div className="panel-h"><h2>Daily P&L</h2><span className="hint">realised ₹ per trading day</span></div>
+        <div className="panel-b">{s.daily_pnl?.length
+          ? <DailyPnlChart data={s.daily_pnl} />
+          : <div className="empty">No closed trades yet.</div>}</div>
       </div>
 
       <div className="panel" style={{ marginBottom: 16 }}>
@@ -54,6 +63,27 @@ const Tile = ({ label, val, sub, cls }) => (
   <div className={'kpi ' + (cls || '')}><div className="label">{label}</div><div className="val">{val}</div><div className="sub">{sub}</div></div>
 )
 
+function DailyPnlChart({ data }) {
+  const box = useRef(null)
+  useEffect(() => {
+    if (!box.current || !data?.length) return
+    const chart = createChart(box.current, {
+      width: box.current.clientWidth, height: 260,
+      layout: { background: { color: 'transparent' }, textColor: '#97a4ba' },
+      grid: { vertLines: { color: '#1a2130' }, horzLines: { color: '#1a2130' } },
+      timeScale: { borderColor: '#2c3650' }, rightPriceScale: { borderColor: '#2c3650' },
+    })
+    const series = chart.addHistogramSeries({ base: 0, priceFormat: { type: 'volume' } })
+    series.setData(data.map(d => ({ time: d.day, value: d.pnl,
+      color: d.pnl >= 0 ? '#34d399' : '#f87171' })))
+    chart.timeScale().fitContent()
+    const onResize = () => chart.applyOptions({ width: box.current.clientWidth })
+    window.addEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize); chart.remove() }
+  }, [data])
+  return <div ref={box} style={{ width: '100%' }} />
+}
+
 function EquityChart({ data }) {
   const box = useRef(null)
   useEffect(() => {
@@ -64,9 +94,9 @@ function EquityChart({ data }) {
       grid: { vertLines: { color: '#1a2130' }, horzLines: { color: '#1a2130' } },
       timeScale: { visible: false }, rightPriceScale: { borderColor: '#2c3650' },
     })
-    const series = chart.addAreaSeries({ lineColor: '#3b82f6', topColor: 'rgba(59,130,246,.35)',
-      bottomColor: 'rgba(59,130,246,0)', lineWidth: 2 })
-    series.setData(data.map((d, i) => ({ time: i + 1, value: d.r })))
+    const series = chart.addHistogramSeries({ base: 0, priceFormat: { type: 'price', precision: 2, minMove: 0.01 } })
+    series.setData(data.map((d, i) => ({ time: i + 1, value: d.r,
+      color: d.r >= 0 ? '#34d399' : '#f87171' })))
     chart.timeScale().fitContent()
     const onResize = () => chart.applyOptions({ width: box.current.clientWidth })
     window.addEventListener('resize', onResize)

@@ -22,10 +22,17 @@ router = APIRouter(tags=['insights'])
 
 
 @router.get('/api/insights')
-def insights(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def insights(user: User = Depends(require_user), db: Session = Depends(get_db), mode: str = ''):
     seed_demo_orders(db, user)
-    closed = (db.query(Order).filter_by(user_id=user.id, status='closed')
-              .order_by(Order.closed_at).all())
+    q = db.query(Order).filter_by(user_id=user.id, status='closed')
+    # Keep paper, live and simulation separate (matches the global Paper/Actual toggle).
+    if user.sim_enabled:
+        q = q.filter(Order.sim == 1)
+    else:
+        q = q.filter(Order.sim == 0)
+        if mode in ('paper', 'live'):
+            q = q.filter(Order.mode == mode)
+    closed = q.order_by(Order.closed_at).all()
     rs = [o.result_r or 0 for o in closed]
     wins = [o for o in closed if (o.pnl or 0) > 0]
 
@@ -41,9 +48,22 @@ def insights(user: User = Depends(require_user), db: Session = Depends(get_db)):
         equity.append({'t': o.closed_at.isoformat() if o.closed_at else None,
                        'symbol': o.symbol, 'r': round(cum, 2)})
 
+    # Daily realised P&L (₹) by the trade's IST close date, for the daily bar chart.
+    from collections import defaultdict
+    from datetime import timezone
+    from radar.utils import IST
+    daily = defaultdict(float)
+    for o in closed:
+        if o.closed_at is None or o.pnl is None:
+            continue
+        d = o.closed_at if o.closed_at.tzinfo else o.closed_at.replace(tzinfo=timezone.utc)
+        daily[d.astimezone(IST).date().isoformat()] += o.pnl
+    daily_pnl = [{'day': k, 'pnl': round(v, 2)} for k, v in sorted(daily.items())]
+
     best = max(closed, key=lambda o: o.result_r or 0, default=None)
     worst = min(closed, key=lambda o: o.result_r or 0, default=None)
     return {
+        'daily_pnl': daily_pnl,
         'trades': len(closed),
         'wins': len(wins), 'losses': len(closed) - len(wins),
         'win_rate': round(100 * len(wins) / len(closed), 1) if closed else 0,

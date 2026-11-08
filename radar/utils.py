@@ -9,7 +9,29 @@ IST = ZoneInfo('Asia/Kolkata')
 ROOT = Path(__file__).resolve().parent.parent
 
 
+# Simulation clock: when installed (only inside a `launch.py sim` subprocess), now_ist() returns an
+# accelerated sim time instead of the wall clock, so the WHOLE engine runs in sim time. Every module
+# calls now_ist() (the function), so this one hook reroutes them all.
+_SIM_CLOCK = None
+
+
+def install_sim_clock(sim_start_hhmm: str, speed: float) -> None:
+    """Start a sim clock at today's `sim_start_hhmm`, advancing `speed`x real time."""
+    global _SIM_CLOCK
+    real_anchor = datetime.now(IST)
+    hour, minute = (int(x) for x in sim_start_hhmm.split(':'))
+    sim_anchor = datetime.combine(real_anchor.date(), time(hour, minute), IST)
+    sp = max(1.0, float(speed))
+
+    def _sim_now() -> datetime:
+        elapsed = (datetime.now(IST) - real_anchor).total_seconds() * sp
+        return sim_anchor + timedelta(seconds=elapsed)
+    _SIM_CLOCK = _sim_now
+
+
 def now_ist() -> datetime:
+    if _SIM_CLOCK is not None:
+        return _SIM_CLOCK()
     return datetime.now(IST)
 
 

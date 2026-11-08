@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // Human labels for enums (code/CSS keep the enum key; the UI shows these).
 const LABELS = {
@@ -22,11 +23,33 @@ export const Chip = ({ state, prov, children }) => (
 // Fully-styled dropdown (custom menu so options are themed, unlike native <select>).
 export function Select({ value, onChange, options, placeholder = 'Select', width }) {
   const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState(null)
   const ref = useRef(null)
+  const menuRef = useRef(null)
+
+  // Capture-phase listener so it closes even inside a modal that stops click propagation.
   useEffect(() => {
-    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('click', close); return () => document.removeEventListener('click', close)
-  }, [])
+    if (!open) return
+    const close = (e) => {
+      if (ref.current && ref.current.contains(e.target)) return
+      if (menuRef.current && menuRef.current.contains(e.target)) return
+      setOpen(false)
+    }
+    const onScroll = () => setOpen(false)
+    document.addEventListener('mousedown', close, true)
+    window.addEventListener('resize', onScroll)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      document.removeEventListener('mousedown', close, true)
+      window.removeEventListener('resize', onScroll)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (open && ref.current) setRect(ref.current.getBoundingClientRect())
+  }, [open])
+
   const cur = options.find(o => String(o.value) === String(value))
   return (
     <div className="sel" ref={ref} style={width ? { width } : undefined}>
@@ -34,8 +57,10 @@ export function Select({ value, onChange, options, placeholder = 'Select', width
         <span className={cur ? '' : 'faint'}>{cur ? cur.label : placeholder}</span>
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4" /></svg>
       </button>
-      {open && (
-        <div className="sel-menu">
+      {open && rect && createPortal(
+        // Rendered to <body> with fixed positioning so it never gets clipped by table/modal overflow.
+        <div className="sel-menu" ref={menuRef} style={{
+          position: 'fixed', top: rect.bottom + 6, left: rect.left, minWidth: rect.width, zIndex: 9999 }}>
           {options.map(o => (
             <button type="button" key={o.value} disabled={o.disabled}
               className={'sel-opt' + (String(o.value) === String(value) ? ' active' : '')}
@@ -43,8 +68,7 @@ export function Select({ value, onChange, options, placeholder = 'Select', width
               {o.label}{o.disabled ? <span className="faint" style={{ marginLeft: 6 }}>soon</span> : null}
             </button>
           ))}
-        </div>
-      )}
+        </div>, document.body)}
     </div>
   )
 }

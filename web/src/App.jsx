@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { api } from './api.js'
 import { Select } from './ui.jsx'
+import { useViewMode, setViewMode } from './viewmode.js'
 import { initAnalytics, identify, resetIdentity, pageview } from './analytics.js'
 import Login from './Login.jsx'
 import Radar from './Radar.jsx'
@@ -15,6 +16,17 @@ import Journal from './Journal.jsx'
 import Family from './Family.jsx'
 import Landing from './Landing.jsx'
 import Support from './Support.jsx'
+
+function ViewModeToggle({ sim }) {
+  const mode = useViewMode()
+  if (sim) return <span className="chip CONFIRMED" style={{ marginRight: 12 }}>🎓 Simulation</span>
+  return (
+    <div className="modepill" title="Which trades all screens show">
+      <button className={mode === 'paper' ? 'on' : ''} onClick={() => setViewMode('paper')}>Paper</button>
+      <button className={mode === 'live' ? 'on live' : ''} onClick={() => setViewMode('live')}>Actual</button>
+    </div>
+  )
+}
 
 const NAV = [['/radar', 'Radar'], ['/watchlist', 'Watchlist'], ['/trades', 'Trades'], ['/journal', 'Journal'], ['/insights', 'Insights']]
 const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings']
@@ -80,6 +92,7 @@ function Shell({ user, onLogout }) {
         <div className="brand" style={{ cursor: 'pointer' }} onClick={() => nav('/radar')}>
           <span className="mark">⚡</span><div>Rockstar&nbsp;Radar<small>NSE intraday</small></div></div>
         <span className="spring" />
+        <ViewModeToggle sim={user.sim_enabled} />
         <div ref={menuRef} style={{ position: 'relative' }}>
           <div className="user" onClick={() => setMenu(!menu)}>
             <span className="avatar">{user.picture ? <img src={user.picture} alt="" /> : user.initials}</span>

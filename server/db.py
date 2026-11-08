@@ -25,6 +25,9 @@ _ADDED_COLUMNS = {
         "trading_mode": "VARCHAR(8) DEFAULT 'paper'",
         'auto_paper_trade': 'INTEGER DEFAULT 0',
         'telegram_chat_id': 'VARCHAR(64)',
+        'sim_enabled': 'INTEGER DEFAULT 0',
+        "sim_start": "VARCHAR(5) DEFAULT '09:15'",
+        "sim_end": "VARCHAR(5) DEFAULT '15:30'",
     },
     'broker_connections': {
         'refresh_enc': 'TEXT',
@@ -43,6 +46,7 @@ _ADDED_COLUMNS = {
         "order_type": "VARCHAR(8) DEFAULT 'limit'",
         'fill_price': 'FLOAT',
         'filled_at': 'TIMESTAMP',
+        'sim': 'INTEGER DEFAULT 0',
     },
 }
 

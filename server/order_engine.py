@@ -170,7 +170,8 @@ def _auto_trade(db: Session) -> int:
                 continue
             db.add(Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
                          target=target, status='pending', order_type='market', mode='paper',
-                         source='auto', note=f'Auto paper trade — algo RETEST_READY ({today}).'))
+                         sim=1 if u.sim_enabled else 0, source='auto',
+                         note=f'Auto paper trade — algo RETEST_READY ({today}).'))
             pending_auto.add(sym)
             changed += 1
     if changed:
@@ -179,26 +180,33 @@ def _auto_trade(db: Session) -> int:
 
 
 def _square_off_paper(db: Session) -> int:
-    """Intraday safety: force-close any still-open PAPER position at/after the square-off time (the
-    feed-based stop/target didn't trigger) — 15 minutes before the 15:30 session close."""
+    """Intraday safety: force-close any still-open PAPER position when its session ends and the
+    feed-based stop/target didn't trigger — 15:15 (live) or when the sim session completes."""
     from radar.utils import now_ist
-    if now_ist().strftime('%H:%M') < '15:15':
-        return 0
     open_paper = db.query(Order).filter_by(status='open', mode='paper').all()
     if not open_paper:
         return 0
-    closed = 0
-    maps: dict[int, dict] = {}
+    live_cutoff = now_ist().strftime('%H:%M') >= '15:15'
+    by_user: dict[int, list[Order]] = {}
     for o in open_paper:
-        user = db.get(User, o.user_id)
+        by_user.setdefault(o.user_id, []).append(o)
+    closed = 0
+    for uid, orders in by_user.items():
+        user = db.get(User, uid)
         if user is None:
             continue
-        if o.user_id not in maps:
-            maps[o.user_id] = _price_map(db, user)
-        px = maps[o.user_id].get(watchpins.bare(o.symbol))
-        exit_px = px or o.target or o.fill_price or o.entry
-        mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
-        closed += 1
+        try:
+            st = scanners.radar_state(db, user)
+        except Exception:
+            st = {}
+        feed_closed = bool(st.get('session_closed')) or 'complete' in (st.get('feed_health') or '').lower()
+        if not (live_cutoff or feed_closed):
+            continue
+        pm = {watchpins.bare(r['symbol']): r.get('price') for r in (st.get('all') or []) if r.get('symbol')}
+        for o in orders:
+            exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
+            mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
+            closed += 1
     if closed:
         db.commit()
     return closed
@@ -251,14 +259,16 @@ async def run_order_engine() -> None:
             from radar.utils import is_market_day
             now = now_ist()
             hhmm = now.strftime('%H:%M')
-            if is_market_day(now.date()) and '09:00' <= hhmm <= '15:45':
-                passes += 1
-                db = SessionLocal()
-                try:
-                    # Tight cadence for precise auto entry/exit; live broker sync throttled (~every 20s).
+            market = is_market_day(now.date()) and '09:00' <= hhmm <= '15:45'
+            db = SessionLocal()
+            try:
+                # Run during market hours OR whenever a user has an accelerated sim session on.
+                if market or scanners.any_sim_active(db):
+                    passes += 1
+                    # Tight cadence for precise auto entry/exit; live broker sync throttled (~20s).
                     await asyncio.to_thread(tick, db, passes % 4 == 0)
-                finally:
-                    db.close()
+            finally:
+                db.close()
         except Exception as e:
             print(f'[order-engine] tick error: {e}')
         await asyncio.sleep(5)

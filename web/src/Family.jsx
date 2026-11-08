@@ -35,11 +35,13 @@ export default function Family() {
         {msg && <div className="banner ok">{msg}</div>}
         <div className="tbl-wrap" style={{ maxHeight: 'none', marginBottom: 18 }}>
           <table>
-            <thead><tr><th>Member</th><th>Role</th><th>Trading</th><th>Auto</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Member</th><th>Role</th><th>Trading</th><th>Auto-trade</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {data.members.map(m => (
                 <tr key={m.id}>
-                  <td className="sym-cell">{m.name || m.email}{m.is_owner && <span className="chip CONFIRMED" style={{ marginLeft: 6 }}>owner</span>}
+                  <td className="sym-cell">{m.name || m.email}
+                    {m.is_owner && <span className="chip CONFIRMED" style={{ marginLeft: 6 }}>owner</span>}
+                    {m.is_me && <span className="dim" style={{ marginLeft: 6, fontWeight: 400 }}>(you)</span>}
                     <div className="dim" style={{ fontWeight: 400, fontSize: 12 }}>{m.email}</div></td>
                   <td>{data.can_manage && !m.is_me && !m.is_owner
                     ? <Select value={m.role} onChange={v => changeRole(m.id, v)} options={ROLE_OPTS} width={120} />
@@ -53,8 +55,8 @@ export default function Family() {
                   <td>{data.can_manage
                     ? <label className="toggle"><input type="checkbox" checked={!!m.auto_paper_trade} onChange={e => setMember(m.id, { auto_paper_trade: e.target.checked })} /><span></span></label>
                     : <span className="chip">{m.auto_paper_trade ? 'on' : 'off'}</span>}</td>
-                  <td>{m.is_me ? <span className="chip CONFIRMED">you</span>
-                    : m.pending ? <span className="chip WATCH">pending invite</span> : <span className="chip">active</span>}</td>
+                  <td>{m.pending ? <span className="chip WATCH">pending invite</span>
+                    : <span className="chip CONFIRMED">active</span>}</td>
                   <td className="num">{data.can_manage && !m.is_me && !m.is_owner
                     ? <button className="btn danger" onClick={() => remove(m.id)}>Remove</button> : null}</td>
                 </tr>

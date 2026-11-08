@@ -529,7 +529,7 @@ class RadarEngine:
                     'server_time_ist': now.strftime('%Y-%m-%d %H:%M:%S'),
                     'feed_health': self.feed_health, 'halted': self.halted,
                     'new_signals_stop': self.config['new_signals_stop'],
-                    'session_closed': self.mode == 'LIVE' and now >= market_dt(self.session, self.config['new_signals_stop']) + timedelta(minutes=self.config['retest_expiry_minutes']),
+                    'session_closed': self.mode in ('LIVE', 'SIMULATION') and now >= market_dt(self.session, self.config['new_signals_stop']) + timedelta(minutes=self.config['retest_expiry_minutes']),
                     'monitored': len(rows),
                     'morning_monitored': sum(r['source'] == 'MORNING' for r in rows),
                     'received_ticks': sum(bool(st.last_tick) for st in self.states.values()),

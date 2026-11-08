@@ -19,7 +19,7 @@ from radar.utils import ROOT, load_config, market_dt, now_ist, read_env
 
 def main():
     parser = argparse.ArgumentParser(description='Rockstar Radar: NSE 5-minute intraday ORB pilot')
-    parser.add_argument('command', choices=['demo', 'download-universe', 'login',
+    parser.add_argument('command', choices=['demo', 'sim', 'download-universe', 'login',
                                             'login-url', 'login-finish',
                                             'prepare', 'warmup', 'live', 'run', 'audit', 'doctor',
                                             'app'])
@@ -42,7 +42,7 @@ def main():
     try:
         # 'app' (Control Center) must NOT hold the API lock: it spawns the scanner
         # subprocess which takes the lock itself. 'demo' makes no API calls.
-        if args.command not in ('demo', 'app'):
+        if args.command not in ('demo', 'app', 'sim'):
             lock_path = Path(args.lock)
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             api_lock = lock_path.open('a+')
@@ -57,6 +57,27 @@ def main():
             from radar.dashboard import serve
             print('SIMULATION ONLY. Fabricated candles. No FYERS API connected.')
             serve(demo_engine(cfg), args.port, mode='SIMULATION')
+        elif args.command == 'sim':
+            # Accelerated practice/testing feed — a synthetic session run through the real engine.
+            from radar.utils import install_sim_clock
+            from radar.simfeed import run_sim
+            sim_start = os.environ.get('RADAR_SIM_START', '09:15')
+            sim_end = os.environ.get('RADAR_SIM_END', '15:30')
+            speed = float(os.environ.get('RADAR_SIM_SPEED', '30') or 30)
+
+            def _plus(hhmm, mins):
+                h, m = (int(x) for x in hhmm.split(':'))
+                tot = h * 60 + m + mins
+                return f'{(tot // 60) % 24:02d}:{tot % 60:02d}'
+            simcfg = dict(cfg)
+            simcfg['open_range_start'] = sim_start
+            simcfg['watch_start'] = _plus(sim_start, 5)
+            simcfg['new_signals_stop'] = sim_end
+            simcfg['sim_end'] = sim_end
+            simcfg['sim_speed'] = speed
+            install_sim_clock(sim_start, speed)   # the whole process now runs in accelerated sim time
+            print(f'SIMULATION feed: {sim_start}->{sim_end} at {speed}x. No FYERS, no login.')
+            run_sim(simcfg, args.port)
         elif args.command == 'download-universe':
             from radar.selecting import download_nifty_csv
             rows = download_nifty_csv(cfg['universe_url'], Path(args.universe))

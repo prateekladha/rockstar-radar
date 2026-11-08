@@ -108,9 +108,19 @@ def auth_logout(request: Request):
 
 
 # ----------------------------------------------------------------- per-user API
+def _me_payload(user: User) -> dict:
+    sdata = (user.settings.data if user.settings else {}) or {}
+    return {**user.public(), 'telegram_chat_id': user.telegram_chat_id or '',
+            'sim_enabled': bool(user.sim_enabled), 'sim_start': user.sim_start or '09:15',
+            'sim_end': user.sim_end or '15:30', 'sim_speed': int(sdata.get('sim_speed', 30) or 30)}
+
+
 @app.get('/api/me')
 def api_me(user: User = Depends(require_user)):
-    return {**user.public(), 'telegram_chat_id': user.telegram_chat_id or ''}
+    return _me_payload(user)
+
+
+_HHMM = __import__('re').compile(r'^([01]\d|2[0-3]):[0-5]\d$')
 
 
 @app.patch('/api/me')
@@ -118,10 +128,27 @@ async def api_patch_me(request: Request, user: User = Depends(require_user),
                        db: Session = Depends(get_db)):
     b = await request.json()
     if 'telegram_chat_id' in b:
-        cid = (b.get('telegram_chat_id') or '').strip()[:64]
-        user.telegram_chat_id = cid or None
-        db.commit()
-    return {**user.public(), 'telegram_chat_id': user.telegram_chat_id or ''}
+        user.telegram_chat_id = ((b.get('telegram_chat_id') or '').strip()[:64]) or None
+    if 'sim_start' in b and _HHMM.match(str(b.get('sim_start') or '')):
+        user.sim_start = b['sim_start']
+    if 'sim_end' in b and _HHMM.match(str(b.get('sim_end') or '')):
+        user.sim_end = b['sim_end']
+    if 'sim_speed' in b:
+        try:
+            sp = max(1, min(120, int(float(b.get('sim_speed')))))
+            st = user.settings or Settings(user_id=user.id, data={})
+            st.data = {**(st.data or {}), 'sim_speed': sp}
+            db.add(st)
+        except (TypeError, ValueError):
+            pass
+    sim_touched = any(k in b for k in ('sim_enabled', 'sim_start', 'sim_end', 'sim_speed'))
+    if 'sim_enabled' in b:
+        user.sim_enabled = 1 if b.get('sim_enabled') else 0
+    db.commit()
+    if sim_touched:   # restart the sim session fresh with the new settings on next radar load
+        from . import scanners
+        scanners.stop_sim(user.id)
+    return _me_payload(user)
 
 
 @app.post('/api/onboarding')
