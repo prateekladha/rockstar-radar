@@ -8,7 +8,7 @@
 
     <!-- Primary SEO -->
     <title>Rockstar Radar — Intraday opening-range radar for Indian (NSE) markets</title>
-    <meta name="description" content="Rockstar Radar is a real-time NSE intraday opening-range breakout radar. Connect your own broker (FYERS, more coming) and get ranked intraday setups with entry, stop-loss and targets, a smart daily watchlist, and a full trade journal. You stay in control — paper-trading first." />
+    <meta name="description" content="Rockstar Radar is a real-time NSE intraday opening-range breakout radar. Connect your own broker (FYERS, more coming) for ranked intraday setups with entry, stop-loss and targets, a smart watchlist and a trade journal. Practise risk-free with an accelerated market simulation, paper-trade, or auto paper-trade the algo to see its P&L — then go live. You stay in control." />
     <meta name="keywords" content="NSE intraday, opening range breakout, ORB scanner, intraday trading India, FYERS API, intraday stock screener, trade journal, intraday signals, Nifty intraday" />
     <meta name="author" content="Rockstar Radar" />
     <meta name="robots" content="index, follow" />
@@ -42,9 +42,12 @@
           "description": "A real-time NSE intraday opening-range breakout radar for Indian markets. Connect your own broker to get ranked intraday setups with entry, stop-loss and targets, a smart daily watchlist, and a trade journal. Paper-trading first; the user confirms every trade.",
           "featureList": [
             "Live opening-range breakout radar ranked by strength",
-            "Smart daily long/short watchlist with levels",
-            "Trade journal and performance insights (win rate, expectancy in R)",
-            "Bring your own broker (FYERS; more coming)"
+            "Smart daily long/short watchlist with entry, stop-loss and targets",
+            "Risk-free accelerated market simulation to practise and learn",
+            "Paper trading and auto paper-trading of the algo to validate it",
+            "Live order placement through your own broker (you confirm every order)",
+            "Trade journal and performance insights (win rate, expectancy in R, daily P&L)",
+            "Bring your own broker (FYERS; Zerodha, Upstox, Angel One and more planned)"
           ],
           "offers": { "@type": "Offer", "price": "0", "priceCurrency": "INR" }
         },
@@ -64,7 +67,17 @@
             {
               "@type": "Question",
               "name": "Does it place trades automatically?",
-              "acceptedAnswer": { "@type": "Answer", "text": "No. Rockstar Radar prepares ranked setups and paper trades by default; you review and confirm every order. It never fires real orders on its own." }
+              "acceptedAnswer": { "@type": "Answer", "text": "For live orders, no — you review and confirm every order; it never fires a real order on its own. It can auto paper-trade (simulated, no money) so you can watch how the algorithm would perform before trading live." }
+            },
+            {
+              "@type": "Question",
+              "name": "Can I practise without risking money?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Yes. Rockstar Radar has a built-in accelerated market simulation that plays a full synthetic trading session in minutes through the real algorithm, so learners can practise and users can test features any time without waiting for live market hours. You can also paper-trade on the live feed. Paper, simulation and live data are kept completely separate." }
+            },
+            {
+              "@type": "Question",
+              "name": "What is paper trading vs live trading here?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Paper trading tracks simulated fills, exits and P&L against the live feed with no real money. Live trading routes orders to your own connected broker. An admin sets paper or live per user, and the two P&L records never mix. Auto paper-trading lets the algorithm trade on paper so you can judge its edge before going live." }
             },
             {
               "@type": "Question",

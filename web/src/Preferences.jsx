@@ -50,7 +50,7 @@ function SimulationSettings() {
           </div>
         </div>
         <p className="note" style={{ marginTop: 8 }}>
-          The session you set plays through the real algo at your chosen speed (e.g. 09:15–15:30 at 30× ≈ 13 min), producing live opening-range breakouts and retest signals. Turn on <strong>Auto paper-trade</strong> (your admin, on the Team page) to watch the algo trade it. Simulation is always <strong>paper</strong> — no broker or money involved. Toggle off then on to replay.
+          The session you set plays through the real algo at your chosen speed (e.g. 09:15–15:30 at 30× ≈ 13 min), producing live opening-range breakouts and retest signals, then <strong>replays on a loop</strong> so there's always something to watch. The clock on the Radar is the <strong>simulated session time</strong> (marked “sim-time”, not the real IST clock) — it runs start→end, then restarts. Turn on <strong>Auto paper-trade</strong> (your admin, on the Team page) to watch the algo trade it. Simulation is always <strong>paper</strong> — no broker or money involved.
         </p>
       </div>
     </div>

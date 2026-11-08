@@ -10,7 +10,13 @@
 - Scans liquid stocks live, builds each stock's opening range (09:15–09:20 IST), and ranks
   breakout setups by strength with entry, stop-loss and target levels.
 - Smart watchlist: an auto-generated daily long/short shortlist with levels and invalidation.
-- Trade journal & insights: win rate, expectancy in R, equity curve.
+- Trade journal & insights: win rate, expectancy in R, equity curve, daily P&L.
+- Practice simulation: a built-in accelerated synthetic market that plays a full trading session in
+  minutes through the real algorithm — learn or test any time without waiting for live market hours.
+- Paper trading & auto paper-trading: simulate fills/exits/P&L with no money; let the algorithm
+  trade on paper to validate its edge before going live. Paper, simulation and live data never mix.
+- Live trading: place real orders through your own broker, confirming every order; capital and risk
+  are checked against your broker balance.
 
 ## Key facts
 - Markets: India / NSE intraday only (square off same day).

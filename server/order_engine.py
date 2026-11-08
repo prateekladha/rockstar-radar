@@ -161,8 +161,12 @@ def _auto_trade(db: Session) -> int:
                     del open_auto[sym]
                     changed += 1
                 continue
-            # No open position: enter once per symbol/day.
-            if sym in pending_auto or _entered_today(db, u.id, sym, today):
+            # No open position: don't double-enter. Real trading = one entry per symbol/day; the
+            # simulation loop may re-enter each cycle (after the prior position closed) so trades keep
+            # flowing while you watch.
+            if sym in pending_auto:
+                continue
+            if not u.sim_enabled and _entered_today(db, u.id, sym, today):
                 continue
             rps = abs(entry - stop)
             qty = int(floor(max_risk / rps)) if (max_risk and rps) else 0

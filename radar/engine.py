@@ -49,6 +49,14 @@ class RadarEngine:
         self.halted = False
         self.notes: list[str] = []
 
+    def reset(self):
+        """Re-initialize all symbol states for a fresh session (the simulation loop replays)."""
+        with self.lock:
+            self.states = {sym: SymbolState(st.info) for sym, st in self.states.items()}
+            self.events = []
+            self.halted = False
+            self.feed_health = 'SIMULATED'
+
     def set_baseline(self, symbol: str, values: dict[str, float]):
         with self.lock:
             if symbol in self.states:
@@ -315,7 +323,11 @@ class RadarEngine:
             if candle.at + timedelta(minutes=5) > wall:
                 # Explicit guard against future/partially completed candles.
                 return
-            if not (market_dt(self.session, '09:15') <= candle.at < market_dt(self.session, '15:30')):
+            # Session candle window — config-driven so non-standard sessions work (e.g. the practice
+            # simulation can run an evening window). Defaults to the normal NSE day.
+            _sess_open = self.config.get('session_open') or self.config.get('open_range_start') or '09:15'
+            _sess_close = self.config.get('session_close') or '15:30'
+            if not (market_dt(self.session, _sess_open) <= candle.at < market_dt(self.session, _sess_close)):
                 return
             ts = int(candle.at.timestamp())
             is_or = self._recent_opening(candle)
@@ -420,12 +432,18 @@ class RadarEngine:
         if not retest_ok:
             return
         entry = c.close
-        # Stop beyond both OR level and retest wick; avoid arbitrary tiny risk.
+        # Stop beyond the OR level and the retest wick, but WIDENED to at least a fraction of the
+        # stock's daily ATR so it isn't a sub-0.2% hair-trigger that noise takes out. Risk distance =
+        # max(structure distance, atr_mult × daily ATR). atr_mult is configurable (default 0.5).
+        atr_mult = self.config.get('intraday_atr_stop_mult', 0.5)
+        atr_dist = entry * (st.info.daily_atr_pct or 0) / 100 * atr_mult
         if st.confirmed_side == 'LONG':
-            stop = min(op.high * (1 - 0.001), c.low * (1 - 0.0005))
+            struct_stop = min(op.high * (1 - 0.001), c.low * (1 - 0.0005))
+            stop = min(struct_stop, entry - atr_dist) if atr_dist else struct_stop
             targets = sorted(x for x in st.info.resistance if x > entry * 1.001)
         else:
-            stop = max(op.low * (1 + 0.001), c.high * (1 + 0.0005))
+            struct_stop = max(op.low * (1 + 0.001), c.high * (1 + 0.0005))
+            stop = max(struct_stop, entry + atr_dist) if atr_dist else struct_stop
             targets = sorted((x for x in st.info.support if x < entry * 0.999), reverse=True)
         target = targets[0] if targets else None
         rr = None

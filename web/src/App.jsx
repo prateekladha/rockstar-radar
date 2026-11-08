@@ -42,7 +42,12 @@ export default function App() {
       if (u) identify(u)
     } catch { setUser(null) }
   }
-  useEffect(() => { initAnalytics(); loadMe() }, [])
+  // Poll /api/me so changes (e.g. toggling simulation on/off) reflect without a manual refresh.
+  useEffect(() => {
+    initAnalytics(); loadMe()
+    const t = setInterval(loadMe, 8000)
+    return () => clearInterval(t)
+  }, [])
 
   if (user === undefined) return <div className="center">Loading…</div>
 

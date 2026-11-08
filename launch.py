@@ -71,6 +71,8 @@ def main():
                 return f'{(tot // 60) % 24:02d}:{tot % 60:02d}'
             simcfg = dict(cfg)
             simcfg['open_range_start'] = sim_start
+            simcfg['session_open'] = sim_start       # the engine's valid-candle window = the sim window
+            simcfg['session_close'] = sim_end
             simcfg['watch_start'] = _plus(sim_start, 5)
             simcfg['new_signals_stop'] = sim_end
             simcfg['sim_end'] = sim_end

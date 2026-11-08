@@ -31,5 +31,6 @@
   "history_confirmation_grace_seconds": 12,
   "baseline_sessions": 20,
   "liquidity_lookback_days": 30,
-  "dashboard_port": 8765
+  "dashboard_port": 8765,
+  "intraday_atr_stop_mult": 0.5
 }

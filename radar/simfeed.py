@@ -59,7 +59,7 @@ def _scenario(sym: str, base: float, kind: str, bars: list):
         tk(base * 0.9955, b2 + timedelta(seconds=20), 70000, base * 0.997)
         candles[b2] = Candle(b2, r(base * 0.994, 2), r(base * 0.9958, 2), r(base * 0.993, 2), r(base * 0.9955, 2), 80000)
         entry = base * 0.9955
-        path = [entry, base * 0.990, base * 0.985, base * 0.980, base * 0.980]   # falls to target
+        path = [entry, base * 0.988, base * 0.978, base * 0.970, base * 0.965]   # falls to target
         for i, bb in enumerate(rest):
             p = path[min(i, len(path) - 1)]
             candles[bb] = Candle(bb, r(p * 1.002, 2), r(p * 1.003, 2), r(p, 2), r(p, 2), 60000)
@@ -78,9 +78,9 @@ def _scenario(sym: str, base: float, kind: str, bars: list):
     candles[b2] = Candle(b2, r(base * 1.006, 2), r(base * 1.0065, 2), r(base * 1.0045, 2), r(base * 1.005, 2), 80000)
     entry = base * 1.005
     if kind == 'win':
-        path = [entry, base * 1.010, base * 1.016, base * 1.021, base * 1.021]   # climbs to target
-    else:  # 'loss' — rolls over to the stop (~ORH)
-        path = [entry, base * 1.003, base * 1.001, base * 1.000, base * 1.000]
+        path = [entry, base * 1.012, base * 1.022, base * 1.032, base * 1.035]   # climbs to target
+    else:  # 'loss' — rolls over through the (wider ATR) stop
+        path = [entry, base * 1.002, base * 0.998, base * 0.993, base * 0.990]
     for i, bb in enumerate(rest):
         p = path[min(i, len(path) - 1)]
         candles[bb] = Candle(bb, r(p * 0.998, 2), r(p, 2), r(p * 0.997, 2), r(p, 2), 60000)
@@ -106,8 +106,8 @@ def _build(config: dict, day):
         candles, ticks = _scenario(sym, base, kind, bars)
         instruments.append(Instrument(symbol=sym, industry='Simulation',
             median_turnover_cr=120, daily_atr_pct=1.8, previous_close=base,
-            resistance=sorted([round(base * 1.015, 2), round(base * 1.03, 2)]),
-            support=sorted([round(base * 0.985, 2), round(base * 0.97, 2)])))
+            resistance=sorted([round(base * 1.03, 2), round(base * 1.05, 2)]),
+            support=sorted([round(base * 0.97, 2), round(base * 0.95, 2)])))
         scenarios[sym] = (candles, ticks)
     return bars, instruments, scenarios
 
@@ -126,33 +126,42 @@ def run_sim(config: dict, port: int):
     serve(engine, port=port, mode='SIMULATION')
 
 
-def _wait_until(sim_dt, speed: float):
-    """Real-sleep until the sim clock reaches sim_dt."""
-    while True:
-        delta = (sim_dt - now_ist()).total_seconds()
-        if delta <= 0:
-            return
-        _time.sleep(min(max(delta / speed, 0.02), 1.0))
-
-
 def _play(engine: RadarEngine, bars, scenarios, config):
+    """Replay the synthetic session continuously (loop) so the sim is always active while enabled:
+    each cycle resets the engine, re-anchors the sim clock to the session start, and replays the
+    scenario at `speed`x. Opportunities therefore keep appearing, cycle after cycle."""
+    from .utils import market_dt, reanchor_sim_clock
     speed = max(1.0, float(config.get('sim_speed', 30)))
     grace = config.get('history_confirmation_grace_seconds', 12)
-    # Interleave ticks and bar-closes in sim-time order.
-    events = []  # (sim_dt, kind, symbol, payload)
+    day = now_ist().date()
+    sim_start = market_dt(day, config['open_range_start'])
+    sim_end = market_dt(day, config.get('sim_end', config['new_signals_stop']))
+    cycle_secs = max(60.0, (sim_end - sim_start).total_seconds())
+    # Events as (offset-seconds-from-session-start, kind, symbol, payload).
+    evs = []
     for sym, (candles, ticks) in scenarios.items():
         for t in ticks:
-            events.append((t.time, 'tick', sym, t))
+            evs.append(((t.time - sim_start).total_seconds(), 'tick', sym, t))
         for bdt, c in candles.items():
-            events.append((bdt + timedelta(minutes=5, seconds=grace), 'bar', sym, c))
-    events.sort(key=lambda e: e[0])
-    for sim_dt, kind, sym, payload in events:
-        _wait_until(sim_dt, speed)
-        try:
-            if kind == 'tick':
-                engine.update_tick(payload, received_at=now_ist())
-            else:
-                engine.ingest_closed_bar(sym, payload, observed_at=now_ist())
-        except Exception as e:
-            print(f'sim ingest error {sym}: {e}')
-    engine.update_health('SIMULATION complete — session ended. Toggle Simulation off/on to replay.')
+            evs.append(((bdt + timedelta(minutes=5, seconds=grace) - sim_start).total_seconds(), 'bar', sym, c))
+    evs.sort(key=lambda e: e[0])
+
+    while True:
+        engine.reset()
+        engine.update_health('SIMULATION — synthetic accelerated feed, not a live market')
+        reanchor_sim_clock()
+        cycle_start = _time.monotonic()
+        for off, kind, sym, payload in evs:
+            target = cycle_start + max(0.0, off) / speed
+            while _time.monotonic() < target:
+                _time.sleep(min(max(target - _time.monotonic(), 0.02), 0.5))
+            try:
+                if kind == 'tick':
+                    engine.update_tick(payload, received_at=now_ist())
+                else:
+                    engine.ingest_closed_bar(sym, payload, observed_at=now_ist())
+            except Exception as e:
+                print(f'sim ingest error {sym}: {e}')
+        end_real = cycle_start + cycle_secs / speed
+        while _time.monotonic() < end_real:
+            _time.sleep(0.5)
