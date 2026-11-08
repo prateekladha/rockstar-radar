@@ -175,12 +175,25 @@ def _auth_failed_health(conn: BrokerConnection) -> dict | None:
     return h
 
 
+def _rate_limited_health(conn: BrokerConnection) -> dict | None:
+    """The scanner's last health IF it says the broker API was rate-limited today."""
+    h = health.read_health(f'u{conn.user_id}')
+    if not h or not h.get('rate_limited'):
+        return None
+    h_at = health.health_at(h)
+    if h_at and h_at.astimezone(IST).date() != now_ist().date():
+        return None   # a prior day's limit; today is fresh
+    return h
+
+
 def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
     """Scheduler/supervisor entry point: start the owner's scanner if today's token is present and it
     hasn't already runtime-failed auth (don't restart into the same -15/-16 until they re-login)."""
     if not _token_is_fresh_today(conn) or not conn.token_enc:
         return False
-    if _auth_failed_health(conn):
+    # Don't restart into a known auth failure or a hit rate limit — restarting only burns more of the
+    # broker's daily API quota and re-triggers the same error.
+    if _auth_failed_health(conn) or _rate_limited_health(conn):
         return False
     _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), _universe_index(conn.user),
             watchpins.pins_env(db, conn.user_id))
@@ -210,10 +223,19 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
     h = _auth_failed_health(conn)
     if h:
         return 'need_login', _need_login_state(conn, source, label, h.get('reason'))
+    rl = _rate_limited_health(conn)
+    if rl:
+        return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
+                        'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
+                        'rate_limited': True, 'reason': rl.get('reason')}
 
     cc = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), idx,
                  watchpins.pins_env(db, conn.user_id))
     st = cc.live_state()
+
+    def _is_rl(text):
+        return any(k in (text or '').lower() for k in ('daily api limit', 'rate limit', '5,000',
+                                                       'requests/day'))
 
     if st.get('offline'):
         # Process running but dashboard not up yet = warming up (selection in progress). Not a
@@ -229,11 +251,13 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
     fh = (st.get('feed_health') or '')
     if st.get('halted') or fh.startswith('HALTED'):
         low = fh.lower()
+        clean = fh.replace('HALTED — ', '')
         if any(k in low for k in ('expired', 'log in', 'login', 'valid token', 'session')):
-            return 'need_login', _need_login_state(conn, source, label, fh.replace('HALTED — ', ''))
+            return 'need_login', _need_login_state(conn, source, label, clean)
         return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
                         'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
-                        'reason': fh.replace('HALTED — ', '') or 'Live feed temporarily unavailable.'}
+                        'rate_limited': _is_rl(fh),
+                        'reason': clean or 'Live feed temporarily unavailable.'}
 
     st.update({'data_mode': 'live', 'source': source, 'shared': source == 'shared',
                'universe': label, 'broker': conn.broker})

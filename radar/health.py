@@ -19,15 +19,16 @@ def _path(scanner_id: str):
     return ROOT / 'data' / f'scanner_health_{scanner_id}.json'
 
 
-def write_health(scanner_id: str, *, ok: bool, need_login: bool = False, reason: str = '') -> None:
+def write_health(scanner_id: str, *, ok: bool, need_login: bool = False,
+                 rate_limited: bool = False, reason: str = '') -> None:
     if not scanner_id:
         return
     try:
         p = _path(scanner_id)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps({
-            'ok': bool(ok), 'need_login': bool(need_login), 'reason': reason or '',
-            'at': datetime.now(timezone.utc).isoformat(),
+            'ok': bool(ok), 'need_login': bool(need_login), 'rate_limited': bool(rate_limited),
+            'reason': reason or '', 'at': datetime.now(timezone.utc).isoformat(),
         }), encoding='utf-8')
     except OSError:
         pass

@@ -65,6 +65,11 @@ export default function Radar() {
 
   return (
     <>
+      {d.rate_limited && (
+        <div className="banner warn" style={{ marginBottom: 14 }}>
+          ⏳ <strong>Broker API daily limit reached.</strong> {d.reason}
+        </div>
+      )}
       {d.fallback && (
         <div className="banner warn" style={{ marginBottom: 14 }}>
           Your own broker feed is offline — showing your household's shared feed (view-only).{' '}

@@ -150,11 +150,18 @@ def main():
             msg = str(e).lower()
             is_auth = any(k in msg for k in ('token expired', 'token expired/invalid', 'valid token',
                                              '(-15)', '(-16)', 'auth'))
+            is_rl = any(k in msg for k in ('rate limit', '-360', '5,000', 'requests/day'))
+            if is_auth:
+                reason = ('Your broker session has expired. Log in to your broker for today to '
+                          'resume the live scan.')
+            elif is_rl:
+                reason = ('Your broker hit its daily API limit (FYERS Standard allows 5,000 '
+                          'requests/day). Live scanning pauses and resumes when the limit resets '
+                          'next trading day. This is a broker limit, not a Rockstar Radar issue.')
+            else:
+                reason = 'Live broker data is temporarily unavailable.'
             write_health(os.environ.get('RADAR_SCANNER_ID', ''),
-                         ok=False, need_login=is_auth,
-                         reason=('Your broker session has expired. Log in to your broker for today '
-                                 'to resume the live scan.') if is_auth
-                         else 'Live broker data is temporarily unavailable.')
+                         ok=False, need_login=is_auth, rate_limited=is_rl, reason=reason)
         print(f'ERROR: {e}', file=sys.stderr)
         sys.exit(2)
     finally:

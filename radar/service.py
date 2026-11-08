@@ -385,17 +385,23 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
                 anchor_attempts[symbol] = now
         except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError) as e:
             # User-facing halt reason — no CLI/dev hints. Technical detail stays in the server log.
+            rate_limited = isinstance(e, ApiRateLimitError)
             if isinstance(e, ApiAuthError):
                 reason = ('Your broker session has expired. Log in to your broker for today to '
                           'resume the live scan.')
             elif isinstance(e, ApiPermissionError):
                 reason = ('Your broker app is missing Market Data (quotes & history) permission. '
                           'Enable it in your broker app, then restart the scan.')
+            elif rate_limited:
+                reason = ('Your broker hit its daily API limit (FYERS Standard allows 5,000 '
+                          'requests/day). Live scanning pauses and resumes when the limit resets '
+                          'next trading day. This is a broker limit, not a Rockstar Radar issue.')
             else:
                 reason = 'Live broker data is temporarily unavailable. Please try again shortly.'
             engine.halt(reason)
-            # Signal the web process: auth -> Reconnect CTA + shared-feed fallback; others -> fall back.
-            write_health(_scanner_id, ok=False, need_login=isinstance(e, ApiAuthError), reason=reason)
+            # Signal the web process: auth -> Reconnect CTA; rate-limit -> a clear banner.
+            write_health(_scanner_id, ok=False, need_login=isinstance(e, ApiAuthError),
+                         rate_limited=rate_limited, reason=reason)
             print('FATAL: FYERS data API unavailable; stopping live confirmation. '
                   'Do not trade from cached Radar statuses. ' + str(e)[:160])
             return
