@@ -63,7 +63,7 @@ def _demo_cc() -> ControlCenter:
 def _sim_speed(user: User) -> str:
     data = (user.settings.data if user.settings else None) or {}
     try:
-        return str(int(float(data.get('sim_speed', 30) or 30)))
+        return str(int(float(data.get('sim_speed', 10) or 30)))
     except (TypeError, ValueError):
         return '30'
 

@@ -112,7 +112,7 @@ def _me_payload(user: User) -> dict:
     sdata = (user.settings.data if user.settings else {}) or {}
     return {**user.public(), 'telegram_chat_id': user.telegram_chat_id or '',
             'sim_enabled': bool(user.sim_enabled), 'sim_start': user.sim_start or '09:15',
-            'sim_end': user.sim_end or '15:30', 'sim_speed': int(sdata.get('sim_speed', 30) or 30)}
+            'sim_end': user.sim_end or '15:30', 'sim_speed': int(sdata.get('sim_speed', 10) or 30)}
 
 
 @app.get('/api/me')

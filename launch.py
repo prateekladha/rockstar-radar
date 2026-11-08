@@ -63,7 +63,7 @@ def main():
             from radar.simfeed import run_sim
             sim_start = os.environ.get('RADAR_SIM_START', '09:15')
             sim_end = os.environ.get('RADAR_SIM_END', '15:30')
-            speed = float(os.environ.get('RADAR_SIM_SPEED', '30') or 30)
+            speed = float(os.environ.get('RADAR_SIM_SPEED', '10') or 30)
 
             def _plus(hhmm, mins):
                 h, m = (int(x) for x in hhmm.split(':'))

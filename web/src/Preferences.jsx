@@ -46,7 +46,7 @@ function SimulationSettings() {
           <div className="field" style={{ flex: 1 }}><label>Speed (× real-time)</label>
             <input inputMode="numeric" value={m.sim_speed} disabled={!on}
               onChange={e => setM({ ...m, sim_speed: e.target.value.replace(/[^\d]/g, '') })}
-              onBlur={e => patch({ sim_speed: e.target.value })} placeholder="30" />
+              onBlur={e => patch({ sim_speed: e.target.value })} placeholder="10" />
           </div>
         </div>
         <p className="note" style={{ marginTop: 8 }}>
