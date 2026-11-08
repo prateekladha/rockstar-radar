@@ -9,7 +9,6 @@ const money = (x) => (x == null ? '—' : (x < 0 ? '-₹' : '₹') + Math.abs(Ma
 export default function Trades() {
   const [pnl, setPnl] = useState(null)
   const [positions, setPositions] = useState([])
-  const [running, setRunning] = useState(0)
   const [working, setWorking] = useState([])
   const [orders, setOrders] = useState(null)
   const [f, setF] = useState({ q: '', status: '', side: '' })
@@ -21,7 +20,7 @@ export default function Trades() {
   // show up on their own.
   const refreshLive = async () => {
     setPnl(await api('/api/pnl?mode=' + mode))
-    const p = await api('/api/positions?mode=' + mode); setPositions(p.items); setRunning(p.running_pnl)
+    const p = await api('/api/positions?mode=' + mode); setPositions(p.items)
     setWorking((await api('/api/working-orders?mode=' + mode)).items)
   }
   const loadOrders = async () => {
@@ -41,7 +40,7 @@ export default function Trades() {
     <div>
       <div className="kpis k4">
         <div className="kpi"><div className="label">Realised P&L</div><div className="val" style={{ color: pnl.realised >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.realised)}</div><div className="sub">booked · ended sessions</div></div>
-        <div className="kpi live"><div className="label">Running P&L <span className="livedot" /></div><div className="val" style={{ color: pnl.running_pnl >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.running_pnl)}</div><div className="sub">this session · {pnl.open} open · live</div></div>
+        <div className="kpi live"><div className="label">Running P&L <span className="livedot" /></div><div className="val" style={{ color: pnl.running_pnl >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.running_pnl)}</div><div className="sub">{pnl.sim ? 'practice' : 'this session'} · {pnl.open} open · live</div></div>
         <div className="kpi accent"><div className="label">Win rate</div><div className="val">{pnl.win_rate}%</div><div className="sub">{pnl.wins} winners</div></div>
         <div className="kpi"><div className="label">Working</div><div className="val">{pnl.working}</div><div className="sub">orders not yet filled</div></div>
       </div>

@@ -52,12 +52,19 @@ def insights(user: User = Depends(require_user), db: Session = Depends(get_db), 
     from collections import defaultdict
     from datetime import timezone
     from radar.utils import IST
+    _now = now_ist()
+    _today = _now.date()
+    _ended = _now.strftime('%H:%M') >= '15:30'
     daily = defaultdict(float)
     for o in closed:
         if o.closed_at is None or o.pnl is None:
             continue
-        d = o.closed_at if o.closed_at.tzinfo else o.closed_at.replace(tzinfo=timezone.utc)
-        daily[d.astimezone(IST).date().isoformat()] += o.pnl
+        d = (o.closed_at if o.closed_at.tzinfo else o.closed_at.replace(tzinfo=timezone.utc)).astimezone(IST).date()
+        # Keep the daily chart consistent with Realised P&L: a day only books after its session ends,
+        # so skip today's in-progress session in normal mode. (Sim loops perpetually -> show all.)
+        if (not user.sim_enabled) and d == _today and not _ended:
+            continue
+        daily[d.isoformat()] += o.pnl
     daily_pnl = [{'day': k, 'pnl': round(v, 2)} for k, v in sorted(daily.items())]
 
     best = max(closed, key=lambda o: o.result_r or 0, default=None)
@@ -74,6 +81,7 @@ def insights(user: User = Depends(require_user), db: Session = Depends(get_db), 
         'expectancy_r': round(sum(rs) / len(closed), 2) if closed else 0,
         'total_r': round(sum(rs), 2),
         'realised': pnl['realised'], 'running_pnl': pnl['running_pnl'], 'sim': pnl['sim'],
+        'open': pnl['open'],
         'long': by_side('LONG'), 'short': by_side('SHORT'),
         'equity': equity,
         'best': {'symbol': best.symbol, 'r': best.result_r} if best else None,

@@ -19,7 +19,7 @@ export default function Insights() {
   const mode = useViewMode()
   useEffect(() => { setS(null); api('/api/insights?mode=' + mode).then(setS).catch(() => {}) }, [mode])
   if (!s) return <div className="empty">Loading insights…</div>
-  if (!s.trades) return <div className="empty"><div className="big">No trades yet</div>Your performance shows up here once you've taken a few trades.</div>
+  if (!s.trades && !s.open) return <div className="empty"><div className="big">No trades yet</div>Your performance shows up here once you've taken a few trades.</div>
 
   return (
     <div>
@@ -39,16 +39,18 @@ export default function Insights() {
       </div>
 
       <div className="panel" style={{ marginBottom: 16 }}>
-        <div className="panel-h"><h2>Daily P&L</h2><span className="hint">realised ₹ per trading day</span>
+        <div className="panel-h"><h2>Daily P&L</h2><span className="hint">{s.sim ? 'practice ₹ per session' : 'realised ₹ per ended trading day'}</span>
           <span className="spring" /><ChartToggle v={pnlKind} set={setPnlKind} /></div>
         <div className="panel-b">{s.daily_pnl?.length
           ? <TradeChart points={s.daily_pnl.map(d => ({ label: d.day, value: d.pnl }))} kind={pnlKind} unit="₹" />
-          : <div className="empty">No closed trades yet.</div>}</div>
+          : <div className="empty">{s.sim ? 'No completed practice sessions yet.' : 'No realised days yet — today books after the 3:30 PM close.'}</div>}</div>
       </div>
 
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-h"><h2>Equity curve</h2><span className="hint">cumulative R by trade number · hover a point</span></div>
-        <div className="panel-b"><TradeChart points={s.equity.map((d, i) => ({ value: d.r, name: '#' + (i + 1) + ' ' + bare(d.symbol) + (d.t ? ' · ' + fmtDay(d.t) : '') }))} kind="line" unit="R" /></div>
+        <div className="panel-b">{s.equity?.length
+          ? <TradeChart points={s.equity.map((d, i) => ({ value: d.r, name: '#' + (i + 1) + ' ' + bare(d.symbol) + (d.t ? ' · ' + fmtDay(d.t) : '') }))} kind="line" unit="R" />
+          : <div className="empty">No closed trades yet.</div>}</div>
       </div>
 
       <div className="rlayout rl-even">
