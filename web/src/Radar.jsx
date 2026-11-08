@@ -90,8 +90,8 @@ export default function Radar() {
           val={off ? 'Off' : (d.sim ? 'Sim' : (d.data_mode === 'live' ? 'Live' : 'Demo'))}
           sub={off ? 'starting…' : (d.sim ? 'simulation' : ((d.shared ? 'Shared · ' : '') + (d.universe || feedLabel(d.feed_health))))} />
         {d.sim
-          ? <Kpi label="Sim session" val={off ? '—' : 'Replaying'}
-              sub={off ? '' : `${d.sim_start}–${d.sim_end} · loops`} cls="accent" />
+          ? <Kpi label="Sim session" val={off ? '—' : (d.session_closed ? 'Complete' : 'Running')}
+              sub={off ? '' : `${d.sim_start}–${d.sim_end}${d.session_closed ? ' · ended — toggle to rerun' : ' · one pass'}`} cls="accent" />
           : <Kpi label="Session" val={off ? '—' : (d.session_closed ? 'Closed' : 'Open')}
               sub={off ? '' : (d.server_time_ist || '').slice(11) + ' IST'} />}
       </div>

@@ -123,7 +123,8 @@ def _instruments():
 
 
 def run_sim(config: dict, port: int):
-    """Serve an accelerated, continuously-looping simulated session (same /api/state as live)."""
+    """Serve an accelerated simulated session (same /api/state as live). Plays once start..sim_end
+    then holds the final state (one pass); set sim_loop=True to replay forever instead."""
     from .dashboard import serve
     day = now_ist().date()
     bars = _bars(config, day)
@@ -138,8 +139,12 @@ def run_sim(config: dict, port: int):
 
 
 def _play(engine: RadarEngine, bars, instruments, config):
-    """Replay a fresh randomised session each cycle so the sim is always active and realistic."""
+    """Replay the simulated session (start..sim_end) once at `speed`x, then STOP — the sim ends like a
+    real intraday session (play_through, one pass). The server serves the final frozen state; open
+    positions are squared off at session end by the order engine. Set sim_loop=True to replay forever
+    instead (the old 'always something to watch' behaviour)."""
     from .utils import market_dt, reanchor_sim_clock
+    loop = bool(config.get('sim_loop', False))
     speed = max(1.0, float(config.get('sim_speed', 10)))
     grace = config.get('history_confirmation_grace_seconds', 12)
     day = now_ist().date()
@@ -174,3 +179,9 @@ def _play(engine: RadarEngine, bars, instruments, config):
         end_real = cycle_start + cycle_secs / speed
         while _time.monotonic() < end_real:
             _time.sleep(0.5)
+        if not loop:
+            # One pass done: leave the sim clock past sim_end so snapshot.session_closed stays True,
+            # and hold the final state. (Re-enabling simulation or Reset starts a fresh session.)
+            engine.update_health('SIMULATION — session complete. Toggle simulation off then on, '
+                                 'or Reset, to run another session.')
+            return

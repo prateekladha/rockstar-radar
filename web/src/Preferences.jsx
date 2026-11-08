@@ -57,7 +57,7 @@ function SimulationSettings() {
           </div>
         </div>
         <p className="note" style={{ marginTop: 8 }}>
-          The session you set plays through the real algo at your chosen speed (e.g. 09:15–15:30 at 10× ≈ 40 min), producing live opening-range breakouts and retest signals, then <strong>replays on a loop</strong> so there's always something to watch. The Radar shows which window it's replaying. Turn on <strong>Auto paper-trade</strong> (your admin, on the Team page) to watch the algo trade it. Simulation is always <strong>paper</strong> — no broker or money involved.
+          The session you set plays through the real algo once at your chosen speed (e.g. 09:15–15:30 at 10× ≈ 40 min), producing live opening-range breakouts and retest signals. When it reaches the end time it <strong>ends like a real intraday session</strong> — open positions are squared off and the Radar shows “Complete”. Toggle simulation off then on (or hit Reset) to run another session. Turn on <strong>Auto paper-trade</strong> (your admin, on the Team page) to watch the algo trade it. Simulation is always <strong>paper</strong> — no broker or money involved.
         </p>
         <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
           <button className="btn danger" onClick={reset}>↻ Reset simulation</button>

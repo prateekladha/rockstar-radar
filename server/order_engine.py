@@ -133,6 +133,10 @@ def _auto_trade(db: Session) -> int:
             continue
         if st.get('data_mode') != 'live':
             continue
+        # Once a one-pass sim session has ended, the state is frozen — don't keep re-entering a symbol
+        # that's stuck in RETEST_READY. (Exits are moot too: no new opposite signals appear; the
+        # session-end square-off closes anything still open.)
+        sim_closed = bool(u.sim_enabled and st.get('session_closed'))
         rows = st.get('all') or []
         price_map = {watchpins.bare(r['symbol']): r.get('price') for r in rows if r.get('symbol')}
         open_auto = {watchpins.bare(o.symbol): o for o in db.query(Order)
@@ -162,8 +166,10 @@ def _auto_trade(db: Session) -> int:
                     changed += 1
                 continue
             # No open position: don't double-enter. Real trading = one entry per symbol/day; the
-            # simulation loop may re-enter each cycle (after the prior position closed) so trades keep
-            # flowing while you watch.
+            # simulation may re-enter each cycle (after the prior position closed) so trades keep
+            # flowing while you watch — but NOT after the session has ended.
+            if sim_closed:
+                continue
             if sym in pending_auto:
                 continue
             if not u.sim_enabled and _entered_today(db, u.id, sym, today):
@@ -218,6 +224,45 @@ def _square_off_paper(db: Session) -> int:
     return closed
 
 
+def _square_off_sim(db: Session) -> int:
+    """Flat-by-close for the simulation: when a user's one-pass sim session has ENDED (the sim feed
+    reports session_closed, i.e. sim-time passed sim_end), force-close any still-open SIM positions at
+    the last sim price AND cancel any unfilled (pending) SIM orders — the practice equivalent of the
+    intraday square-off. While the session is still playing, session_closed is False so trades exit
+    normally via stop/target."""
+    sim_orders = (db.query(Order).filter_by(mode='paper').filter(Order.sim == 1)
+                  .filter(Order.status.in_(('open', 'pending'))).all())
+    if not sim_orders:
+        return 0
+    by_user: dict[int, list[Order]] = {}
+    for o in sim_orders:
+        by_user.setdefault(o.user_id, []).append(o)
+    changed = 0
+    for uid, orders in by_user.items():
+        user = db.get(User, uid)
+        if user is None or not user.sim_enabled:
+            continue
+        try:
+            st = scanners.radar_state(db, user)
+        except Exception:
+            st = {}
+        if not bool(st.get('session_closed')):
+            continue   # sim session still playing — let stop/target run
+        pm = {watchpins.bare(r['symbol']): r.get('price') for r in (st.get('all') or []) if r.get('symbol')}
+        for o in orders:
+            if o.status == 'pending':
+                o.status = 'cancelled'
+                o.closed_at = datetime.utcnow()
+                o.note = 'Sim — unfilled at session end, cancelled.'
+            else:
+                exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
+                mark_closed(o, exit_px, note='Sim square-off at session end.')
+            changed += 1
+    if changed:
+        db.commit()
+    return changed
+
+
 def tick(db: Session, live_sync: bool = True) -> int:
     """One processing pass: auto-trade, fills/exits, live sync, end-of-day square-off."""
     created = _auto_trade(db)
@@ -225,7 +270,7 @@ def tick(db: Session, live_sync: bool = True) -> int:
               .filter(Order.status.in_(('pending', 'open')))
               .all())
     if not active:
-        return created + _square_off_paper(db)
+        return created + _square_off_paper(db) + _square_off_sim(db)
     by_user: dict[int, list[Order]] = {}
     for o in active:
         by_user.setdefault(o.user_id, []).append(o)
@@ -250,7 +295,7 @@ def tick(db: Session, live_sync: bool = True) -> int:
                 print(f'live order sync skipped (user {user_id}): {e}')
     if changed:
         db.commit()
-    return created + changed + _square_off_paper(db)
+    return created + changed + _square_off_paper(db) + _square_off_sim(db)
 
 
 async def run_order_engine() -> None:
