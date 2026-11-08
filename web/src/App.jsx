@@ -16,6 +16,7 @@ import Journal from './Journal.jsx'
 import Family from './Family.jsx'
 import Landing from './Landing.jsx'
 import Support from './Support.jsx'
+import Preferences from './Preferences.jsx'
 
 function ViewModeToggle({ sim }) {
   const mode = useViewMode()
@@ -29,7 +30,7 @@ function ViewModeToggle({ sim }) {
 }
 
 const NAV = [['/radar', 'Radar'], ['/watchlist', 'Watchlist'], ['/trades', 'Trades'], ['/journal', 'Journal'], ['/insights', 'Insights']]
-const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings']
+const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings', '/preferences']
 
 export default function App() {
   const [user, setUser] = useState(undefined)
@@ -82,8 +83,8 @@ function Shell({ user, onLogout }) {
   }, [])
   const onAccount = ACCOUNT_PATHS.includes(loc.pathname)
   const menuItems = user.is_admin
-    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/family', 'Team', '👥'], ['/settings', 'Strategy settings', '⚙️']]
-    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔']]
+    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/family', 'Team', '👥'], ['/settings', 'Strategy settings', '⚙️']]
+    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓']]
   const go = (p) => { setMenu(false); nav(p) }
 
   return (
@@ -136,6 +137,7 @@ function Shell({ user, onLogout }) {
           <Route path="/insights" element={<Insights />} />
           <Route path="/brokers" element={<Brokers />} />
           <Route path="/alerts" element={<Alerts />} />
+          <Route path="/preferences" element={<Preferences />} />
           <Route path="/family" element={user.is_admin ? <Family /> : <Navigate to="/radar" />} />
           <Route path="/settings" element={user.is_admin ? <Settings /> : <Navigate to="/radar" />} />
           <Route path="*" element={<Navigate to="/radar" />} />

@@ -86,10 +86,12 @@ export default function Radar() {
         <Kpi label="Monitored" val={off ? '—' : d.monitored} sub="stocks tracked" />
         <Kpi label="Ready" val={off ? '—' : d.anchors_ready} sub="opening ranges set" cls="accent" />
         <Kpi label="Signals ready" val={off ? '—' : d.active_candidates} sub="setups to review" cls="live" />
-        <Kpi label="Feed" cls={d.data_mode === 'live' ? 'live' : ''}
-          val={off ? 'Off' : (d.data_mode === 'live' ? 'Live' : 'Demo')}
-          sub={off ? 'starting…' : ((d.shared ? 'Shared · ' : '') + (d.universe || feedLabel(d.feed_health)))} />
-        <Kpi label="Session" val={off ? '—' : (d.session_closed ? 'Closed' : 'Open')} sub={off ? '' : (d.server_time_ist || '').slice(11) + ' IST'} />
+        <Kpi label="Feed" cls={d.sim ? 'accent' : (d.data_mode === 'live' ? 'live' : '')}
+          val={off ? 'Off' : (d.sim ? 'Sim' : (d.data_mode === 'live' ? 'Live' : 'Demo'))}
+          sub={off ? 'starting…' : (d.sim ? 'simulation' : ((d.shared ? 'Shared · ' : '') + (d.universe || feedLabel(d.feed_health))))} />
+        <Kpi label={d.sim ? 'Sim session' : 'Session'}
+          val={off ? '—' : (d.session_closed ? (d.sim ? 'Ended' : 'Closed') : 'Open')}
+          sub={off ? '' : (d.server_time_ist || '').slice(11) + (d.sim ? ' sim-time' : ' IST')} />
       </div>
 
       {tickets.length > 0 && (
