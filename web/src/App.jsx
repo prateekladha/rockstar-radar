@@ -42,11 +42,14 @@ export default function App() {
       if (u) identify(u)
     } catch { setUser(null) }
   }
-  // Poll /api/me so changes (e.g. toggling simulation on/off) reflect without a manual refresh.
+  // Keep the user fresh so changes (e.g. toggling simulation) reflect immediately (event) and as a
+  // fallback on a timer.
   useEffect(() => {
     initAnalytics(); loadMe()
-    const t = setInterval(loadMe, 8000)
-    return () => clearInterval(t)
+    const t = setInterval(loadMe, 6000)
+    const onChange = () => loadMe()
+    window.addEventListener('rr-me-changed', onChange)
+    return () => { clearInterval(t); window.removeEventListener('rr-me-changed', onChange) }
   }, [])
 
   if (user === undefined) return <div className="center">Loading…</div>

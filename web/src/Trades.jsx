@@ -40,8 +40,8 @@ export default function Trades() {
   return (
     <div>
       <div className="kpis k4">
-        <div className="kpi"><div className="label">Realised P&L</div><div className="val" style={{ color: pnl.realised >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.realised)}</div><div className="sub">{pnl.trades} closed trades</div></div>
-        <div className="kpi live"><div className="label">Running P&L <span className="livedot" /></div><div className="val" style={{ color: running >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(running)}</div><div className="sub">{pnl.open} open · updates live</div></div>
+        <div className="kpi"><div className="label">Realised P&L</div><div className="val" style={{ color: pnl.realised >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.realised)}</div><div className="sub">booked · ended sessions</div></div>
+        <div className="kpi live"><div className="label">Running P&L <span className="livedot" /></div><div className="val" style={{ color: pnl.running_pnl >= 0 ? 'var(--long-ink)' : 'var(--short-ink)' }}>{money(pnl.running_pnl)}</div><div className="sub">this session · {pnl.open} open · live</div></div>
         <div className="kpi accent"><div className="label">Win rate</div><div className="val">{pnl.win_rate}%</div><div className="sub">{pnl.wins} winners</div></div>
         <div className="kpi"><div className="label">Working</div><div className="val">{pnl.working}</div><div className="sub">orders not yet filled</div></div>
       </div>

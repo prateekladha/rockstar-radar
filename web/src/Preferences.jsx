@@ -18,8 +18,10 @@ function SimulationSettings() {
   if (!m) return null
   const okTime = (t) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(t))
   const patch = async (body) => {
-    try { setM(await api('/api/me', { method: 'PATCH', body })); setMsg('Saved') }
-    catch (e) { setMsg(e.message) }
+    try {
+      setM(await api('/api/me', { method: 'PATCH', body })); setMsg('Saved')
+      window.dispatchEvent(new Event('rr-me-changed'))   // update the Paper/Actual toggle instantly
+    } catch (e) { setMsg(e.message) }
   }
   const on = !!m.sim_enabled
   return (

@@ -292,17 +292,43 @@ def working_orders(user: User = Depends(require_user), db: Session = Depends(get
 @router.get('/pnl')
 def pnl(user: User = Depends(require_user), db: Session = Depends(get_db), mode: str = ''):
     seed_demo_orders(db, user)
-    # Realised P&L counts ONLY genuinely-closed trades, scoped to paper / live / simulation.
+    from datetime import timezone
+
+    from radar.utils import IST, now_ist
     closed = _scope(db.query(Order).filter_by(user_id=user.id, status='closed'), user, mode).all()
-    realised = round(sum(o.pnl or 0 for o in closed), 2)
-    wins = [o for o in closed if (o.pnl or 0) > 0]
-    open_q = _scope(db.query(Order).filter_by(user_id=user.id, status='open'), user, mode)
-    open_orders = open_q.all()
+    open_orders = _scope(db.query(Order).filter_by(user_id=user.id, status='open'), user, mode).all()
     working = _scope(db.query(Order).filter_by(user_id=user.id, status='pending'), user, mode).count()
     from ..order_engine import _price_map
     pm = _price_map(db, user)
-    running = round(sum((o.public(last_price=pm.get(_bare(o.symbol)))['unrealized'] or 0)
-                        for o in open_orders), 2)
-    return {'realised': realised, 'trades': len(closed), 'open': len(open_orders), 'working': working,
-            'running_pnl': running, 'wins': len(wins), 'sim': bool(user.sim_enabled),
-            'win_rate': round(100 * len(wins) / len(closed), 1) if closed else 0}
+
+    # Running P&L = this (in-progress) session's live total: trades closed THIS session + open
+    #               positions marked-to-market at the current price. It "runs" as prices move.
+    # Realised P&L = only what is BOOKED from sessions that have ENDED. Closing a trade mid-session
+    #               does NOT realise it. (Simulation is perpetual practice -> nothing is ever realised;
+    #               everything shows as the running total.)
+    now = now_ist()
+    today = now.date()
+    sim_ctx = bool(user.sim_enabled)
+    real_session_ended = now.strftime('%H:%M') >= '15:30'   # NSE equity close
+
+    def _sess_date(o):
+        d = o.closed_at or o.created_at
+        if d is None:
+            return today
+        return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(IST).date()
+
+    realised = today_closed = 0.0
+    for o in closed:
+        p = o.pnl or 0
+        ended = (not sim_ctx) and (_sess_date(o) < today or
+                                   (_sess_date(o) == today and real_session_ended))
+        if ended:
+            realised += p
+        else:
+            today_closed += p
+    open_unreal = sum((o.public(last_price=pm.get(_bare(o.symbol)))['unrealized'] or 0)
+                      for o in open_orders)
+    wins = [o for o in closed if (o.pnl or 0) > 0]
+    return {'realised': round(realised, 2), 'running_pnl': round(today_closed + open_unreal, 2),
+            'trades': len(closed), 'open': len(open_orders), 'working': working, 'wins': len(wins),
+            'sim': sim_ctx, 'win_rate': round(100 * len(wins) / len(closed), 1) if closed else 0}

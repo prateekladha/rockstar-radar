@@ -324,7 +324,8 @@ def radar_state(db: Session, user: User) -> dict:
                             else st.get('reason') or 'Simulation starting…')
         else:
             st['data_mode'] = 'live'
-        st.update({'source': 'sim', 'sim': True, 'universe': 'Simulation', 'broker': 'sim'})
+        st.update({'source': 'sim', 'sim': True, 'universe': 'Simulation', 'broker': 'sim',
+                   'sim_start': user.sim_start or '09:15', 'sim_end': user.sim_end or '15:30'})
         return st
     label = U.label_for(_universe_index(user))
     own = _own_broker(db, user)
