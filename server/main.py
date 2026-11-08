@@ -301,6 +301,10 @@ if WEB_DIST.exists():
         if full_path:
             candidate = (WEB_DIST / full_path).resolve()
             if candidate.is_file() and str(candidate).startswith(str(WEB_DIST.resolve()) + os.sep):
+                # version.json must never be cached — the open SPA polls it to detect a new deploy.
+                if candidate.name == 'version.json':
+                    return FileResponse(str(candidate), headers={
+                        'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache'})
                 return FileResponse(str(candidate))
         index = WEB_DIST / 'index.html'
         if index.exists():

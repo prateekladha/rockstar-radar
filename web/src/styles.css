@@ -209,6 +209,9 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 .charttoggle{display:inline-flex;border:1px solid var(--border-2);border-radius:999px;overflow:hidden}
 .charttoggle button{background:none;border:none;color:var(--dim);font:inherit;font-size:11px;font-weight:700;padding:4px 12px;cursor:pointer}
 .charttoggle button.on{background:var(--accent);color:#fff}
+.updatebar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:9000;display:flex;align-items:center;gap:14px;background:var(--surface-3);border:1px solid var(--border-2);border-radius:999px;padding:9px 10px 9px 18px;box-shadow:var(--sh-lg);font-size:13px;font-weight:600;max-width:92vw}
+.updatebar button{background:var(--accent);color:#fff;border:none;border-radius:999px;font:inherit;font-weight:700;padding:7px 16px;cursor:pointer;white-space:nowrap}
+.updatebar button:hover{filter:brightness(1.08)}
 .modepill{display:inline-flex;gap:0;margin-right:12px;border:1px solid var(--border-2);border-radius:999px;overflow:hidden;background:var(--surface-2)}
 .modepill button{background:none;border:none;color:var(--dim);font:inherit;font-size:12px;font-weight:700;padding:5px 14px;cursor:pointer}
 .modepill button.on{background:var(--accent);color:#fff}

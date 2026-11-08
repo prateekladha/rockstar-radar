@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocati
 import { api } from './api.js'
 import { Select } from './ui.jsx'
 import { useViewMode, setViewMode } from './viewmode.js'
+import { useUpdateAvailable } from './useAppVersion.js'
 import { initAnalytics, identify, resetIdentity, pageview } from './analytics.js'
 import Login from './Login.jsx'
 import Radar from './Radar.jsx'
@@ -57,6 +58,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <RouteTracker />
+      <UpdateBanner />
       {user === null ? (
         <Routes>
           <Route path="/login" element={<Login onDevLogin={async () => { await api('/auth/dev-login', { method: 'POST' }); loadMe() }} />} />
@@ -69,6 +71,19 @@ export default function App() {
         <Shell user={user} onLogout={async () => { await api('/auth/logout', { method: 'POST' }); resetIdentity(); setUser(null) }} />
       )}
     </BrowserRouter>
+  )
+}
+
+// Shows a one-tap reload prompt when a newer build has been deployed while this tab was open, so users
+// aren't left running stale JS until they happen to refresh. (version detection: useAppVersion.js)
+function UpdateBanner() {
+  const stale = useUpdateAvailable()
+  if (!stale) return null
+  return (
+    <div className="updatebar">
+      <span>✨ A new version is available.</span>
+      <button onClick={() => window.location.reload()}>Update now</button>
+    </div>
   )
 }
 
