@@ -18,7 +18,7 @@ from math import floor
 from sqlalchemy.orm import Session
 
 from . import scanners, watchpins
-from .models import Household, Order, User
+from .models import Order, User
 
 
 def close_fields(side: str, fill: float, stop: float, exit_price: float, qty: int):
@@ -100,66 +100,89 @@ def _price_map(db: Session, user: User) -> dict:
     return out
 
 
+def _entered_today(db: Session, user_id: int, sym: str, today: str) -> bool:
+    """True if an auto trade for this symbol was already opened today (one entry per symbol/day)."""
+    from datetime import timezone as _tz
+    from radar.utils import IST
+    prior = (db.query(Order).filter_by(user_id=user_id, symbol=sym, source='auto')
+             .order_by(Order.created_at.desc()).first())
+    return bool(prior and prior.created_at and
+                prior.created_at.replace(tzinfo=_tz.utc).astimezone(IST).date().isoformat() == today)
+
+
 def _auto_trade(db: Session) -> int:
-    """For households with auto_paper_trade on, open a PAPER trade for each fresh RETEST_READY
-    opportunity the algo surfaces (one per symbol per day). This is a simulation to validate the
-    algo and show the day's P&L — paper only, no real money. Returns the number created."""
+    """Per-user auto PAPER trading (admin-enabled). For each user with it on, drive trades off their
+    live feed with no delay:
+      - ENTER on a fresh RETEST_READY opportunity (one entry per symbol/day), sized by their risk.
+      - EXIT an open position the moment an opposite (reversal) signal appears on the same stock —
+        the 'exit opportunity'. (Stop/target exits are handled by process_paper the same tick; the
+        session-end square-off is the final safety net.)
+    Race-safe: a position closed here is marked 'closed' and skipped by the stop/target pass. Paper
+    only — no real money. Returns the number of entries + exits made."""
     from radar.utils import load_config, now_ist
-    households = db.query(Household).filter(Household.auto_paper_trade == 1).all()
-    if not households:
+    users = db.query(User).filter(User.auto_paper_trade == 1).all()
+    if not users:
         return 0
     cfg = load_config()
     today = now_ist().date().isoformat()
-    created = 0
-    for hh in households:
-        admin = (db.query(User).filter_by(household_id=hh.id, role='admin').first()
-                 or db.query(User).filter_by(household_id=hh.id).first())
-        if admin is None:
-            continue
+    changed = 0
+    for u in users:
         try:
-            st = scanners.radar_state(db, admin)
+            st = scanners.radar_state(db, u)
         except Exception:
             continue
         if st.get('data_mode') != 'live':
             continue
-        sdata = (admin.settings.data if admin.settings else {}) or {}
+        rows = st.get('all') or []
+        price_map = {watchpins.bare(r['symbol']): r.get('price') for r in rows if r.get('symbol')}
+        open_auto = {watchpins.bare(o.symbol): o for o in db.query(Order)
+                     .filter_by(user_id=u.id, source='auto', status='open').all()}
+        pending_auto = {watchpins.bare(o.symbol) for o in db.query(Order)
+                        .filter_by(user_id=u.id, source='auto', status='pending').all()}
+        sdata = (u.settings.data if u.settings else {}) or {}
         capital = float(sdata.get('capital_inr', cfg.get('capital_inr', 0)) or 0)
         risk_pct = float(sdata.get('risk_pct', cfg.get('risk_pct', 0)) or 0)
         max_risk = capital * risk_pct / 100 if (capital and risk_pct) else 0
-        for r in (st.get('all') or []):
+        for r in rows:
             if r.get('state') != 'RETEST_READY':
                 continue
-            entry, stop, target, side = r.get('entry'), r.get('stop'), r.get('target'), r.get('side')
+            side = r.get('side')
             sym = watchpins.bare(r.get('symbol') or '')
-            if not sym or not entry or not stop or side not in ('LONG', 'SHORT'):
+            entry, stop, target = r.get('entry'), r.get('stop'), r.get('target')
+            if not sym or side not in ('LONG', 'SHORT') or not entry or not stop:
                 continue
-            # one auto trade per symbol per day (created_at is UTC; compare its IST date to today)
-            from datetime import timezone as _tz
-            from radar.utils import IST
-            prior = (db.query(Order).filter_by(user_id=admin.id, symbol=sym, source='auto')
-                     .order_by(Order.created_at.desc()).first())
-            if prior and prior.created_at and \
-                    prior.created_at.replace(tzinfo=_tz.utc).astimezone(IST).date().isoformat() == today:
+            pos = open_auto.get(sym)
+            if pos is not None:
+                # Existing position + a new signal on the same stock. Opposite side = reversal/exit
+                # opportunity -> exit now at the live price. Same side = already in, nothing to do.
+                if pos.side != side:
+                    px = price_map.get(sym) or entry
+                    mark_closed(pos, px, note='Auto exit — opposite (reversal) signal on the stock.')
+                    del open_auto[sym]
+                    changed += 1
+                continue
+            # No open position: enter once per symbol/day.
+            if sym in pending_auto or _entered_today(db, u.id, sym, today):
                 continue
             rps = abs(entry - stop)
             qty = int(floor(max_risk / rps)) if (max_risk and rps) else 0
             if qty < 1:
                 continue
-            db.add(Order(user_id=admin.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
+            db.add(Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
                          target=target, status='pending', order_type='market', mode='paper',
                          source='auto', note=f'Auto paper trade — algo RETEST_READY ({today}).'))
-            created += 1
-    if created:
+            pending_auto.add(sym)
+            changed += 1
+    if changed:
         db.commit()
-    return created
+    return changed
 
 
 def _square_off_paper(db: Session) -> int:
-    """Intraday safety: force-close any still-open PAPER position at/after the square-off time
-    (the feed-based stop/target didn't trigger). Normal day 15:15 IST; Muhurat 15:25."""
-    from radar.utils import is_special_session, now_ist
-    sq = '15:25' if is_special_session() else '15:15'
-    if now_ist().strftime('%H:%M') < sq:
+    """Intraday safety: force-close any still-open PAPER position at/after the square-off time (the
+    feed-based stop/target didn't trigger) — 15 minutes before the 15:30 session close."""
+    from radar.utils import now_ist
+    if now_ist().strftime('%H:%M') < '15:15':
         return 0
     open_paper = db.query(Order).filter_by(status='open', mode='paper').all()
     if not open_paper:
@@ -232,12 +255,13 @@ async def run_order_engine() -> None:
                 passes += 1
                 db = SessionLocal()
                 try:
-                    await asyncio.to_thread(tick, db, passes % 3 == 0)
+                    # Tight cadence for precise auto entry/exit; live broker sync throttled (~every 20s).
+                    await asyncio.to_thread(tick, db, passes % 4 == 0)
                 finally:
                     db.close()
         except Exception as e:
             print(f'[order-engine] tick error: {e}')
-        await asyncio.sleep(8)
+        await asyncio.sleep(5)
 
 
 def _sync_live(db: Session, user: User, orders: list[Order]) -> int:

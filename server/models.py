@@ -25,15 +25,9 @@ class Household(Base):
     __tablename__ = 'households'
     id = Column(Integer, primary_key=True)
     name = Column(String(120), nullable=False, default='My Household')
-    # Admin-controlled, applies to the whole household:
-    trading_mode = Column(String(8), default='paper')       # paper | live
-    auto_paper_trade = Column(Integer, default=0)           # algo auto-trades on paper (RETEST_READY)
+    owner_user_id = Column(Integer)   # the creator; protected from role change / removal by others
     created_at = Column(DateTime, default=_now)
     users = relationship('User', back_populates='household', cascade='all, delete-orphan')
-
-    def settings_public(self) -> dict:
-        return {'trading_mode': self.trading_mode or 'paper',
-                'auto_paper_trade': bool(self.auto_paper_trade)}
 
 
 class User(Base):
@@ -48,6 +42,10 @@ class User(Base):
     picture = Column(String(512))
     role = Column(String(16), default='admin')                 # admin | trader
     onboarded = Column(Integer, default=0)                      # completed name step?
+    # Per-user, set by an admin on the team page. Default: paper ON, auto OFF.
+    trading_mode = Column(String(8), default='paper')          # paper | live
+    auto_paper_trade = Column(Integer, default=0)              # algo auto-trades on paper
+    telegram_chat_id = Column(String(64))                      # for daily reconnect reminders
     created_at = Column(DateTime, default=_now)
     last_login = Column(DateTime, default=_now)
 
@@ -76,7 +74,9 @@ class User(Base):
                 'first_name': self.first_name, 'last_name': self.last_name,
                 'initials': self.initials, 'picture': self.picture, 'role': self.role,
                 'is_admin': self.role == 'admin', 'onboarded': bool(self.onboarded),
-                'household_id': self.household_id}
+                'household_id': self.household_id,
+                'trading_mode': self.trading_mode or 'paper',
+                'auto_paper_trade': bool(self.auto_paper_trade)}
 
 
 class Watchlist(Base):

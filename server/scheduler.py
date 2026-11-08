@@ -24,6 +24,7 @@ from .db import SessionLocal
 
 _REMIND_AT = os.environ.get('RADAR_SCHED_REMIND_HHMM', '08:30')
 _START_AT = os.environ.get('RADAR_SCHED_START_HHMM', '09:08')
+_PNL_AT = os.environ.get('RADAR_SCHED_PNL_HHMM', '15:35')
 _SUPERVISE_UNTIL = os.environ.get('RADAR_SCHED_SUPERVISE_UNTIL_HHMM', '15:35')
 _SUPERVISE_EVERY_MIN = int(os.environ.get('RADAR_SCHED_SUPERVISE_EVERY_MIN', '2'))
 _done: dict[str, str] = {}  # action -> last YYYY-MM-DD it ran
@@ -47,15 +48,32 @@ def _run_once(action: str, today: str) -> bool:
 
 
 def _remind_logins() -> None:
-    """Nudge households that still need today's SEBI-mandated broker login before the open."""
+    """Nudge users that still need today's SEBI-mandated broker login before the open — via their
+    Telegram (if they gave one), with the site link."""
     db = SessionLocal()
     try:
         conns = scanners.connected_brokers(db)
         need = [c for c in conns if not scanners._token_is_fresh_today(c)]
-        for c in need:
-            # TODO: send via the household's Telegram if configured (AlertConfig). For now, log.
-            print(f'[scheduler] reminder: household {c.user.household_id} needs today\'s FYERS login')
-        print(f'[scheduler] login reminder: {len(need)}/{len(conns)} households need to log in today')
+        sent = 0
+        try:
+            from .notifications import remind_reconnect
+            sent = remind_reconnect(db, need)
+        except Exception as e:
+            print(f'[scheduler] reconnect reminders failed: {e}')
+        print(f'[scheduler] login reminder: {len(need)}/{len(conns)} need login; {sent} Telegram sent')
+    finally:
+        db.close()
+
+
+def _daily_pnl_summary() -> None:
+    """End-of-session P&L of all users to the owner's support Telegram."""
+    db = SessionLocal()
+    try:
+        from .notifications import notify_daily_pnl
+        notify_daily_pnl(db)
+        print('[scheduler] daily P&L summary sent')
+    except Exception as e:
+        print(f'[scheduler] daily P&L summary failed: {e}')
     finally:
         db.close()
 
@@ -110,6 +128,8 @@ async def run_scheduler() -> None:
                     await asyncio.to_thread(_remind_logins)
                 if hhmm >= _START_AT and _run_once('start', today):
                     await asyncio.to_thread(_start_all_scanners)
+                if hhmm >= _PNL_AT and _run_once('pnl', today):
+                    await asyncio.to_thread(_daily_pnl_summary)
                 # Supervisor: during market hours, keep scanners up (restart crashes) every few min.
                 global _last_supervise_min
                 if _START_AT <= hhmm <= _SUPERVISE_UNTIL:

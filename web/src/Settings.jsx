@@ -34,7 +34,7 @@ export default function Settings() {
 
   return (
     <>
-    <TradingSettings />
+    <NotificationsSettings />
     {uni && (
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-h"><h2>Stocks to scan</h2><span className="hint">The group of stocks the radar watches each day</span></div>
@@ -72,41 +72,28 @@ export default function Settings() {
   )
 }
 
-function TradingSettings() {
-  const [h, setH] = useState(null)
+function NotificationsSettings() {
+  const [chat, setChat] = useState(null)
   const [msg, setMsg] = useState('')
-  useEffect(() => { api('/api/family/settings').then(setH).catch(() => {}) }, [])
-  if (!h) return null
-  const patch = async (body) => {
-    try { setH(await api('/api/family/settings', { method: 'PATCH', body })); setMsg('Saved') }
+  useEffect(() => { api('/api/me').then(m => setChat(m.telegram_chat_id || '')).catch(() => {}) }, [])
+  if (chat === null) return null
+  const save = async () => {
+    try { const m = await api('/api/me', { method: 'PATCH', body: { telegram_chat_id: chat } }); setChat(m.telegram_chat_id || ''); setMsg('Saved') }
     catch (e) { setMsg(e.message) }
   }
-  const live = h.trading_mode === 'live'
   return (
     <div className="panel" style={{ marginBottom: 16 }}>
-      <div className="panel-h"><h2>Trading</h2>
-        <span className="hint">{h.can_manage ? 'Applies to your whole household' : 'Set by your admin'}</span></div>
+      <div className="panel-h"><h2>Notifications</h2><span className="hint">Daily reconnect reminder on Telegram</span></div>
       <div className="panel-b">
         {msg && <div className="banner ok" style={{ marginBottom: 12 }}>{msg}</div>}
-        <div className="field" style={{ marginBottom: 18 }}>
-          <label>Order mode (whole household)</label>
-          <div className="segmented" style={{ maxWidth: 440 }}>
-            <button type="button" disabled={!h.can_manage} className={'seg' + (!live ? ' on' : '')}
-              onClick={() => patch({ trading_mode: 'paper' })}>Paper <span className="segsub">simulated</span></button>
-            <button type="button" disabled={!h.can_manage} className={'seg' + (live ? ' on' : '')}
-              onClick={() => patch({ trading_mode: 'live' })}>Live <span className="segsub">real money</span></button>
-          </div>
-          {live && <div className="banner warn" style={{ marginTop: 10 }}>⚠️ Live — every member's orders place <strong>real orders</strong> on their own broker. Capital & risk are checked against the broker balance.</div>}
+        <div className="field" style={{ maxWidth: 360 }}>
+          <label>Your Telegram chat ID (optional)</label>
+          <input value={chat} onChange={e => setChat(e.target.value.replace(/[^\d-]/g, ''))} placeholder="e.g. 123456789" />
+          <p className="note" style={{ marginTop: 8 }}>Get a daily reminder to log in to your broker before the market opens. Message our Telegram bot, send <code>/start</code>, and it replies with your chat ID. Leave blank to turn off.</p>
         </div>
-        <div className="field">
-          <label className="toggle" style={{ opacity: h.can_manage ? 1 : .6 }}>
-            <input type="checkbox" checked={!!h.auto_paper_trade} disabled={!h.can_manage}
-              onChange={e => patch({ auto_paper_trade: e.target.checked })} />
-            <span>Auto paper-trade the algo (RETEST_READY signals)</span>
-          </label>
-          <p className="note" style={{ marginTop: 6 }}>The system opens paper trades automatically from the algo's confirmed-retest opportunities, exits on target/stop from the live feed, and squares off any open position at 3:15 PM (intraday). Paper only — a risk-free way to see the algo's daily P&L. (Live auto-trading comes later.)</p>
-        </div>
+        <div style={{ marginTop: 12 }}><button className="btn primary" onClick={save}>Save</button></div>
       </div>
     </div>
   )
 }
+

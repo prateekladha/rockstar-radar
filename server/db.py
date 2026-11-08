@@ -19,8 +19,12 @@ Base = declarative_base()
 # (SQLAlchemy create_all never ALTERs existing tables.) table -> {column: SQL type}.
 _ADDED_COLUMNS = {
     'households': {
+        'owner_user_id': 'INTEGER',
+    },
+    'users': {
         "trading_mode": "VARCHAR(8) DEFAULT 'paper'",
         'auto_paper_trade': 'INTEGER DEFAULT 0',
+        'telegram_chat_id': 'VARCHAR(64)',
     },
     'broker_connections': {
         'refresh_enc': 'TEXT',

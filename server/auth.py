@@ -46,6 +46,8 @@ def upsert_user(db: Session, info: dict) -> User:
         raise ValueError('No email in identity profile')
     user = db.query(User).filter(
         (User.google_sub == sub) | (User.email == email)).first()
+    # A real first-time signup: brand-new user, or an invited member activating (no google_sub yet).
+    is_new_signup = user is None or user.google_sub is None
     given = (info.get('given_name') or '').strip()
     family = (info.get('family_name') or '').strip()
     if not given and info.get('name'):
@@ -59,6 +61,8 @@ def upsert_user(db: Session, info: dict) -> User:
                     name=info.get('name'), first_name=given or None, last_name=family or None,
                     picture=info.get('picture'), role='admin')   # first user of a household = admin
         db.add(user)
+        db.flush()
+        hh.owner_user_id = user.id   # the creator is the owner (protected from demotion/removal)
     else:
         if sub:
             user.google_sub = sub
@@ -69,6 +73,12 @@ def upsert_user(db: Session, info: dict) -> User:
         user.last_login = datetime.utcnow()
     db.commit()
     db.refresh(user)
+    if is_new_signup:
+        try:
+            from .notifications import notify_new_signup
+            notify_new_signup(user)
+        except Exception as e:
+            print(f'signup notify skipped: {e}')
     return user
 
 

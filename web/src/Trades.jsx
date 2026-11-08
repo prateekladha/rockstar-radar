@@ -158,7 +158,7 @@ export function PlaceOrder({ preset, onClose, onDone }) {
   const [mode, setMode] = useState('paper')   // read-only; set at household level by the admin
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => { api('/api/me').then(m => setMode(m?.household?.trading_mode || 'paper')).catch(() => {}) }, [])
+  useEffect(() => { api('/api/me').then(m => setMode(m?.trading_mode || 'paper')).catch(() => {}) }, [])
   const set = (k, v) => setO(prev => ({ ...prev, [k]: v }))
   const mark = (k) => setTouched(prev => ({ ...prev, [k]: true }))
 
@@ -208,7 +208,7 @@ export function PlaceOrder({ preset, onClose, onDone }) {
             : <div className="banner">📝 <strong>Paper mode</strong> (set by your admin) — simulated against the live feed. Fills, exits and P&L are tracked, no real money.</div>}
           <button className={'btn btn-lg ' + (live ? 'good' : 'primary')} style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
             disabled={busy || !valid} onClick={submit}>{busy ? 'Placing…' : (live ? 'Place LIVE order' : 'Place paper order')}</button>
-          <p className="note">An admin changes paper/live for the whole household in Settings → Trading.</p>
+          <p className="note">An admin sets your paper/live mode on the Team page.</p>
         </div>
       </div>
     </div>

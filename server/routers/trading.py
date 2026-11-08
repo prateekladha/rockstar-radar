@@ -108,10 +108,8 @@ async def place_order(request: Request, user: User = Depends(require_user),
         return JSONResponse({'error': 'Connect your own broker before placing trades.',
                              'need_broker': True}, status_code=403)
 
-    # Trading mode is a HOUSEHOLD setting (admin-controlled), not a per-order choice.
-    from ..models import Household
-    hh = db.get(Household, user.household_id)
-    mode = (hh.trading_mode if hh else 'paper') or 'paper'
+    # Trading mode is a PER-USER setting (an admin sets it on the team page), not a per-order choice.
+    mode = (user.trading_mode or 'paper')
     order_type = (b.get('order_type') or 'limit').lower()
 
     from radar.utils import load_config
