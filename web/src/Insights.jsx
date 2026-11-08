@@ -47,8 +47,8 @@ export default function Insights() {
       </div>
 
       <div className="panel" style={{ marginBottom: 16 }}>
-        <div className="panel-h"><h2>Equity curve</h2><span className="hint">cumulative R over your trades · hover a point</span></div>
-        <div className="panel-b"><TradeChart points={s.equity.map((d, i) => ({ label: d.t, value: d.r, name: '#' + (i + 1) + ' ' + bare(d.symbol) }))} kind="line" unit="R" /></div>
+        <div className="panel-h"><h2>Equity curve</h2><span className="hint">cumulative R by trade number · hover a point</span></div>
+        <div className="panel-b"><TradeChart points={s.equity.map((d, i) => ({ value: d.r, name: '#' + (i + 1) + ' ' + bare(d.symbol) + (d.t ? ' · ' + fmtDay(d.t) : '') }))} kind="line" unit="R" /></div>
       </div>
 
       <div className="rlayout rl-even">
