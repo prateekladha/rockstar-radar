@@ -35,7 +35,8 @@ def _hhmm(dt) -> str:
 
 
 def _is_trading_day(dt) -> bool:
-    return dt.weekday() < 5  # Mon-Fri; NSE holidays are a later refinement
+    from radar.utils import is_market_day
+    return is_market_day(dt.date())  # Mon-Fri OR a special session (e.g. Diwali Muhurat)
 
 
 def _run_once(action: str, today: str) -> bool:

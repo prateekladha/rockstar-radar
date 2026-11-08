@@ -141,9 +141,10 @@ async def run_order_engine() -> None:
     passes = 0
     while True:
         try:
+            from radar.utils import is_market_day
             now = now_ist()
             hhmm = now.strftime('%H:%M')
-            if now.weekday() < 5 and '09:00' <= hhmm <= '15:45':
+            if is_market_day(now.date()) and '09:00' <= hhmm <= '15:45':
                 passes += 1
                 db = SessionLocal()
                 try:

@@ -224,7 +224,8 @@ def start_live(config: dict, selection_path: Path, port: int):
     today = now_ist().date()
     if p.get('for_session') != today.isoformat():
         raise ValueError('Selection is not for today. Run `python launch.py prepare` each trading morning.')
-    if now_ist().weekday() >= 5:
+    from .utils import is_special_session
+    if now_ist().weekday() >= 5 and not is_special_session():
         raise ValueError('It is a weekend in IST. Live alerts disabled; use demo mode.')
     journal = SessionJournal(today)
     def on_signal(sig):

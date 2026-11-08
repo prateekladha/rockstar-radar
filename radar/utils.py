@@ -27,9 +27,38 @@ def bar_start(dt: datetime) -> datetime:
     return t.replace(minute=(t.minute // 5) * 5, second=0, microsecond=0)
 
 
+# Special NSE sessions (e.g. Diwali Muhurat) with a non-standard window. Auto-activates on the date
+# and auto-expires after, so no env toggle to remember. Times are IST.
+_SPECIAL_SESSIONS = {
+    '2026-11-08': {'open_range_start': '14:20', 'watch_start': '14:25',
+                   'new_signals_stop': '15:15', 'label': 'Diwali Muhurat'},
+}
+
+
+def special_session(day: date | None = None) -> dict | None:
+    """The special-session override for `day` (default today IST), or None on a normal day."""
+    key = (day or now_ist().date()).isoformat()
+    return _SPECIAL_SESSIONS.get(key)
+
+
+def is_special_session(day: date | None = None) -> bool:
+    return special_session(day) is not None
+
+
+def is_market_day(day: date | None = None) -> bool:
+    """A normal weekday OR a special trading session (Muhurat can fall on a weekend)."""
+    d = day or now_ist().date()
+    return d.weekday() < 5 or is_special_session(d)
+
+
 def load_config(path: str | Path | None = None) -> dict:
     with open(path or ROOT / 'config.json', encoding='utf-8') as f:
-        return json.load(f)
+        cfg = json.load(f)
+    special = special_session()
+    if special:
+        for k in ('open_range_start', 'watch_start', 'new_signals_stop'):
+            cfg[k] = special[k]
+    return cfg
 
 
 def read_env(path: Path | None = None) -> None:
