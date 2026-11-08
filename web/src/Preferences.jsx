@@ -23,6 +23,11 @@ function SimulationSettings() {
       window.dispatchEvent(new Event('rr-me-changed'))   // update the Paper/Actual toggle instantly
     } catch (e) { setMsg(e.message) }
   }
+  const reset = async () => {
+    if (!window.confirm('Reset the practice simulation? This deletes ALL your simulation trades and P&L and starts a fresh session. Your real paper/live trades are not affected.')) return
+    try { const r = await api('/api/sim/reset', { method: 'POST' }); setMsg(`Simulation reset — cleared ${r.deleted} practice trades.`) }
+    catch (e) { setMsg(e.message) }
+  }
   const on = !!m.sim_enabled
   return (
     <div className="panel" style={{ marginBottom: 16 }}>
@@ -52,8 +57,12 @@ function SimulationSettings() {
           </div>
         </div>
         <p className="note" style={{ marginTop: 8 }}>
-          The session you set plays through the real algo at your chosen speed (e.g. 09:15–15:30 at 30× ≈ 13 min), producing live opening-range breakouts and retest signals, then <strong>replays on a loop</strong> so there's always something to watch. The clock on the Radar is the <strong>simulated session time</strong> (marked “sim-time”, not the real IST clock) — it runs start→end, then restarts. Turn on <strong>Auto paper-trade</strong> (your admin, on the Team page) to watch the algo trade it. Simulation is always <strong>paper</strong> — no broker or money involved.
+          The session you set plays through the real algo at your chosen speed (e.g. 09:15–15:30 at 10× ≈ 40 min), producing live opening-range breakouts and retest signals, then <strong>replays on a loop</strong> so there's always something to watch. The Radar shows which window it's replaying. Turn on <strong>Auto paper-trade</strong> (your admin, on the Team page) to watch the algo trade it. Simulation is always <strong>paper</strong> — no broker or money involved.
         </p>
+        <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+          <button className="btn danger" onClick={reset}>↻ Reset simulation</button>
+          <p className="note" style={{ marginTop: 6 }}>Clears all your practice trades &amp; P&L and restarts a fresh session. Your real paper/live trades are never touched.</p>
+        </div>
       </div>
     </div>
   )

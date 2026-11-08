@@ -151,6 +151,19 @@ async def api_patch_me(request: Request, user: User = Depends(require_user),
     return _me_payload(user)
 
 
+@app.post('/api/sim/reset')
+def api_sim_reset(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Wipe this user's PRACTICE (simulation) trades + P&L and restart a fresh session. Only touches
+    sim orders (sim=1) — real paper/live trades, any date, are never affected."""
+    from .models import Order
+    n = db.query(Order).filter_by(user_id=user.id).filter(Order.sim == 1).delete(
+        synchronize_session=False)
+    db.commit()
+    from . import scanners
+    scanners.stop_sim(user.id)   # next radar load starts a fresh looping session
+    return {'ok': True, 'deleted': n}
+
+
 @app.post('/api/onboarding')
 async def api_onboarding(request: Request, user: User = Depends(require_user),
                          db: Session = Depends(get_db)):
