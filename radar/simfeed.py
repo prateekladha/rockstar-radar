@@ -21,15 +21,19 @@ _BASE_SYMBOLS = ['SIMINFY', 'SIMSBIN', 'SIMTCS', 'SIMRELI', 'SIMHDFC', 'SIMICICI
                  'SIMLT', 'SIMITC', 'SIMWIPRO', 'SIMTATA', 'SIMBHARTI', 'SIMMARUTI', 'SIMSUN',
                  'SIMBAJAJ', 'SIMKOTAK', 'SIMTRENT', 'SIMMCX', 'SIMADANI', 'SIMHIND']
 _FLAT_PROB = 0.35     # fraction of stocks that never break out
-_WIN_PROB = 0.40      # of the breakouts that confirm+retest, how many reach target (rest hit stop)
+_WIN_PROB = 0.48      # of the breakouts that confirm+retest, how many reach target (rest hit stop).
+                      # ~40% realised win rate × ~2.2R target : 1R stop => modest positive expectancy.
 
 # Gradual follow-through paths (price as a fraction of base), consumed one per bar after the retest.
 # LONG: target = base*1.03, stop ~ base*0.996 (ATR). SHORT: target = base*0.97, stop ~ base*1.004.
+# Every path's FIRST step must cross the entry so the order fills (a LONG fills when price ≥ entry≈
+# base·1.005, a SHORT when price ≤ entry≈base·0.9955) — THEN it runs to target (win) or reverses to
+# the stop (loss). Otherwise a loser never fills and the sim shows a fake 100% win rate.
 _PATH = {
     'win':   [1.007, 1.011, 1.016, 1.021, 1.026, 1.030, 1.032],
-    'loss':  [1.003, 1.000, 0.998, 0.9965, 0.995, 0.993],
+    'loss':  [1.007, 1.004, 1.001, 0.999, 0.995, 0.992],         # fills, then rolls to stop (~0.996)
     'swin':  [0.993, 0.989, 0.984, 0.979, 0.974, 0.970, 0.968],
-    'sloss': [0.997, 1.000, 1.002, 1.0035, 1.005, 1.007],
+    'sloss': [0.9945, 0.997, 1.000, 1.002, 1.005, 1.008],        # fills, then rallies to stop (~1.004)
 }
 
 
