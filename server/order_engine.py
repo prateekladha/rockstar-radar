@@ -184,10 +184,12 @@ def _auto_trade(db: Session) -> int:
 
 
 def _square_off_paper(db: Session) -> int:
-    """Intraday safety: force-close any still-open PAPER position when its session ends and the
-    feed-based stop/target didn't trigger — 15:15 (live) or when the sim session completes."""
+    """Intraday safety: force-close any still-open real PAPER position when its session ends and the
+    feed-based stop/target didn't trigger — 15:15 (live) or when the feed's session closes. Simulation
+    orders are EXCLUDED: they live in accelerated sim-time (real 15:15 is irrelevant) and exit purely
+    via target/stop; a real-clock square-off would instantly close them near entry."""
     from radar.utils import now_ist
-    open_paper = db.query(Order).filter_by(status='open', mode='paper').all()
+    open_paper = db.query(Order).filter_by(status='open', mode='paper').filter(Order.sim == 0).all()
     if not open_paper:
         return 0
     live_cutoff = now_ist().strftime('%H:%M') >= '15:15'
