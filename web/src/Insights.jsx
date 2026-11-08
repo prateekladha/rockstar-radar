@@ -24,11 +24,11 @@ export default function Insights() {
   return (
     <div>
       <div className="kpis">
-        <Tile label="Net P&L" val={money(s.realised)} cls="live" sub={`${s.trades} trades`} />
+        <Tile label="Running P&L" val={money(s.running_pnl)} cls="live" sub={s.sim ? 'practice · live' : 'this session · live'} />
+        <Tile label="Realised P&L" val={money(s.realised)} sub={s.sim ? 'sim — not booked' : 'booked · ended sessions'} />
         <Tile label="Win rate" val={s.win_rate + '%'} cls="accent" sub={`${s.wins}W / ${s.losses}L`} />
         <Tile label="Expectancy" val={s.expectancy_r + 'R'} sub="per trade" />
-        <Tile label="Total R" val={s.total_r + 'R'} sub="cumulative" />
-        <Tile label="Avg R" val={s.avg_r + 'R'} sub="per trade" />
+        <Tile label="Total R" val={s.total_r + 'R'} sub={`cumulative · ${s.trades} trades`} />
       </div>
 
       <div className="note" style={{ marginTop: 0, marginBottom: 16 }}>

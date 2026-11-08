@@ -81,6 +81,11 @@
             },
             {
               "@type": "Question",
+              "name": "What is the difference between Running P&L and Realised P&L?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Running P&L is your live total for the current, in-progress trading session: trades already closed this session plus open positions marked to the latest market price. It moves as prices move. Realised P&L is only what is booked once a session has ended — closing a trade mid-session does not realise it, it stays in Running until the session closes. In the practice simulation (which loops continuously) nothing is ever booked, so everything shows as Running. The same figures appear identically on the Trades and Insights pages." }
+            },
+            {
+              "@type": "Question",
               "name": "Do I need to log in to my broker every day?",
               "acceptedAnswer": { "@type": "Answer", "text": "Yes. SEBI regulations require a fresh broker login each trading day for all Indian brokers; programmatic token refresh is not allowed. Rockstar Radar makes this a one-tap daily login." }
             }

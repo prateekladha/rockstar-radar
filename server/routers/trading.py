@@ -289,23 +289,24 @@ def working_orders(user: User = Depends(require_user), db: Session = Depends(get
     return {'items': [o.public() for o in rows], 'total': len(rows)}
 
 
-@router.get('/pnl')
-def pnl(user: User = Depends(require_user), db: Session = Depends(get_db), mode: str = ''):
-    seed_demo_orders(db, user)
+def compute_pnl(db: Session, user: User, mode: str = '') -> dict:
+    """Single source of truth for Running vs Realised P&L — used by both /api/pnl (Trades) and
+    /api/insights so the two pages can never disagree.
+
+    Running P&L = this (in-progress) session's live total: trades closed THIS session + open
+                  positions marked-to-market at the current price. It "runs" as prices move.
+    Realised P&L = only what is BOOKED from sessions that have ENDED. Closing a trade mid-session
+                  does NOT realise it. (Simulation is perpetual practice -> nothing is ever realised;
+                  everything shows as the running total.)"""
     from datetime import timezone
 
     from radar.utils import IST, now_ist
+    from ..order_engine import _price_map
     closed = _scope(db.query(Order).filter_by(user_id=user.id, status='closed'), user, mode).all()
     open_orders = _scope(db.query(Order).filter_by(user_id=user.id, status='open'), user, mode).all()
     working = _scope(db.query(Order).filter_by(user_id=user.id, status='pending'), user, mode).count()
-    from ..order_engine import _price_map
     pm = _price_map(db, user)
 
-    # Running P&L = this (in-progress) session's live total: trades closed THIS session + open
-    #               positions marked-to-market at the current price. It "runs" as prices move.
-    # Realised P&L = only what is BOOKED from sessions that have ENDED. Closing a trade mid-session
-    #               does NOT realise it. (Simulation is perpetual practice -> nothing is ever realised;
-    #               everything shows as the running total.)
     now = now_ist()
     today = now.date()
     sim_ctx = bool(user.sim_enabled)
@@ -332,3 +333,9 @@ def pnl(user: User = Depends(require_user), db: Session = Depends(get_db), mode:
     return {'realised': round(realised, 2), 'running_pnl': round(today_closed + open_unreal, 2),
             'trades': len(closed), 'open': len(open_orders), 'working': working, 'wins': len(wins),
             'sim': sim_ctx, 'win_rate': round(100 * len(wins) / len(closed), 1) if closed else 0}
+
+
+@router.get('/pnl')
+def pnl(user: User = Depends(require_user), db: Session = Depends(get_db), mode: str = ''):
+    seed_demo_orders(db, user)
+    return compute_pnl(db, user, mode)

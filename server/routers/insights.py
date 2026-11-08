@@ -16,7 +16,7 @@ from radar.utils import IST, now_ist
 from ..auth import require_user
 from ..db import get_db
 from ..models import Order, SignalLog, User
-from .trading import seed_demo_orders
+from .trading import compute_pnl, seed_demo_orders
 
 router = APIRouter(tags=['insights'])
 
@@ -62,6 +62,9 @@ def insights(user: User = Depends(require_user), db: Session = Depends(get_db), 
 
     best = max(closed, key=lambda o: o.result_r or 0, default=None)
     worst = min(closed, key=lambda o: o.result_r or 0, default=None)
+    # Headline P&L uses the SAME Running/Realised rule as the Trades page (realisation only after the
+    # session ends; sim is perpetual so nothing is realised) — so the two pages can never disagree.
+    pnl = compute_pnl(db, user, mode)
     return {
         'daily_pnl': daily_pnl,
         'trades': len(closed),
@@ -70,7 +73,7 @@ def insights(user: User = Depends(require_user), db: Session = Depends(get_db), 
         'avg_r': round(sum(rs) / len(rs), 2) if rs else 0,
         'expectancy_r': round(sum(rs) / len(closed), 2) if closed else 0,
         'total_r': round(sum(rs), 2),
-        'realised': round(sum(o.pnl or 0 for o in closed), 2),
+        'realised': pnl['realised'], 'running_pnl': pnl['running_pnl'], 'sim': pnl['sim'],
         'long': by_side('LONG'), 'short': by_side('SHORT'),
         'equity': equity,
         'best': {'symbol': best.symbol, 'r': best.result_r} if best else None,
