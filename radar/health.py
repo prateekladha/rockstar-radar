@@ -20,16 +20,21 @@ def _path(scanner_id: str):
 
 
 def write_health(scanner_id: str, *, ok: bool, need_login: bool = False,
-                 rate_limited: bool = False, reason: str = '') -> None:
+                 rate_limited: bool = False, reason: str = '', warmup: dict | None = None) -> None:
     if not scanner_id:
         return
     try:
         p = _path(scanner_id)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({
+        payload = {
             'ok': bool(ok), 'need_login': bool(need_login), 'rate_limited': bool(rate_limited),
             'reason': reason or '', 'at': datetime.now(timezone.utc).isoformat(),
-        }), encoding='utf-8')
+        }
+        # Warm-up progress ({'done': int, 'total': int, 'phase': str}) — lets the web process show
+        # "Warming up — X/N symbols ready" before the scanner's dashboard is up.
+        if warmup is not None:
+            payload['warmup'] = warmup
+        p.write_text(json.dumps(payload), encoding='utf-8')
     except OSError:
         pass
 

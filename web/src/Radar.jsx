@@ -75,6 +75,12 @@ export default function Radar() {
           ⏳ <strong>Broker API daily limit reached.</strong> {d.reason}
         </div>
       )}
+      {d.warming && (
+        <div className="banner" style={{ marginBottom: 14, borderColor: '#2b4c8a' }}>
+          ⏳ <strong>Live feed warming up{d.warmup ? ` — ${Math.round(100 * d.warmup.done / Math.max(1, d.warmup.total))}%` : ''}.</strong>{' '}
+          {d.reason || 'Preparing today\'s universe…'} First load is slower — it fetches each stock's prior-session history to anchor the opening ranges. This stays live afterwards.
+        </div>
+      )}
       {d.fallback && (
         <div className="banner warn" style={{ marginBottom: 14 }}>
           Your own broker feed is offline — showing your household's shared feed (view-only).{' '}
@@ -87,8 +93,8 @@ export default function Radar() {
         <Kpi label="Ready" val={off ? '—' : d.anchors_ready} sub="opening ranges set" cls="accent" />
         <Kpi label="Signals ready" val={off ? '—' : d.active_candidates} sub="setups to review" cls="live" />
         <Kpi label="Feed" cls={d.sim ? 'accent' : (d.data_mode === 'live' ? 'live' : '')}
-          val={off ? 'Off' : (d.sim ? 'Sim' : (d.data_mode === 'live' ? 'Live' : 'Demo'))}
-          sub={off ? 'starting…' : (d.sim ? 'simulation' : ((d.shared ? 'Shared · ' : '') + (d.universe || feedLabel(d.feed_health))))} />
+          val={off ? (d.warming ? 'Warming' : 'Off') : (d.sim ? 'Sim' : (d.data_mode === 'live' ? 'Live' : 'Demo'))}
+          sub={off ? (d.warming && d.warmup ? `${d.warmup.done}/${d.warmup.total} ready` : 'starting…') : (d.sim ? 'simulation' : ((d.shared ? 'Shared · ' : '') + (d.universe || feedLabel(d.feed_health))))} />
         {d.sim
           ? <Kpi label="Sim session" val={off ? '—' : (d.session_closed ? 'Complete' : 'Running')}
               sub={off ? '' : `${d.sim_start}–${d.sim_end}${d.session_closed ? ' · ended — toggle to rerun' : ' · one pass'}`} cls="accent" />

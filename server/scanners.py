@@ -290,7 +290,21 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
         # failure — show "starting". A truly dead scanner falls through to 'down'.
         if 'starting' in (st.get('reason') or '').lower():
             st.update({'data_mode': 'live', 'source': source, 'shared': source == 'shared',
-                       'universe': label, 'broker': conn.broker})
+                       'universe': label, 'broker': conn.broker, 'warming': True})
+            # Surface real warm-up progress (baselines/feed-connect) from the scanner's health file,
+            # so the UI shows "Warming up — X/N symbols ready" instead of a vague "starting…". Only
+            # trust FRESH progress (within 120s) so a stale value from a prior run isn't shown.
+            hfull = health.read_health(f'u{conn.user_id}') or {}
+            at = health.health_at(hfull)
+            fresh = at is not None and (now_ist() - at).total_seconds() < 120
+            wu = hfull.get('warmup') if fresh else None
+            if wu and wu.get('total'):
+                done, total = int(wu.get('done') or 0), int(wu['total'])
+                if wu.get('phase') == 'connecting':
+                    st['reason'] = f'Connecting live feed… ({done}/{total} symbols ready)'
+                else:
+                    st['reason'] = f'Warming up — {done}/{total} symbols ready'
+                st['warmup'] = {'done': done, 'total': total, 'phase': wu.get('phase') or 'baselines'}
             return 'starting', st
         return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
                         'shared': source == 'shared', 'universe': label, 'broker': conn.broker,

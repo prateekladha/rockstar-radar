@@ -184,13 +184,20 @@ def load_existing_baselines(engine: RadarEngine, today: date) -> int:
 
 
 def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
-                    config: dict, force: bool = False) -> dict[str, dict[str, float]]:
-    """Only previous sessions' 5m candles; cached so market-day startup needs no REST warmup."""
+                    config: dict, force: bool = False, on_progress=None) -> dict[str, dict[str, float]]:
+    """Only previous sessions' 5m candles; cached so market-day startup needs no REST warmup.
+    on_progress(done, total) is called as symbols are processed, so a warming scanner can surface
+    'X/N symbols ready' before its dashboard is up."""
     path = cache_path(day)
     stored = json.loads(path.read_text(encoding='utf-8')) if path.exists() and not force else {}
     from_dt = market_dt(day - timedelta(days=40), '00:00')
     to_dt = market_dt(day, '00:00') - timedelta(seconds=1)
+    total = len(symbols)
+    if on_progress:
+        on_progress(0, total)
     for i, symbol in enumerate(symbols, 1):
+        if on_progress and (i % 5 == 0 or i == total):
+            on_progress(i, total)
         if symbol in stored and stored[symbol]:
             continue
         try:
@@ -263,7 +270,11 @@ def start_live(config: dict, selection_path: Path, port: int):
 
     adapter = FyersAdapter(config)
     print('Loading cached prior-session 5m volume baselines (warm up before 09:15 IST).')
-    baselines = build_baselines(adapter, list(engine.states), today, config)
+
+    def _warm(done, total):
+        write_health(_scanner_id, ok=True, warmup={'done': done, 'total': total, 'phase': 'baselines'})
+
+    baselines = build_baselines(adapter, list(engine.states), today, config, on_progress=_warm)
     good = 0
     for symbol, values in baselines.items():
         if values:
@@ -301,6 +312,7 @@ def start_live(config: dict, selection_path: Path, port: int):
                 engine.update_health(f'Live bar flush issue: {type(e).__name__}: {e}')
             time.sleep(1)
 
+    write_health(_scanner_id, ok=True, warmup={'done': good, 'total': len(info), 'phase': 'connecting'})
     threading.Thread(target=run_socket, daemon=True, name='fyers-data-socket').start()
     threading.Thread(target=flush_loop, daemon=True, name='live-candle-flush').start()
     threading.Thread(target=reconcile_history, args=(adapter, engine, journal),
