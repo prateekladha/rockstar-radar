@@ -15,9 +15,10 @@ RADAR_SCHED=0 to disable.
 """
 from __future__ import annotations
 import asyncio
+import json
 import os
 
-from radar.utils import now_ist
+from radar.utils import ROOT, now_ist
 
 from . import scanners
 from .db import SessionLocal
@@ -27,7 +28,29 @@ _START_AT = os.environ.get('RADAR_SCHED_START_HHMM', '09:08')
 _PNL_AT = os.environ.get('RADAR_SCHED_PNL_HHMM', '15:35')
 _SUPERVISE_UNTIL = os.environ.get('RADAR_SCHED_SUPERVISE_UNTIL_HHMM', '15:35')
 _SUPERVISE_EVERY_MIN = int(os.environ.get('RADAR_SCHED_SUPERVISE_EVERY_MIN', '2'))
-_done: dict[str, str] = {}  # action -> last YYYY-MM-DD it ran
+# action -> last YYYY-MM-DD it ran. PERSISTED to disk so the once-per-day guard survives process
+# restarts/deploys — otherwise every deploy after 15:35 re-sends the daily P&L (and a deploy after
+# 08:30/09:08 re-fires the login reminder / scanner start).
+_DONE_PATH = ROOT / 'data' / 'scheduler_done.json'
+
+
+def _load_done() -> dict[str, str]:
+    try:
+        d = json.loads(_DONE_PATH.read_text(encoding='utf-8'))
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _save_done() -> None:
+    try:
+        _DONE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DONE_PATH.write_text(json.dumps(_done), encoding='utf-8')
+    except OSError:
+        pass
+
+
+_done: dict[str, str] = _load_done()
 _last_supervise_min: int | None = None
 
 
@@ -44,6 +67,7 @@ def _run_once(action: str, today: str) -> bool:
     if _done.get(action) == today:
         return False
     _done[action] = today
+    _save_done()   # persist so a later restart/deploy won't re-fire this action today
     return True
 
 
