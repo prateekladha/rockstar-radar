@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from .aggregator import LiveCandleBuilder
 from .engine import RadarEngine, same_time_baseline
+from .health import write_health
 from .fyers import (ApiAuthError, ApiError, ApiPermissionError,
                     ApiProviderError, ApiRateLimitError, FyersAdapter)
 from .models import Candle, Signal
@@ -224,7 +225,6 @@ def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
 def start_live(config: dict, selection_path: Path, port: int):
     # Selection already succeeded (it made FYERS calls), so the token is valid as the feed launches.
     # The web process reads this to show a real "live" vs a Reconnect CTA.
-    from .health import write_health
     _scanner_id = os.environ.get('RADAR_SCANNER_ID', '')
     write_health(_scanner_id, ok=True)
     p, info = read_selection(selection_path)
@@ -315,13 +315,14 @@ def start_live(config: dict, selection_path: Path, port: int):
     write_health(_scanner_id, ok=True, warmup={'done': good, 'total': len(info), 'phase': 'connecting'})
     threading.Thread(target=run_socket, daemon=True, name='fyers-data-socket').start()
     threading.Thread(target=flush_loop, daemon=True, name='live-candle-flush').start()
-    threading.Thread(target=reconcile_history, args=(adapter, engine, journal),
+    threading.Thread(target=reconcile_history, args=(adapter, engine, journal, _scanner_id),
                      daemon=True, name='history-candle-reconciliation').start()
     from .dashboard import serve
     serve(engine, port=port)
 
 
-def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: SessionJournal):
+def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: SessionJournal,
+                      scanner_id: str = ''):
     """REST history verifies OR and full close; never confirms using incomplete websocket ticks."""
     checked = {}  # symbol -> most recent completed candle timestamp queried
     anchor_attempts = {}  # prevent one invalid symbol from starving the other 99
@@ -412,7 +413,7 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
                 reason = 'Live broker data is temporarily unavailable. Please try again shortly.'
             engine.halt(reason)
             # Signal the web process: auth -> Reconnect CTA; rate-limit -> a clear banner.
-            write_health(_scanner_id, ok=False, need_login=isinstance(e, ApiAuthError),
+            write_health(scanner_id, ok=False, need_login=isinstance(e, ApiAuthError),
                          rate_limited=rate_limited, reason=reason)
             print('FATAL: FYERS data API unavailable; stopping live confirmation. '
                   'Do not trade from cached Radar statuses. ' + str(e)[:160])
