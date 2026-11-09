@@ -332,6 +332,14 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
     start = market_dt(engine.session, '09:15')
     while True:
         now = now_ist()
+        mono = time.monotonic()
+        if mono - last_heartbeat >= 120:   # visibility: how fast are we spending the daily REST budget
+            last_heartbeat = mono
+            try:
+                print(f'reconcile: FYERS history requests used today = {adapter.limit.daily}/'
+                      f'{adapter.limit.per_day}')
+            except Exception:
+                pass
         if now.date() != engine.session:
             engine.update_health('Session finished; restart with today selection next trading day')
             return
@@ -357,8 +365,14 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
         missing_anchors = [sym for sym in missing_anchors if
                            sym not in anchor_attempts or
                            (now - anchor_attempts[sym]).total_seconds() >= 80]
+        # Default: reconcile only symbols with an actual fired provisional signal (or confirmed,
+        # tracking) — not every symbol hovering near its OR boundary. This is what kept the daily
+        # FYERS budget from lasting the full session. Set reconcile_signals_only=false to revert to
+        # the wider near-boundary net.
+        _verify = (engine.pending_reconcile if cfg.get('reconcile_signals_only', True)
+                   else engine.needs_verification)
         active = [sym for sym in engine.states
-                  if sym not in missing_anchors and engine.needs_verification(sym)
+                  if sym not in missing_anchors and _verify(sym)
                   and checked.get(sym, 0) < target_epoch]
         # Unconfirmed ticks crossing/approaching boundary can enter the priority pool.
         queue = (active[:25] if active else []) + missing_anchors

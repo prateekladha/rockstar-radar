@@ -483,6 +483,27 @@ class RadarEngine:
             return ((abs(p - st.opening.high) / st.opening.high <= buf) or
                     (abs(p - st.opening.low) / st.opening.low <= buf))
 
+    def pending_reconcile(self, symbol: str) -> bool:
+        """Symbols REST reconciliation must re-fetch this cycle: those with a FIRED-but-unvalidated
+        provisional breakout/retest signal, or a confirmed setup still tracking toward its retest.
+
+        Deliberately NARROWER than needs_verification (which returns True for ANY symbol merely within
+        ~0.7% of its opening range — most of the universe, most of the day). A breakout is always
+        detected first by the websocket (ingest_live_bar fires the PROVISIONAL signal and sets
+        confirm_provisional/retest_provisional); REST only validates it afterwards. So a near-boundary
+        symbol with no fired provisional has nothing to validate — and the moment it breaks out on the
+        websocket it re-enters this set. This keeps REST spend proportional to real signals, not to the
+        ~80 symbols/bar that just hover near their range (which is what exhausted the daily budget)."""
+        with self.lock:
+            st = self.states.get(symbol)
+            if st is None or not st.opening or st.state == 'SESSION_CONSUMED':
+                return False
+            if st.confirm_provisional or st.retest_provisional:
+                return True                                  # a fired provisional awaiting validation
+            if st.confirmed_at and st.state not in ('RETEST_READY', 'FAILED', 'EXPIRED', 'RISK_FAIL'):
+                return True                                  # confirmed, tracking toward the retest
+            return False
+
     def _ticket_size(self, st: SymbolState) -> dict:
         """Suggested qty + rupee risk for the full ticket (manual trade; no auto-orders)."""
         if not st.entry or not st.stop:
