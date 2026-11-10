@@ -411,8 +411,10 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
             failures_in_a_row = 0
             if symbol in missing_anchors and not engine.states[symbol].opening:
                 anchor_attempts[symbol] = now
-        except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError) as e:
-            # User-facing halt reason — no CLI/dev hints. Technical detail stays in the server log.
+        except (ApiRateLimitError, ApiAuthError, ApiPermissionError) as e:
+            # NON-recoverable by retry — stop cleanly and tell the user what to do. (A restart won't
+            # fix any of these: auth needs a fresh login, permission a broker-app change, rate-limit
+            # a daily reset.) No CLI/dev hints; technical detail stays in the server log.
             rate_limited = isinstance(e, ApiRateLimitError)
             if isinstance(e, ApiAuthError):
                 reason = ('Your broker session has expired. Log in to your broker for today to '
@@ -420,27 +422,28 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
             elif isinstance(e, ApiPermissionError):
                 reason = ('Your broker app is missing Market Data (quotes & history) permission. '
                           'Enable it in your broker app, then restart the scan.')
-            elif rate_limited:
+            else:  # rate_limited
                 reason = ('Your broker hit its daily API limit (FYERS Standard allows 5,000 '
                           'requests/day). Live scanning pauses and resumes when the limit resets '
                           'next trading day. This is a broker limit, not a Rockstar Radar issue.')
-            else:
-                reason = 'Live broker data is temporarily unavailable. Please try again shortly.'
             engine.halt(reason)
-            # Signal the web process: auth -> Reconnect CTA; rate-limit -> a clear banner.
             write_health(scanner_id, ok=False, need_login=isinstance(e, ApiAuthError),
                          rate_limited=rate_limited, reason=reason)
             print('FATAL: FYERS data API unavailable; stopping live confirmation. '
                   'Do not trade from cached Radar statuses. ' + str(e)[:160])
             return
         except ApiError as e:
+            # TRANSIENT (generic history error, provider outage, bad input): must NOT permanently kill
+            # the feed — a brief blip at the open once took the scanner offline all day. Back off and
+            # keep retrying; the loop resumes the instant FYERS recovers (failures reset on the next
+            # success, above). The RateLimiter + escalating backoff keep this from becoming a request
+            # storm (worst case ~1 req / 90s during a sustained outage).
             failures_in_a_row += 1
-            if failures_in_a_row >= 3:
-                engine.halt('Repeated FYERS historical data failures; scanning stopped')
-                print('FATAL: Repeated FYERS history errors. Scanner halted to prevent retry storm.')
-                return
-            engine.update_health(f'History sync error ({failures_in_a_row}/3): {str(e)[:120]}')
-            time.sleep(1)
+            backoff = min(5 * failures_in_a_row, 90)
+            engine.update_health(f'Live data reconnecting — FYERS history error '
+                                 f'(retry {failures_in_a_row}): {str(e)[:110]}')
+            print(f'reconcile: history error #{failures_in_a_row}, backing off {backoff}s: {str(e)[:160]}')
+            time.sleep(backoff)
         except Exception as e:
             engine.update_health(f'History reconcile issue: {type(e).__name__}: {e}')
             time.sleep(1)

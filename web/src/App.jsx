@@ -35,13 +35,19 @@ const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings', '/preferen
 
 export default function App() {
   const [user, setUser] = useState(undefined)
+  const loadedOnce = useRef(false)   // have we ever gotten a definitive answer from /api/me?
   const loadMe = async () => {
     try {
       const r = await api('/api/me')
-      const u = r.__unauth ? null : r
-      setUser(u)
-      if (u) identify(u)
-    } catch { setUser(null) }
+      loadedOnce.current = true
+      if (r.__unauth) { setUser(null); return }   // a real 401 — genuinely logged out
+      setUser(r); identify(r)
+    } catch {
+      // Transient network/timeout/5xx (common on mobile under load): do NOT flip to the marketing
+      // page — that briefly logs out a signed-in user. Keep whatever we have; if we've never loaded
+      // successfully, stay on "Loading…" and retry so we don't get stuck or flash the landing page.
+      if (!loadedOnce.current) setTimeout(loadMe, 1500)
+    }
   }
   // Keep the user fresh so changes (e.g. toggling simulation) reflect immediately (event) and as a
   // fallback on a timer.
