@@ -107,6 +107,13 @@ def main():
         elif args.command in ('prepare', 'run'):
             from radar.fyers import FyersAdapter
             from radar.selecting import download_nifty_csv, prepare_selection, read_selection, load_morning_pins
+            from radar.utils import holiday, is_market_day
+            # Non-trading day (NSE holiday or weekend, unless it's a special session): do NOT run
+            # selection/baselines — that would burn hundreds of FYERS requests for a market that's shut.
+            if not is_market_day():
+                h = holiday()
+                print(f'Market closed today ({h or "weekend"}). No scan; no FYERS requests made.')
+                return
             # At/after the configured scan window, don't launch hundreds of
             # selection REST requests just to open a review-only dashboard.
             # A previously saved same-day selection is mandatory for review.

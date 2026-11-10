@@ -60,6 +60,21 @@ _SPECIAL_SESSIONS = {
 }
 
 
+# NSE equity trading HOLIDAYS (weekday closures) — the market is shut even though it's a weekday, so
+# don't start scanners / burn FYERS requests, and show users a clean "market closed" message. Source:
+# official NSE 2026 holiday calendar. Update yearly. (Weekend holidays are already covered by weekday()>=5;
+# listing a weekend date here is harmless.) A special session (Muhurat) overrides this.
+_HOLIDAYS = {
+    '2026-01-26': 'Republic Day', '2026-03-03': 'Holi', '2026-03-26': 'Shri Ram Navami',
+    '2026-03-31': 'Shri Mahavir Jayanti', '2026-04-03': 'Good Friday',
+    '2026-04-14': 'Dr. Baba Saheb Ambedkar Jayanti', '2026-05-01': 'Maharashtra Day',
+    '2026-05-28': 'Bakri Id', '2026-06-26': 'Muharram', '2026-09-14': 'Ganesh Chaturthi',
+    '2026-10-02': 'Mahatma Gandhi Jayanti', '2026-10-20': 'Dussehra',
+    '2026-11-10': 'Diwali-Balipratipada', '2026-11-24': 'Prakash Gurpurb Sri Guru Nanak Dev',
+    '2026-12-25': 'Christmas',
+}
+
+
 def special_session(day: date | None = None) -> dict | None:
     """The special-session override for `day` (default today IST), or None on a normal day."""
     key = (day or now_ist().date()).isoformat()
@@ -70,10 +85,22 @@ def is_special_session(day: date | None = None) -> bool:
     return special_session(day) is not None
 
 
-def is_market_day(day: date | None = None) -> bool:
-    """A normal weekday OR a special trading session (Muhurat can fall on a weekend)."""
+def holiday(day: date | None = None) -> str | None:
+    """The NSE holiday name for `day` (default today IST), or None. A special session is NOT a
+    holiday (Muhurat trades)."""
     d = day or now_ist().date()
-    return d.weekday() < 5 or is_special_session(d)
+    if is_special_session(d):
+        return None
+    return _HOLIDAYS.get(d.isoformat())
+
+
+def is_market_day(day: date | None = None) -> bool:
+    """A trading day: a weekday that is NOT an NSE holiday, OR a special session (Muhurat, which can
+    fall on a weekend/holiday)."""
+    d = day or now_ist().date()
+    if is_special_session(d):
+        return True
+    return d.weekday() < 5 and holiday(d) is None
 
 
 def load_config(path: str | Path | None = None) -> dict:

@@ -61,6 +61,14 @@ export default function Radar() {
       <div style={{ marginTop: 20 }}><button className="btn primary btn-lg" onClick={() => nav('/brokers')}>Log in for today</button></div>
     </div></div></div>
   )
+  if (d.market_closed) return (
+    <div className="panel"><div className="panel-b"><div className="empty" style={{ padding: '64px 20px' }}>
+      <div style={{ fontSize: 34, marginBottom: 12 }}>🏖️</div>
+      <div className="big">{d.holiday ? `Market closed — ${d.holiday}` : 'Market closed'}</div>
+      <div style={{ maxWidth: 460, margin: '6px auto 0' }}>{d.reason}</div>
+      <div className="note" style={{ marginTop: 16 }}>Practice anytime with the <a onClick={() => nav('/preferences')} style={{ cursor: 'pointer', fontWeight: 700 }}>simulation</a>.</div>
+    </div></div></div>
+  )
   const off = d.offline
 
   return (

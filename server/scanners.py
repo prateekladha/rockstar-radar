@@ -341,6 +341,16 @@ def radar_state(db: Session, user: User) -> dict:
         st.update({'source': 'sim', 'sim': True, 'universe': 'Simulation', 'broker': 'sim',
                    'sim_start': user.sim_start or '09:15', 'sim_end': user.sim_end or '15:30'})
         return st
+    # Non-trading day (NSE holiday / weekend, unless a special Muhurat session): show a clean
+    # "market closed" state and do NOT start a scanner — the broker has no data, so running one just
+    # wastes FYERS requests and shows a broken feed.
+    from radar.utils import holiday as _holiday, is_market_day
+    if not is_market_day():
+        h = _holiday()
+        return {'offline': True, 'market_closed': True, 'data_mode': 'none',
+                'universe': U.label_for(_universe_index(user)), 'holiday': h or '',
+                'reason': (f'Market closed today — {h}. Live scanning resumes next trading day.' if h
+                           else 'Market closed for the weekend. Live scanning resumes next trading day.')}
     label = U.label_for(_universe_index(user))
     own = _own_broker(db, user)
     fallback_state = None   # best non-usable state to show if nothing is usable
