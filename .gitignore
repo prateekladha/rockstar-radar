@@ -15,3 +15,6 @@ web/node_modules/
 web/dist/
 .venv/
 .DS_Store
+
+# Claude Code runtime lock (not shared)
+.claude/scheduled_tasks.lock
