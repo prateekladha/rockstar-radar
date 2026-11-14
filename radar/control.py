@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -349,3 +350,19 @@ class ControlCenter:
                 return json.loads(resp.read().decode('utf-8'))
         except (urllib.error.URLError, OSError, ValueError):
             return {'offline': True, 'reason': 'Scanner starting (preparing universe)…'}
+
+    def replay_state(self, symbol: str) -> dict:
+        """Proxy the scanner's per-symbol session replay (trade debugger)."""
+        if not self.scanner_status()['running']:
+            return {'offline': True, 'reason': 'Scanner not running'}
+        url = (f'http://127.0.0.1:{self.scanner_port}/api/replay?symbol='
+               + urllib.parse.quote(symbol, safe=''))
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return {'offline': True, 'reason': 'That stock is not in this session\'s scan.'}
+            return {'offline': True, 'reason': 'Replay is not available right now.'}
+        except (urllib.error.URLError, OSError, ValueError):
+            return {'offline': True, 'reason': 'Replay is not available right now.'}

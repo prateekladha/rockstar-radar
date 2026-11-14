@@ -513,6 +513,59 @@ class RadarEngine:
         return {'qty': s['qty'] or None, 'risk_budget': s['risk_budget'],
                 'risk_amount': s['actual_risk']}
 
+    def replay(self, symbol: str) -> dict:
+        """One symbol's whole session, bar by bar: completed candles plus every state transition
+        with the reasoning behind it.
+
+        This is the trade debugger's data source. The scrubber replays the session so a user can
+        see exactly what the engine saw at the moment it fired — or refused to. Events carry an
+        epoch `t` so the UI can align them to the bar that produced them; provisional bars are
+        flagged so a retraction reads as 'this bar was live-only and the authoritative one
+        disagreed' rather than an unexplained reversal.
+        """
+        with self.lock:
+            st = self.states.get(symbol)
+            if st is None:
+                return {}
+            bars = sorted(st.completed.values(), key=lambda c: c.at)
+            candles = [{'t': int(c.at.timestamp()), 'open': c.open, 'high': c.high, 'low': c.low,
+                        'close': c.close, 'volume': c.volume,
+                        'provisional': int(c.at.timestamp()) in st.provisional_ts}
+                       for c in bars]
+            events = []
+            for e in self.events:
+                if e.symbol != symbol:
+                    continue
+                try:
+                    at = datetime.strptime(e.time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=IST)
+                except ValueError:
+                    continue   # a malformed restored row must not break the whole replay
+                events.append({**asdict(e), 't': int(at.timestamp())})
+            events.sort(key=lambda e: e['t'])
+            op = st.opening
+            # Is this session still producing bars? The UI polls to follow along live, and must
+            # stop once the day is done rather than re-fetching an unchanging payload forever.
+            # One bar of slack past the close so the final bar's reconciliation still arrives.
+            sess_close = self.config.get('session_close') or '15:30'
+            wall = now_ist()
+            live = (wall.date() == self.session and
+                    wall < market_dt(self.session, sess_close) +
+                    timedelta(minutes=self.config.get('open_range_minutes', 5)))
+            return {
+                'symbol': symbol, 'session': self.session.isoformat(), 'mode': self.mode,
+                'live': live,
+                'opening': ({'t': int(op.at.timestamp()), 'high': round(op.high, 2),
+                             'low': round(op.low, 2)} if op else None),
+                'candles': candles, 'events': events,
+                'final': {'state': st.state, 'side': st.side, 'score': st.score,
+                          'reason': st.reason, 'entry': st.entry, 'stop': st.stop,
+                          'target': st.target,
+                          'net_rr': round(st.net_rr, 2) if st.net_rr is not None else None},
+                'info': {'industry': st.info.industry, 'atr_pct': st.info.daily_atr_pct,
+                         'turnover_cr': st.info.median_turnover_cr},
+                'bar_minutes': self.config.get('open_range_minutes', 5),
+            }
+
     def snapshot(self, reference_time: datetime | None = None):
         with self.lock:
             now = (reference_time or now_ist()).astimezone(IST)

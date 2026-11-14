@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, fmt, bare } from './api.js'
 import Chart from './Chart.jsx'
+import Replay from './Replay.jsx'
 import { PlaceOrder } from './Trades.jsx'
 import { Chip, Select, Checkbox, SearchInput, label } from './ui.jsx'
 
@@ -17,6 +18,7 @@ export default function Radar() {
   const [f, setF] = useState({ q: '', source: '', side: '', state: '' })
   const [showAll, setShowAll] = useState(false)
   const [chartFor, setChartFor] = useState(null)
+  const [replayFor, setReplayFor] = useState(null)
   const [orderFor, setOrderFor] = useState(null)
   const nav = useNavigate()
   const timer = useRef(null)
@@ -112,7 +114,8 @@ export default function Radar() {
 
       {tickets.length > 0 && (
         <div className="tickets">{tickets.map((r, i) => <Ticket key={i} r={r}
-          onChart={() => setChartFor(r)} onTrade={() => setOrderFor(r)} />)}</div>
+          onChart={() => setChartFor(r)} onReplay={() => setReplayFor(r)}
+          onTrade={() => setOrderFor(r)} />)}</div>
       )}
 
       <div className="rlayout">
@@ -137,7 +140,7 @@ export default function Radar() {
                 <th className="num">Entry / Stop / Target</th><th className="num">Qty · Risk</th></tr></thead>
               <tbody>
                 {off ? <tr><td colSpan="9"><div className="empty"><div className="big">{d.reason || 'Scanner idle'}</div>Starting up…</div></td></tr>
-                  : rows.length ? rows.map((r, i) => <Row key={i} r={r} onChart={() => setChartFor(r)} />)
+                  : rows.length ? rows.map((r, i) => <Row key={i} r={r} onReplay={() => setReplayFor(r)} />)
                     : <tr><td colSpan="9"><div className="empty">No opportunities right now. Breakouts appear here as they form.</div></td></tr>}
               </tbody>
             </table>
@@ -157,6 +160,7 @@ export default function Radar() {
         </div>
       </div>
       {chartFor && <Chart symbol={chartFor.symbol} levels={toPreset(chartFor)} onClose={() => setChartFor(null)} />}
+      {replayFor && <Replay symbol={replayFor.symbol} onClose={() => setReplayFor(null)} />}
       {orderFor && <PlaceOrder preset={toPreset(orderFor)} onClose={() => setOrderFor(null)} onDone={() => setOrderFor(null)} />}
     </>
   )
@@ -172,7 +176,7 @@ function humanNote(e) {
 const Kpi = ({ label, val, sub, cls }) => (
   <div className={'kpi ' + (cls || '')}><div className="label">{label}</div><div className="val">{val}</div><div className="sub">{sub}</div></div>
 )
-const Ticket = ({ r, onChart, onTrade }) => (
+const Ticket = ({ r, onChart, onReplay, onTrade }) => (
   <div className={'ticket ' + (r.side || '').toLowerCase()}>
     <div className="top"><div className="sym">{bare(r.symbol)}</div><Chip state={r.state} prov={r.provisional} /></div>
     <div className="ladder">
@@ -181,15 +185,16 @@ const Ticket = ({ r, onChart, onTrade }) => (
       <div className="c"><div className="k">Target</div><div className="v up">{fmt(r.target)}</div></div></div>
     <div className="meta"><span>{label(r.side)}</span><span>R:R <b>{r.net_rr != null ? r.net_rr.toFixed(2) : '—'}</b></span>
       <span>Qty <b>{r.qty ?? '—'}</b></span><span>Risk <b>{r.risk_amount != null ? '₹' + Math.round(r.risk_amount) : '—'}</b></span></div>
-    <div className="row" style={{ marginTop: 12 }}>
+    <div className="row" style={{ marginTop: 12, gap: 8 }}>
       <button className="btn primary" style={{ flex: 1, justifyContent: 'center' }} onClick={onTrade}>Trade</button>
+      <button className="btn" style={{ flex: 1, justifyContent: 'center' }} onClick={onReplay}>Replay</button>
       <button className="btn" style={{ flex: 1, justifyContent: 'center' }} onClick={onChart}>Chart</button>
     </div>
   </div>
 )
-const Row = ({ r, onChart }) => (
-  <tr style={{ cursor: 'pointer' }} onClick={onChart}>
-    <td className="sym-cell"><a onClick={e => { e.preventDefault(); onChart() }} href="#">{bare(r.symbol)}</a></td>
+const Row = ({ r, onReplay }) => (
+  <tr style={{ cursor: 'pointer' }} onClick={onReplay}>
+    <td className="sym-cell"><a onClick={e => { e.preventDefault(); onReplay() }} href="#">{bare(r.symbol)}</a></td>
     <td className={sideCls(r.side)}>{r.side ? label(r.side) : '—'}</td>
     <td><Chip state={r.state} prov={r.provisional} /></td>
     <td className="num">{fmt(r.price)}</td>
