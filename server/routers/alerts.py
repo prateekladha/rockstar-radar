@@ -1,14 +1,17 @@
 """Per-user alert rules + channels (Telegram token encrypted)."""
 from __future__ import annotations
+from datetime import timezone
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from radar.notify import send_telegram
+from radar.notify import get_telegram_chats, send_telegram
+from radar.utils import IST
 
 from ..auth import require_user
 from ..crypto import decrypt, encrypt
 from ..db import get_db
-from ..models import AlertConfig, User
+from ..models import AlertConfig, AlertDelivery, User
 
 router = APIRouter(prefix='/api/alerts', tags=['alerts'])
 
@@ -20,6 +23,13 @@ ALERT_STATES = ['CONFIRMED', 'RETEST_READY', 'BREAKOUT_PENDING', 'READY']
 def _clean_states(states) -> list[str]:
     seen = [s for s in (states or []) if s in ALERT_STATES]
     return seen or ['RETEST_READY', 'CONFIRMED']
+
+
+def _ist(dt) -> str:
+    """Timestamps are stored naive UTC; everything the user reads is IST."""
+    if dt is None:
+        return ''
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(IST).strftime('%H:%M:%S')
 
 
 def _config(db: Session, user: User) -> AlertConfig:
@@ -35,11 +45,28 @@ def _config(db: Session, user: User) -> AlertConfig:
 @router.get('')
 def get_alerts(user: User = Depends(require_user), db: Session = Depends(get_db)):
     c = _config(db, user)
+    # The delivery log is the honest answer to "is this actually working?" — far better than a
+    # Test button, which only proves the chat id is reachable.
+    recent = (db.query(AlertDelivery).filter_by(user_id=user.id)
+              .order_by(AlertDelivery.sent_at.desc()).limit(12).all())
     return {'enabled': bool(c.enabled), 'states': _clean_states(c.states), 'min_score': c.min_score,
             'available_states': ALERT_STATES,
             'channels': c.channels or {}, 'telegram_chat_id': c.telegram_chat_id or '',
             'has_telegram_token': bool(c.telegram_token_enc),
-            'quiet_from': c.quiet_from or '', 'quiet_to': c.quiet_to or ''}
+            'quiet_from': c.quiet_from or '', 'quiet_to': c.quiet_to or '',
+            'recent': [{'symbol': d.symbol, 'side': d.side, 'state': d.state, 'ok': bool(d.ok),
+                        'detail': d.detail or '', 'at': _ist(d.sent_at)}
+                       for d in recent]}
+
+
+@router.get('/chats')
+def discover_chats(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """List the groups/chats this user's bot can post to, so nobody has to hunt for a chat id."""
+    c = _config(db, user)
+    token = decrypt(c.telegram_token_enc)
+    if not token:
+        return {'ok': False, 'chats': [], 'message': 'Save your bot token first.'}
+    return get_telegram_chats(token)
 
 
 @router.put('')
@@ -70,5 +97,5 @@ def test_alert(user: User = Depends(require_user), db: Session = Depends(get_db)
     token = decrypt(c.telegram_token_enc)
     if not token or not c.telegram_chat_id:
         return {'ok': False, 'message': 'Set your Telegram bot token and chat id first.'}
-    return send_telegram('✅ Rockstar Radar — your alerts are connected.',
-                         token=token, chat_id=c.telegram_chat_id)
+    from ..alerting import sample_message
+    return send_telegram(sample_message(user), token=token, chat_id=c.telegram_chat_id)

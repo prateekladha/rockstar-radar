@@ -8,6 +8,7 @@ follow-through is gradual over several bars, so positions stay open long enough 
 No FYERS, no login — pure simulation.
 """
 from __future__ import annotations
+import os
 import random
 import threading
 import time as _time
@@ -129,7 +130,20 @@ def run_sim(config: dict, port: int):
     day = now_ist().date()
     bars = _bars(config, day)
     instruments = _instruments()
-    engine = RadarEngine(instruments, config, day, mode='SIMULATION')
+
+    def on_signal(sig):
+        """Rehearse the live Telegram path without a broker. OPT-IN: an accelerated session fires
+        dozens of signals in minutes, so merely switching practice mode on must never flood a
+        phone. Every message is stamped as practice so it cannot be mistaken for a real setup."""
+        if os.environ.get('RADAR_SIM_TELEGRAM') != '1':
+            return
+        try:
+            from .notify import notify_signal
+            notify_signal(sig, config, simulated=True)
+        except Exception as e:      # a notifier failure must never break the simulation
+            print(f'Sim Telegram notify failed: {type(e).__name__}: {e}')
+
+    engine = RadarEngine(instruments, config, day, mode='SIMULATION', on_signal=on_signal)
     bl = {b.strftime('%H:%M'): 50000 for b in bars}
     for ins in instruments:
         engine.set_baseline(ins.symbol, bl)

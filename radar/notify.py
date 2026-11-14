@@ -54,7 +54,54 @@ def send_telegram(text: str, token: Optional[str] = None,
         return {'ok': False, 'message': f'Telegram unreachable: {e}'}
 
 
-def format_ticket(sig, config: dict) -> str:
+def get_telegram_chats(token: str) -> dict:
+    """Discover the chats this bot can post to. Returns {ok, chats:[{id,title,type}], message}.
+
+    Telegram has no "list my chats" endpoint — a bot only learns a chat exists once something
+    happens there. So the user adds the bot to their group and we read the chat back out of
+    getUpdates. `my_chat_member` matters as much as `message`: group privacy mode is ON by
+    default, which hides ordinary group chatter from bots, but being ADDED to a group always
+    produces an update. That makes "add the bot" alone enough to find the group id.
+    """
+    token = (token or '').strip()
+    if not token:
+        return {'ok': False, 'chats': [], 'message': 'Save the bot token first.'}
+    url = f'https://api.telegram.org/bot{token}/getUpdates?limit=100&timeout=0'
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            body = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        try:
+            desc = json.loads(e.read().decode()).get('description', str(e))
+        except Exception:
+            desc = str(e)
+        return {'ok': False, 'chats': [], 'message': f'Telegram error: {desc}'}
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return {'ok': False, 'chats': [], 'message': f'Telegram unreachable: {e}'}
+    if not body.get('ok'):
+        return {'ok': False, 'chats': [],
+                'message': body.get('description') or 'Telegram rejected the bot token.'}
+    seen, chats = set(), []
+    for upd in body.get('result') or []:
+        for key in ('message', 'edited_message', 'channel_post', 'my_chat_member',
+                    'chat_member', 'callback_query'):
+            chat = (upd.get(key) or {}).get('chat')
+            if not isinstance(chat, dict) or chat.get('id') in seen:
+                continue
+            seen.add(chat['id'])
+            title = (chat.get('title')
+                     or ' '.join(x for x in (chat.get('first_name'), chat.get('last_name')) if x)
+                     or chat.get('username') or str(chat['id']))
+            chats.append({'id': str(chat['id']), 'title': title,
+                          'type': chat.get('type') or ''})
+    if not chats:
+        return {'ok': True, 'chats': [],
+                'message': ('No chats seen yet. Add the bot to your group, then send any message '
+                            'there (or /start) and try again.')}
+    return {'ok': True, 'chats': chats, 'message': f'Found {len(chats)}.'}
+
+
+def format_ticket(sig, config: dict, simulated: bool = False) -> str:
     """Build the HTML message for a signal, including suggested qty and rupee risk."""
     bare = sig.symbol.replace('NSE:', '').replace('-EQ', '')
     prov = ' ⚠️<b>PROVISIONAL</b> (live, pending confirm)' if getattr(sig, 'provisional', False) else ''
@@ -62,7 +109,12 @@ def format_ticket(sig, config: dict) -> str:
               'CONFIRMED': f'✅ <b>{bare}</b> {sig.side} — breakout confirmed',
               'RETRACTED': f'🛑 <b>{bare}</b> — signal RETRACTED (stand down)'}.get(
                   sig.state, f'<b>{bare}</b> {sig.side} — {sig.state}')
-    lines = [header + prov, f'<i>{sig.time} IST · score {sig.score}</i>']
+    lines = []
+    if simulated:
+        # First line, before the symbol: on a phone this is often all you read at a glance, and a
+        # practice ticket carries real-looking prices and quantities.
+        lines.append('🧪 <b>PRACTICE SIMULATION</b> — synthetic feed, not a real trade')
+    lines += [header + prov, f'<i>{sig.time} IST · score {sig.score}</i>']
     if sig.state == 'RETEST_READY' and sig.entry and sig.stop:
         s = position_size(sig.entry, sig.stop, config.get('capital_inr', 0),
                           config.get('risk_pct', 0))
@@ -83,8 +135,8 @@ def format_ticket(sig, config: dict) -> str:
     return '\n'.join(lines)
 
 
-def notify_signal(sig, config: dict) -> None:
+def notify_signal(sig, config: dict, simulated: bool = False) -> None:
     """Fire-and-forget push for an actionable signal; silent if unconfigured."""
     if sig.state not in ALERT_STATES or not telegram_configured():
         return
-    send_telegram(format_ticket(sig, config))
+    send_telegram(format_ticket(sig, config, simulated=simulated))
