@@ -1,0 +1,52 @@
+name: Deploy to prod
+
+# Fires when main is updated (i.e. a PR is merged, or an admin pushes directly). Runs on the
+# SELF-HOSTED runner that lives ON the OCI VM, so the deploy happens locally: no Bastion, no SSH, no
+# OCI keys in GitHub, no IP allow-list changes. The runner connects OUT to GitHub (no inbound ports).
+#
+# Security: this executes on the production VM. It is gated by branch protection (only reviewed,
+# merged code reaches main) and triggers on push to main only — never on pull_request, so a fork PR
+# can never run it. The runner user (ubuntu) uses passwordless sudo for the three deploy commands.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Never let two deploys overlap; let an in-flight one finish rather than cancel mid-restart.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, oci-prod]
+    steps:
+      - name: Sync /opt/rockstar_radar to origin/main
+        run: |
+          set -euo pipefail
+          cd /opt/rockstar_radar
+          sudo git fetch --prune origin main
+          sudo git reset --hard origin/main
+          echo "deployed commit: $(sudo git rev-parse --short HEAD)"
+
+      - name: Build image + restart stack
+        run: |
+          set -euo pipefail
+          cd /opt/rockstar_radar/deploy/oci
+          sudo docker compose build radar
+          sudo systemctl restart rockstar.service
+
+      - name: Health check (fail the deploy if prod isn't 200)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://intraday.live/ || echo 000)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "✅ prod healthy"; exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ prod did not return 200 after restart"; exit 1
