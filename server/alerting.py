@@ -21,6 +21,15 @@ from .crypto import decrypt
 from .models import AlertConfig, AlertDelivery, User
 
 DEFAULT_STATES = ['CONFIRMED', 'RETEST_READY']
+# A signal only alerts while it is FRESH. RETEST_READY already ages out of the radar (-> SIGNAL_AGED
+# after 5 min), but CONFIRMED can sit in `all` for hours — without this gate, the first sweep after a
+# user enables alerts mid-session (empty dedup) would blast a Telegram for every already-confirmed
+# symbol at once. A confirmation fires at its bar close, so anything within the last few minutes is a
+# genuinely current entry; older than this is backlog and is skipped (but still never re-alerted).
+try:
+    _FRESH_SEC = int(load_config().get('alert_fresh_seconds', 360) or 360)
+except Exception:
+    _FRESH_SEC = 360
 
 
 def _num(v):
@@ -86,6 +95,12 @@ def dispatch(db: Session, user: User, state: dict) -> int:
     for row in (state.get('all') or []):
         st = row.get('state')
         if st not in wanted or (row.get('score') or 0) < floor:
+            continue
+        # Freshness gate: only alert a currently-fresh signal. A CONFIRMED that has sat for hours
+        # (age unknown/too old) is backlog — skip it (never claimed, so never sent, and no spam when
+        # alerts are enabled mid-session). Fresh signals are caught within one 20s sweep of appearing.
+        age = row.get('signal_age_sec')
+        if age is None or age > _FRESH_SEC:
             continue
         key = (row.get('symbol'), row.get('side'), st)
         if not key[0] or key in already:

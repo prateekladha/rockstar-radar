@@ -603,6 +603,11 @@ class RadarEngine:
                     'target': st.target, 'net_rr': round(st.net_rr, 2) if st.net_rr else None,
                     'stale': bool(stale),
                     'provisional': bool(st.confirm_provisional or st.retest_provisional),
+                    # Seconds since this state was reached (uses the engine's own clock, so it's
+                    # correct in both LIVE and accelerated SIMULATION time). Lets the alert dispatcher
+                    # skip a stale CONFIRMED that has sat on the radar for hours.
+                    'signal_age_sec': round((now - st.last_signal_time).total_seconds())
+                    if st.last_signal_time else None,
                     **self._ticket_size(st)
                 })
             priority = {'RETEST_READY': 0, 'CONFIRMED': 1, 'BREAKOUT_PENDING': 2,
