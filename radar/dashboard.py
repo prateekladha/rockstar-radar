@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from .engine import RadarEngine
 
 PAGE = r'''<!doctype html>
@@ -54,10 +55,19 @@ el('source').addEventListener('change',render);el('side').addEventListener('chan
 def serve(engine: RadarEngine, port: int = 8765, mode: str = 'LIVE'):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == '/api/state':
+            route = urlsplit(self.path)
+            if route.path == '/api/state':
                 content = json.dumps(engine.snapshot(), allow_nan=False).encode('utf-8')
                 mime = 'application/json; charset=utf-8'
-            elif self.path in ('/', '/index.html'):
+            elif route.path == '/api/replay':
+                symbol = (parse_qs(route.query).get('symbol') or [''])[0]
+                data = engine.replay(symbol)
+                if not data:
+                    self.send_error(404)
+                    return
+                content = json.dumps(data, allow_nan=False).encode('utf-8')
+                mime = 'application/json; charset=utf-8'
+            elif route.path in ('/', '/index.html'):
                 content = PAGE.encode('utf-8')
                 mime = 'text/html; charset=utf-8'
             else:

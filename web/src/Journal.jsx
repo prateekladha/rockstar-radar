@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api, fmtDateTime } from './api.js'
 import { Pager } from './Watchlist.jsx'
+import Replay from './Replay.jsx'
 import { Select, SearchInput, Chip, label } from './ui.jsx'
 
 const fmtDay = (d) => { try { return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' }) } catch { return d } }
@@ -10,7 +11,8 @@ export default function Journal() {
   const [day, setDay] = useState('')
   const [f, setF] = useState({ q: '', side: '' })
   const [page, setPage] = useState(1)
-  const [open, setOpen] = useState(null)   // row whose timeline is expanded
+  const [open, setOpen] = useState(null)       // row whose timeline is expanded
+  const [replayFor, setReplayFor] = useState(null)
 
   const load = async () => {
     const p = new URLSearchParams({ ...f, page, page_size: 25 })
@@ -59,7 +61,12 @@ export default function Journal() {
                       <td className="num">{s.entry || '—'} / {s.stop || '—'} / {s.target || '—'}</td>
                       <td className="num">{s.net_rr || '—'}</td>
                       <td>{s.acted ? <span className="chip CONFIRMED">traded</span> : <span className="chip">—</span>}</td>
-                      <td className="num"><button className="btn" onClick={() => setOpen(open === s.id ? null : s.id)}>{open === s.id ? 'Hide' : 'Timeline'}</button></td>
+                      <td className="num">
+                        <div className="row" style={{ gap: 8, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                          <button className="btn" onClick={() => setReplayFor(s)}>Replay</button>
+                          <button className="btn" onClick={() => setOpen(open === s.id ? null : s.id)}>{open === s.id ? 'Hide' : 'Timeline'}</button>
+                        </div>
+                      </td>
                     </tr>
                     {open === s.id && (
                       <tr className="detail-row"><td colSpan={8}>
@@ -82,6 +89,8 @@ export default function Journal() {
         )}
         {pages > 1 && <Pager page={data.page} pages={pages} onPage={setPage} />}
       </div>
+      {replayFor && <Replay symbol={replayFor.symbol} day={data.day}
+        onClose={() => setReplayFor(null)} />}
     </div>
   )
 }

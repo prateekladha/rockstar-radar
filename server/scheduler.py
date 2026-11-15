@@ -28,6 +28,10 @@ _START_AT = os.environ.get('RADAR_SCHED_START_HHMM', '09:08')
 _PNL_AT = os.environ.get('RADAR_SCHED_PNL_HHMM', '15:35')
 _SUPERVISE_UNTIL = os.environ.get('RADAR_SCHED_SUPERVISE_UNTIL_HHMM', '15:35')
 _SUPERVISE_EVERY_MIN = int(os.environ.get('RADAR_SCHED_SUPERVISE_EVERY_MIN', '2'))
+# Loop period. Also the worst-case delay between a signal appearing on the radar and the Telegram
+# alert going out; well inside a 5-minute bar. Every other action is day- or minute-gated, so a
+# faster tick only affects alert latency.
+_TICK_SECONDS = int(os.environ.get('RADAR_ALERT_SWEEP_SEC', '20'))
 # action -> last YYYY-MM-DD it ran. PERSISTED to disk so the once-per-day guard survives process
 # restarts/deploys — otherwise every deploy after 15:35 re-sends the daily P&L (and a deploy after
 # 08:30/09:08 re-fires the login reminder / scanner start).
@@ -120,6 +124,22 @@ def _start_all_scanners() -> None:
         db.close()
 
 
+def _sweep_alerts() -> None:
+    """Push Telegram alerts for newly-fired signals. Deliberately not tied to market hours: the
+    gate is whether a scanner is actually running (so the practice simulation can be rehearsed at
+    any hour, and a live sweep simply finds nothing once the session ends)."""
+    db = SessionLocal()
+    try:
+        from .alerting import sweep
+        n = sweep(db)
+        if n:
+            print(f'[alerts] sent {n} signal alert(s)')
+    except Exception as e:
+        print(f'[alerts] sweep error: {e}')
+    finally:
+        db.close()
+
+
 def _supervise_scanners() -> None:
     """Auto-restart any scanner that should be running but isn't (crashed/OOM) — but never one that
     runtime-failed auth (start_for_broker skips those until the user re-logs in). Quiet unless it acts."""
@@ -161,6 +181,9 @@ async def run_scheduler() -> None:
                     if _last_supervise_min is None or cur_min - _last_supervise_min >= _SUPERVISE_EVERY_MIN:
                         _last_supervise_min = cur_min
                         await asyncio.to_thread(_supervise_scanners)
+            # Outside the trading-day guard on purpose: the practice simulation runs on weekends
+            # and evenings, and the real gate is whether a scanner is up (see alerting.sweep).
+            await asyncio.to_thread(_sweep_alerts)
         except Exception as e:  # the loop must survive anything
             print(f'[scheduler] tick error: {e}')
-        await asyncio.sleep(30)
+        await asyncio.sleep(_TICK_SECONDS)

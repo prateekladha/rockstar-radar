@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import require_user
 from ..db import get_db
-from ..models import (AlertConfig, BrokerConnection, Household, Order, Settings, SignalLog,
-                      SmartPick, SupportMessage, User, Watchlist)
+from ..models import (AlertConfig, AlertDelivery, BrokerConnection, Household, Order, Settings,
+                      SignalLog, SmartPick, SupportMessage, User, Watchlist)
 
 router = APIRouter(prefix='/api/family', tags=['family'])
 MANAGERS = {'admin'}
@@ -121,8 +121,8 @@ def remove_member(mid: int, user: User = Depends(require_user), db: Session = De
     # Remove dependent rows first — Postgres enforces the foreign keys, so a bare user delete would
     # fail (this is why removal "silently" failed on prod). Relationship cascades cover
     # Watchlist/Settings/BrokerConnection; the rest we clear explicitly.
-    for Model in (Order, SmartPick, SignalLog, SupportMessage, AlertConfig, BrokerConnection,
-                  Settings, Watchlist):
+    for Model in (Order, SmartPick, SignalLog, SupportMessage, AlertConfig, AlertDelivery,
+                  BrokerConnection, Settings, Watchlist):
         db.query(Model).filter_by(user_id=m.id).delete(synchronize_session=False)
     db.delete(m)
     db.commit()

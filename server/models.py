@@ -118,6 +118,28 @@ class AlertConfig(Base):
     user = relationship('User')
 
 
+class AlertDelivery(Base):
+    """One row per alert pushed — both the dedup key and the audit trail.
+
+    Persisted rather than held in memory because the sweep re-reads the same radar state every
+    few seconds: without a durable record, a server restart mid-session would re-announce every
+    signal that already fired today. The unique constraint is the real guard — two workers racing
+    on the same signal means one insert fails rather than two messages going out.
+    """
+    __tablename__ = 'alert_deliveries'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), index=True, nullable=False)
+    day = Column(String(10), index=True)           # YYYY-MM-DD (IST trading day)
+    symbol = Column(String(40))
+    side = Column(String(8))
+    state = Column(String(24))
+    sent_at = Column(DateTime, default=_now)
+    ok = Column(Integer, default=0)
+    detail = Column(Text)
+    __table_args__ = (UniqueConstraint('user_id', 'day', 'symbol', 'side', 'state',
+                                       name='uq_alert_once_per_day'),)
+
+
 class SignalLog(Base):
     """Every signal/trade a user saw — backbone of audit, insights, journal, debugger."""
     __tablename__ = 'signal_logs'

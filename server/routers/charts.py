@@ -4,10 +4,13 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from radar.utils import market_dt, now_ist
 
 from ..auth import require_user
+from ..db import get_db
 from ..models import User
 
 router = APIRouter(tags=['charts'])
@@ -46,6 +49,33 @@ def _series(symbol: str, base: float, bars: int, step_min: int):
                     'low': round(lo, 2), 'close': round(c, 2), 'volume': int(10000 + nxt() * 50000)})
         price = c
     return out
+
+
+@router.get('/api/replay/{symbol}')
+def replay(symbol: str, user: User = Depends(require_user), db: Session = Depends(get_db),
+           day: str = Query('')):
+    """Session replay for one stock — real candles and real state transitions from the scanner
+    that is feeding this user's radar. Unlike /api/chart this is never synthetic: if no scan is
+    running there is nothing to replay, and we say so rather than inventing a series.
+
+    `day` is the session the caller believes it is asking about (the journal browses past days).
+    The scanner only holds the CURRENT session in memory, so a mismatch is refused rather than
+    silently answered with today's bars under yesterday's heading.
+    """
+    from .. import scanners
+    cc = scanners.effective_cc(db, user)
+    if cc is None:
+        return JSONResponse({'offline': True,
+                             'reason': 'No scan is running, so there is no session to replay. '
+                                       'Connect your broker on a trading day, or turn on the '
+                                       'practice simulation.'})
+    data = cc.replay_state(symbol)
+    session = data.get('session')
+    if day and session and day != session:
+        return JSONResponse({'offline': True,
+                             'reason': f'Replay covers the running session ({session}) only. '
+                                       'Earlier sessions are not kept in memory.'})
+    return data
 
 
 @router.get('/api/chart/{symbol}')

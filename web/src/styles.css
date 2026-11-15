@@ -297,3 +297,28 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
   .filterbar .searchbox{display:flex}
   .filterbar .searchbox input,.filterbar .sel,.filterbar .sel-btn,.filterbar input{width:100%;min-width:0;box-sizing:border-box}}
 @media(max-width:420px){.kpis{grid-template-columns:1fr}}
+
+/* session replay (trade debugger) */
+.rp-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px}
+.rp-side{border-left:1px solid var(--border);padding-left:16px;max-height:520px;overflow:auto}
+.rp-transport{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+.rp-transport input[type=range]{flex:1;min-width:0;width:auto;height:4px;padding:0;border:none;background:var(--surface-3);accent-color:var(--accent);border-radius:999px;cursor:pointer}
+.rp-transport input[type=range]:focus{outline:none;box-shadow:none}
+.rp-kv{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:5px 0;border-bottom:1px solid var(--border)}
+.rp-kv span:first-child{color:var(--dim)}
+.rp-step{display:flex;gap:8px;align-items:center;width:100%;text-align:left;background:none;border:none;
+  border-left:2px solid transparent;color:inherit;padding:7px 6px;border-radius:8px;cursor:pointer}
+.rp-step:hover{background:var(--surface-2)}
+.rp-step.now{background:var(--surface-2);border-left-color:var(--accent)}
+.rp-step.future{opacity:.3}
+.rp-step .t{font-size:11px;color:var(--faint);min-width:38px}
+.rp-live{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;
+  letter-spacing:.09em;color:#4ade80;background:rgba(34,197,94,.12);
+  border:1px solid rgba(34,197,94,.35);border-radius:999px;padding:2px 9px}
+.rp-live::before{content:'';width:6px;height:6px;border-radius:50%;background:#22c55e;
+  animation:rp-pulse 1.8s ease-in-out infinite}
+@keyframes rp-pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){.rp-live::before{animation:none}}
+@media(max-width:860px){
+  .rp-grid{grid-template-columns:1fr}
+  .rp-side{border-left:none;padding-left:0;border-top:1px solid var(--border);padding-top:14px;max-height:none}}

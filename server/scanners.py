@@ -199,6 +199,26 @@ def effective_broker(db: Session, user: User):
     return _household_broker(db, user.household_id), 'shared'
 
 
+def effective_cc(db: Session, user: User) -> ControlCenter | None:
+    """The scanner backing this user's current radar — simulation, their own broker, else the
+    household's shared one. Only returns one that is ALREADY running: this serves read-only
+    drill-downs (replay), which must never spin up a scanner or spend broker quota of its own."""
+    if user.sim_enabled:
+        with _lock:
+            return _sim_ccs.get(user.id)
+    own = _own_broker(db, user)
+    if own is not None:
+        cc = _scanners.get(f'u{own.user_id}')
+        if cc is not None:
+            return cc
+    shared = _household_broker(db, user.household_id, exclude_user_id=user.id)
+    if shared is not None:
+        cc = _scanners.get(f'u{shared.user_id}')
+        if cc is not None:
+            return cc
+    return _demo if os.environ.get('RADAR_DEMO') == '1' else None
+
+
 def connected_brokers(db: Session) -> list[BrokerConnection]:
     """All registered broker connections (for the scheduler to start/refresh)."""
     return (db.query(BrokerConnection)
