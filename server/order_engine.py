@@ -113,7 +113,9 @@ def _entered_today(db: Session, user_id: int, sym: str, today: str) -> bool:
 def _auto_trade(db: Session) -> int:
     """Per-user auto PAPER trading (admin-enabled). For each user with it on, drive trades off their
     live feed with no delay:
-      - ENTER on a fresh RETEST_READY opportunity (one entry per symbol/day), sized by their risk.
+      - ENTER on a fresh opportunity (one entry per symbol/day), sized by their risk, at the signal
+        status the user chose: RETEST_READY (default, double-confirmed) or CONFIRMED (the earlier,
+        aggressive trigger — fires on the breakout itself, validated + fresh only).
       - EXIT an open position the moment an opposite (reversal) signal appears on the same stock —
         the 'exit opportunity'. (Stop/target exits are handled by process_paper the same tick; the
         session-end square-off is the final safety net.)
@@ -125,6 +127,13 @@ def _auto_trade(db: Session) -> int:
         return 0
     cfg = load_config()
     today = now_ist().date().isoformat()
+    # How long a CONFIRMED breakout stays "fresh" enough to enter (mirrors the 5-min retest aging
+    # the engine applies to RETEST_READY). Guards against backfilling an entry on a CONFIRMED that
+    # has sat on the radar for hours at a stale price when auto-trade is (re)enabled mid-session.
+    try:
+        fresh_sec = int(cfg.get('auto_trade_fresh_seconds', 300) or 300)
+    except (TypeError, ValueError):
+        fresh_sec = 300
     changed = 0
     for u in users:
         try:
@@ -147,9 +156,31 @@ def _auto_trade(db: Session) -> int:
         capital = float(sdata.get('capital_inr', cfg.get('capital_inr', 0)) or 0)
         risk_pct = float(sdata.get('risk_pct', cfg.get('risk_pct', 0)) or 0)
         max_risk = capital * risk_pct / 100 if (capital and risk_pct) else 0
+        # Which signal status this user wants to auto-enter on. RETEST_READY (default) = the safer
+        # double-confirmation; CONFIRMED = the aggressive, earlier trigger (fires on the breakout
+        # itself, so stocks that never retest still trade).
+        trigger = str(sdata.get('auto_trade_trigger',
+                      cfg.get('auto_trade_trigger', 'RETEST_READY')) or 'RETEST_READY').upper()
+        if trigger not in ('RETEST_READY', 'CONFIRMED'):
+            trigger = 'RETEST_READY'
         for r in rows:
-            if r.get('state') != 'RETEST_READY':
-                continue
+            state = r.get('state')
+            if trigger == 'CONFIRMED':
+                # Enter on the breakout confirmation OR a later retest, whichever comes first
+                # (one entry per symbol/day still prevents a double). A CONFIRMED entry must be
+                # REST-validated (never a provisional WS signal the engine may retract) and still
+                # fresh — otherwise we'd open on a stale breakout at a stale price.
+                if state not in ('CONFIRMED', 'RETEST_READY'):
+                    continue
+                if state == 'CONFIRMED':
+                    if r.get('provisional'):
+                        continue
+                    age = r.get('signal_age_sec')
+                    if age is None or age > fresh_sec:
+                        continue
+            else:
+                if state != 'RETEST_READY':
+                    continue
             side = r.get('side')
             sym = watchpins.bare(r.get('symbol') or '')
             entry, stop, target = r.get('entry'), r.get('stop'), r.get('target')
@@ -181,7 +212,7 @@ def _auto_trade(db: Session) -> int:
             db.add(Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
                          target=target, status='pending', order_type='market', mode='paper',
                          sim=1 if u.sim_enabled else 0, source='auto',
-                         note=f'Auto paper trade — algo RETEST_READY ({today}).'))
+                         note=f'Auto paper trade — algo {state} ({today}).'))
             pending_auto.add(sym)
             changed += 1
     if changed:

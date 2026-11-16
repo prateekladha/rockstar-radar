@@ -55,6 +55,11 @@ EDITABLE_CONFIG = {
     'estimated_roundtrip_cost_pct': ('num', 0, 10),
     'capital_inr': ('num', 0, 1000000000),
     'risk_pct': ('num', 0, 10),   # hard ceiling: keep conservative (0.5-1%)
+    # Which signal status fires an auto PAPER entry. RETEST_READY = wait for the breakout to pull
+    # back and re-confirm (safer, fewer trades, default); CONFIRMED = enter on the breakout
+    # confirmation itself (earlier, more trades, riskier). Per-user override via settings; falls
+    # back to the config.json default. (For 'enum', the 2nd tuple slot is the set of allowed values.)
+    'auto_trade_trigger': ('enum', ('RETEST_READY', 'CONFIRMED'), None),
 }
 
 
@@ -74,6 +79,12 @@ def validate_config_patch(patch: dict) -> dict:
         if kind == 'time':
             if not isinstance(value, str) or not _TIME_RE.match(value):
                 raise ControlError(f'{key} must be HH:MM (24h), got {value!r}')
+        elif kind == 'enum':
+            allowed = lo  # for enum, the 2nd slot holds the tuple of allowed values
+            sval = str(value).upper()
+            if sval not in allowed:
+                raise ControlError(f'{key} must be one of {", ".join(allowed)}, got {value!r}')
+            value = sval
         else:
             try:
                 num = int(value) if kind == 'int' else float(value)

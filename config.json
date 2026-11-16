@@ -34,5 +34,7 @@
   "liquidity_lookback_days": 30,
   "dashboard_port": 8765,
   "intraday_atr_stop_mult": 0.5,
-  "alert_fresh_seconds": 360
+  "alert_fresh_seconds": 360,
+  "auto_trade_trigger": "RETEST_READY",
+  "auto_trade_fresh_seconds": 300
 }
