@@ -51,21 +51,6 @@ export default function Settings() {
       <div className="panel-h"><h2>Strategy &amp; risk</h2><span className="hint">Your personal settings</span></div>
       <div className="panel-b">
         {msg && <div className="banner ok">{msg}</div>}
-        <div className="field" style={{ maxWidth: 420, marginBottom: 16 }}>
-          <label>Auto-trade trigger</label>
-          <Select value={cfg.auto_trade_trigger || 'RETEST_READY'} width={'100%'}
-            onChange={v => set('auto_trade_trigger', v)}
-            options={[
-              { value: 'RETEST_READY', label: 'Retest Ready — safer (double-confirmed)' },
-              { value: 'CONFIRMED', label: 'Confirmed — aggressive (enter on breakout)' },
-            ]} />
-          <p className="note" style={{ marginTop: 8 }}>
-            When auto-trading is on, which signal fires a paper entry. <b>Retest Ready</b> waits for
-            price to pull back and re-confirm the breakout — fewer, higher-quality trades.
-            <b> Confirmed</b> enters the moment a breakout is validated — earlier and many more
-            trades, but riskier (no second confirmation). Only affects auto-trading.
-          </p>
-        </div>
         <div className="settings-grid">
           {Object.entries(cfg).filter(([k]) => k !== 'auto_trade_trigger').map(([k, v]) => {
             const e = err(k, v)

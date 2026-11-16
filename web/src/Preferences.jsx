@@ -1,13 +1,56 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api.js'
+import { Select } from './ui.jsx'
 
 // User-level preferences, available to EVERY user (not just admins): practice simulation + alerts.
 export default function Preferences() {
   return (
     <>
       <SimulationSettings />
+      <AutoTradeSettings />
       <NotificationsSettings />
     </>
+  )
+}
+
+// Per-user auto-trade trigger. Available to every trader (saved via /api/settings, which is not
+// admin-gated). Your admin turns auto paper-trading on/off (Team page); this is YOUR choice of which
+// signal status opens a trade when it's on.
+function AutoTradeSettings() {
+  const [trig, setTrig] = useState(null)
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    api('/api/settings').then(s => setTrig(s.auto_trade_trigger || 'RETEST_READY')).catch(() => {})
+  }, [])
+  if (trig === null) return null
+  const save = async (v) => {
+    setTrig(v)
+    try { await api('/api/settings', { method: 'PATCH', body: { auto_trade_trigger: v } }); setMsg('Saved') }
+    catch (e) { setMsg(e.message) }
+  }
+  return (
+    <div className="panel" style={{ marginBottom: 16 }}>
+      <div className="panel-h"><h2>⚡ Auto-trading</h2>
+        <span className="hint">Which signal fires an automatic paper entry</span></div>
+      <div className="panel-b">
+        {msg && <div className="banner ok" style={{ marginBottom: 12 }}>{msg}</div>}
+        <div className="field" style={{ maxWidth: 440 }}>
+          <label>Auto-trade trigger</label>
+          <Select value={trig} width={'100%'} onChange={save}
+            options={[
+              { value: 'RETEST_READY', label: 'Retest Ready — safer (double-confirmed)' },
+              { value: 'CONFIRMED', label: 'Confirmed — aggressive (enter on breakout)' },
+            ]} />
+          <p className="note" style={{ marginTop: 8 }}>
+            When auto paper-trading is on for you (your admin enables it on the Team page), this picks
+            which signal opens a paper trade. <strong>Retest Ready</strong> waits for price to pull back
+            and re-confirm the breakout — fewer, higher-quality trades. <strong>Confirmed</strong> enters
+            the moment a breakout is validated — earlier and many more trades, but riskier (no second
+            confirmation). Paper only — real orders always need your tap to confirm.
+          </p>
+        </div>
+      </div>
+    </div>
   )
 }
 
