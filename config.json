@@ -10,6 +10,7 @@
   "morning_pins": [],
   "open_range_start": "09:15",
   "open_range_minutes": 5,
+  "use_one_minute_candles": true,
   "watch_start": "09:20",
   "new_signals_stop": "15:00",
   "near_boundary_pct": 0.35,

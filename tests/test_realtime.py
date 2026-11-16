@@ -9,6 +9,8 @@ from radar.utils import load_config, market_dt
 
 DAY = date(2026, 11, 5)
 SYM = 'NSE:BHARTIARTL-EQ'
+# Written against 5-minute bars; see test_one_minute_candles.py for the 1-minute path.
+CFG = dict(load_config(), use_one_minute_candles=False)
 
 
 def c(hhmm, o, h, l, cl, v):
@@ -17,7 +19,7 @@ def c(hhmm, o, h, l, cl, v):
 
 def base_engine(mode='LIVE'):
     """Engine with an authoritative opening range, baseline and a non-breakout prev bar."""
-    cfg = load_config()
+    cfg = CFG
     inst = Instrument(SYM, 'Telecom', median_turnover_cr=150, daily_atr_pct=1.5,
                       previous_close=101, resistance=[105.0], support=[95.0])
     e = RadarEngine([inst], cfg, DAY, mode=mode)
@@ -81,7 +83,7 @@ class RealtimeTests(unittest.TestCase):
         self.assertTrue(any(ev.state == 'RETRACTED' for ev in e.events))
 
     def test_opening_range_never_anchored_from_provisional_bar(self):
-        cfg = load_config()
+        cfg = CFG
         inst = Instrument(SYM, 'Telecom', 150, 1.5, 101)
         e = RadarEngine([inst], cfg, DAY, mode='LIVE')
         e.ingest_live_bar(SYM, c('09:15', 100, 102, 99, 101, 20000),

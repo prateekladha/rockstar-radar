@@ -17,7 +17,8 @@ SYM = 'NSE:BHARTIARTL-EQ'
 
 class MiddayRestartTests(unittest.TestCase):
     def setUp(self):
-        self.cfg = load_config()
+        # 5-minute bars; the 1-minute restart path is covered in test_one_minute_candles.py
+        self.cfg = dict(load_config(), use_one_minute_candles=False)
         self.instrument = Instrument(SYM, 'Telecom', 100, 1.5, 1500)
 
     def test_local_restore_preserves_OR_and_past_events_but_never_live_signal(self):

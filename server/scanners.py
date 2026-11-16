@@ -68,6 +68,16 @@ def _sim_speed(user: User) -> str:
         return '30'
 
 
+def _one_minute(user: User) -> str:
+    """The user's signal-candle choice, as the env flag the scanner subprocess reads.
+
+    Defaults to on, matching config.json, so a user who has never opened Settings gets the
+    same behaviour as a fresh install rather than silently falling back to 5-minute.
+    """
+    data = (user.settings.data if user.settings else None) or {}
+    return '1' if data.get('use_one_minute_candles', True) else '0'
+
+
 def _sim_cc_for(user: User) -> ControlCenter:
     """The user's accelerated simulation scanner (no FYERS, no login)."""
     key = f'sim{user.id}'
@@ -75,12 +85,22 @@ def _sim_cc_for(user: User) -> ControlCenter:
     with _lock:
         cc = _sim_ccs.get(user.id)
         env = {'RADAR_SIM_START': start, 'RADAR_SIM_END': end,
-               'RADAR_SIM_SPEED': _sim_speed(user), 'RADAR_SCANNER_ID': key}
+               'RADAR_SIM_SPEED': _sim_speed(user), 'RADAR_SCANNER_ID': key,
+               'RADAR_ONE_MINUTE': _one_minute(user)}
         if cc is None:
             cc = ControlCenter(demo=False, sim=True, env_extra=env)
             cc.pid_path = cc.root / 'data' / f'.sim_{key}.pid'
             cc.scanner_out_path = cc.root / 'data' / f'sim_{key}.out'
             _sim_ccs[user.id] = cc
+        elif cc.env_extra.get('RADAR_ONE_MINUTE') != env['RADAR_ONE_MINUTE']:
+            # The interval is baked into the engine at construction, so a running practice session
+            # can't adopt it. Recycle rather than leave the toggle looking applied but inert.
+            cc.env_extra.update(env)
+            try:
+                if cc.scanner_status()['running']:
+                    cc.stop_scanner()
+            except Exception as e:
+                print(f'sim stop before interval change skipped ({key}): {e}')
         else:
             cc.env_extra.update(env)
         try:
@@ -143,7 +163,8 @@ def _token_is_fresh_today(conn: BrokerConnection) -> bool:
     return ts.astimezone(IST).date() == now_ist().date()
 
 
-def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') -> ControlCenter:
+def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '',
+            one_min: str = '1') -> ControlCenter:
     """One scanner per broker owner (keyed by their user id). ``pins`` are the owner's manual
     watchlist tickers (comma-joined, canonical) — priority-scanned and force-included even if
     outside the chosen universe. They take effect on the owner's next scanner (re)start."""
@@ -153,7 +174,8 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') ->
         if cc is None:
             cc = ControlCenter(demo=False, env_extra={
                 'FYERS_APP_ID': app_id, 'FYERS_ACCESS_TOKEN': token, 'RADAR_UNIVERSE_INDEX': idx,
-                'RADAR_MORNING_PINS': pins, 'RADAR_SCANNER_ID': key})
+                'RADAR_MORNING_PINS': pins, 'RADAR_SCANNER_ID': key,
+                'RADAR_ONE_MINUTE': one_min})
             # Per-owner working files so concurrent brokers never collide (separate FYERS API lock —
             # each account has its own REST quota — plus separate selection, pid and log).
             cc.pid_path = cc.root / 'data' / f'.scanner_live_{key}.pid'
@@ -168,13 +190,17 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '') ->
             # never resumes. Detect a credential change and recycle the scanner so it picks up the
             # new token. (Universe changes likewise need a fresh selection.)
             cur = cc.env_extra
+            # The signal interval is fixed when the engine is built, so a change here needs the
+            # same recycle as new credentials — otherwise the setting reads as applied but isn't.
             changed = (cur.get('FYERS_ACCESS_TOKEN') != token
                        or cur.get('FYERS_APP_ID') != app_id
-                       or cur.get('RADAR_UNIVERSE_INDEX') != idx)
+                       or cur.get('RADAR_UNIVERSE_INDEX') != idx
+                       or cur.get('RADAR_ONE_MINUTE') != one_min)
             cur['FYERS_ACCESS_TOKEN'] = token
             cur['FYERS_APP_ID'] = app_id
             cur['RADAR_UNIVERSE_INDEX'] = idx
             cur['RADAR_MORNING_PINS'] = pins
+            cur['RADAR_ONE_MINUTE'] = one_min
             if changed:
                 health.clear_health(key)   # fresh creds get a clean slate; re-reports on (re)start
                 try:
@@ -264,7 +290,7 @@ def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
     if _auth_failed_health(conn) or _rate_limited_health(conn):
         return False
     _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), _universe_index(conn.user),
-            watchpins.pins_env(db, conn.user_id))
+            watchpins.pins_env(db, conn.user_id), _one_minute(conn.user))
     return True
 
 
@@ -298,7 +324,7 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
                         'rate_limited': True, 'reason': rl.get('reason')}
 
     cc = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), idx,
-                 watchpins.pins_env(db, conn.user_id))
+                 watchpins.pins_env(db, conn.user_id), _one_minute(conn.user))
     st = cc.live_state()
 
     def _is_rl(text):

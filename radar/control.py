@@ -39,6 +39,10 @@ EDITABLE_CONFIG = {
     'max_industry_members': ('int', 1, 100),
     'open_range_start': ('time', None, None),
     'open_range_minutes': ('int', 1, 60),
+    # Candle the state machine watches AFTER the opening range. True = 1-minute (default): the same
+    # breakout/retest rules, tested every minute instead of every five, so setups surface sooner.
+    # False = the original 5-minute behaviour. The opening range is 09:15-09:20 either way.
+    'use_one_minute_candles': ('bool', None, None),
     'watch_start': ('time', None, None),
     'new_signals_stop': ('time', None, None),
     'near_boundary_pct': ('num', 0, 10),
@@ -85,6 +89,17 @@ def validate_config_patch(patch: dict) -> dict:
             if sval not in allowed:
                 raise ControlError(f'{key} must be one of {", ".join(allowed)}, got {value!r}')
             value = sval
+        elif kind == 'bool':
+            # Accept the JSON booleans a UI sends and the strings a form posts, but nothing vaguer:
+            # a typo must not quietly read as False and silently change the strategy.
+            if isinstance(value, bool):
+                pass
+            elif str(value).strip().lower() in ('true', '1', 'yes', 'on'):
+                value = True
+            elif str(value).strip().lower() in ('false', '0', 'no', 'off'):
+                value = False
+            else:
+                raise ControlError(f'{key} must be true or false, got {value!r}')
         else:
             try:
                 num = int(value) if kind == 'int' else float(value)

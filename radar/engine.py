@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 from .models import Candle, Instrument, Signal, SymbolState, Tick
 from .risk import position_size
-from .utils import IST, bar_start, market_dt, now_ist
+from .utils import IST, bar_start, market_dt, now_ist, signal_bar_minutes
 
 
 SIGNAL_STATES = {'WATCH', 'READY', 'BREAKOUT_PENDING', 'CONFIRMED',
@@ -22,7 +22,12 @@ PERSISTENT_STATES = {'CONFIRMED', 'RETEST_CANDIDATE', 'RETEST_READY',
 
 
 def same_time_baseline(history: list[Candle], cutoff: date, lookback_sessions: int = 20):
-    """Median volume of the corresponding 5-minute interval from previous sessions."""
+    """Median volume of the same clock slot on previous sessions.
+
+    Slot width is whatever the supplied history uses, so feeding 1-minute candles yields a
+    1-minute baseline. RVOL is then a ratio of like for like and stays comparable across both
+    settings — a 1-minute bar is measured against 1-minute norms, not against a 5-minute one.
+    """
     days = sorted({c.at.date() for c in history if c.at.date() < cutoff})[-lookback_sessions:]
     included = set(days)
     volumes = defaultdict(list)
@@ -40,6 +45,14 @@ class RadarEngine:
         self.config = config
         self.mode = mode
         self.session = session
+        # Candle the state machine evaluates. The opening range is a fixed wall-clock window
+        # (09:15-09:20) and keeps its own width; `bar_minutes` only sets how finely the session is
+        # watched afterwards, so on 1m the OR is assembled from five bars instead of being one.
+        self.bar_minutes = signal_bar_minutes(config)
+        self.bar_seconds = self.bar_minutes * 60
+        self.bar_delta = timedelta(minutes=self.bar_minutes)
+        self.or_minutes = max(1, int(config.get('open_range_minutes', 5) or 5))
+        self.or_bar_count = max(1, self.or_minutes // self.bar_minutes)
         self.lock = threading.RLock()
         self.states = {info.symbol: SymbolState(info) for info in instruments}
         self.baselines: dict[str, dict[str, float]] = {}
@@ -140,14 +153,15 @@ class RadarEngine:
                     self.config['max_open_range_width_pct']):
                 st.state, st.reason = 'FILTERED', 'Opening range too narrow/wide'
                 return
-            # After laptop sleep/restart a historical 5m bar may be hours old.
+            # After laptop sleep/restart the newest stored bar may be hours old.
             # Suppress WATCH/READY until a recent authoritative completed bar exists.
             # An unfinished websocket tick is not a substitute for volume history.
             last = max(st.completed.values(), key=lambda x: x.at)
             if (self.mode == 'LIVE' and
-                (current_time - (last.at + timedelta(minutes=5))).total_seconds() > 600):
+                (current_time - (last.at + self.bar_delta)).total_seconds() > 600):
                 st.state, st.reason, st.score = (
-                    'RECOVERING', 'Waiting for recent completed 5-minute candle after restart', 0)
+                    'RECOVERING',
+                    f'Waiting for recent completed {self.bar_minutes}-minute candle after restart', 0)
                 return
             st.rvol = self._rvol(t.symbol, last)
             st.vwap = t.avg_trade_price or self._candle_vwap(st)
@@ -169,7 +183,7 @@ class RadarEngine:
             st.score = self._score(st, distance)
             if distance < 0:
                 next_state = 'BREAKOUT_PENDING'
-                st.reason = 'Intrabar breach; wait for complete 5-minute close'
+                st.reason = f'Intrabar breach; wait for complete {self.bar_minutes}-minute close'
             elif distance <= self.config['ready_boundary_pct'] and st.rvol >= 1.25:
                 next_state = 'READY'
                 st.reason = 'Near OR boundary; VWAP aligned and volume improving'
@@ -205,8 +219,24 @@ class RadarEngine:
                  (st.opening.high - st.opening.low) / st.opening.open * 100 <= 1.8 else 2)
         return int(min(100, round(proximity + volume + liquidity + momentum + width)))
 
-    def _recent_opening(self, candle: Candle) -> bool:
-        return candle.at == market_dt(self.session, self.config['open_range_start'])
+    def _in_or_window(self, candle: Candle) -> bool:
+        start = market_dt(self.session, self.config['open_range_start'])
+        return start <= candle.at < start + timedelta(minutes=self.or_minutes)
+
+    def _build_opening(self, st: SymbolState) -> Candle | None:
+        """Merge the opening-range bars into the one candle the rules are written against.
+
+        Returns None until every bar of the window has arrived. A range built from four of five
+        minutes can understate the high or the low, and those two numbers set every breakout,
+        retest and stop for the rest of the day — so an incomplete range yields no signals at all,
+        which is the safe way to be wrong.
+        """
+        if len(st.or_bars) < self.or_bar_count:
+            return None
+        bars = [st.or_bars[k] for k in sorted(st.or_bars)]
+        return Candle(at=bars[0].at, open=bars[0].open,
+                      high=max(b.high for b in bars), low=min(b.low for b in bars),
+                      close=bars[-1].close, volume=sum(b.volume for b in bars))
 
     def ingest_live_bar(self, symbol: str, candle: Candle,
                         observed_at: datetime | None = None):
@@ -235,7 +265,8 @@ class RadarEngine:
                 self.config['max_open_range_width_pct']):
             return None, None, None, False, 'Opening range width out of configured range'
         if prev is None:
-            return None, None, None, False, 'Missing previous 5-minute candle; cannot confirm breakout'
+            return (None, None, None, False,
+                    f'Missing previous {self.bar_minutes}-minute candle; cannot confirm breakout')
         for side, passed, level, extension in (
             ('LONG', prev.close <= op.high and candle.close > op.high,
              op.high, (candle.close - op.high) / op.high * 100),
@@ -248,23 +279,36 @@ class RadarEngine:
                 return side, level, extension, False, 'Breakout closed too far beyond OR boundary (extended)'
             if not st.rvol or st.rvol < self.config['min_confirm_rvol']:
                 return side, level, extension, False, 'Breakout closed with insufficient same-time historical RVOL'
-            if candle.close * candle.volume / 1e7 < self.config['min_bar_turnover_cr']:
-                return side, level, extension, False, 'Insufficient 5-minute traded value'
+            if candle.close * candle.volume / 1e7 < self._min_bar_turnover_cr():
+                return (side, level, extension, False,
+                        f'Insufficient {self.bar_minutes}-minute traded value')
             if st.vwap is None or ((side == 'LONG') != (candle.close > st.vwap)):
-                return side, level, extension, False, 'Breakout not aligned with 5-minute OHLC-derived VWAP proxy'
-            return side, level, extension, True, 'Completed 5m close beyond OR + RVOL + VWAP; waiting for retest'
+                return (side, level, extension, False,
+                        f'Breakout not aligned with {self.bar_minutes}-minute OHLC-derived VWAP proxy')
+            return (side, level, extension, True,
+                    f'Completed {self.bar_minutes}m close beyond OR + RVOL + VWAP; waiting for retest')
         return None, None, None, False, 'No completed close beyond opening range'
+
+    def _min_bar_turnover_cr(self) -> float:
+        """Per-bar traded-value floor, scaled to the bar being measured.
+
+        `min_bar_turnover_cr` is calibrated against a 5-minute bar. A 1-minute bar carries roughly
+        a fifth of the turnover, so applying the raw figure would reject nearly every breakout and
+        the 1-minute setting would look broken rather than merely stricter.
+        """
+        return self.config['min_bar_turnover_cr'] * self.bar_minutes / 5
 
     def _apply_confirmation(self, st: SymbolState, side: str, level: float,
                             candle: Candle, ts: int, provisional: bool):
         st.state, st.confirmed_side = 'CONFIRMED', side
-        st.confirmed_at = candle.at + timedelta(minutes=5)
+        st.confirmed_at = candle.at + self.bar_delta
         st.confirmed_low, st.confirmed_high = candle.low, candle.high
         st.confirm_bar_ts = ts
         st.confirm_provisional = provisional
         st.score = max(st.score, 65)
         st.reason = (('PROVISIONAL (live) — ' if provisional else '') +
-                     'Completed 5m close beyond OR + RVOL + VWAP; waiting for retest')
+                     f'Completed {self.bar_minutes}m close beyond OR + RVOL + VWAP; '
+                     'waiting for retest')
         self._event(st, 'CONFIRMED', st.confirmed_at, st.reason, level, provisional=provisional)
 
     def _retract(self, st: SymbolState, candle: Candle, reason: str):
@@ -279,7 +323,7 @@ class RadarEngine:
         st.confirm_provisional = False
         st.retest_provisional = False
         st.entry = st.stop = st.target = st.net_rr = None
-        self._event(st, 'RETRACTED', candle.at + timedelta(minutes=5), reason, level or 0)
+        self._event(st, 'RETRACTED', candle.at + self.bar_delta, reason, level or 0)
 
     def _reconcile(self, st: SymbolState, candle: Candle, ts: int, prev, wall: datetime):
         """Authoritative candle replacing a provisional bar: validate or retract."""
@@ -289,7 +333,8 @@ class RadarEngine:
             side, level, extension, ok, reason = self._confirm_test(st, prev, candle)
             if ok and side == st.confirmed_side:
                 st.confirm_provisional = False
-                st.reason = 'Breakout validated by authoritative FYERS 5m candle; waiting for retest'
+                st.reason = (f'Breakout validated by authoritative FYERS {self.bar_minutes}m '
+                             'candle; waiting for retest')
                 return
             self._retract(st, candle,
                           'Provisional breakout not confirmed by authoritative data: ' + reason)
@@ -320,7 +365,7 @@ class RadarEngine:
             if st is None or candle.at.date() != self.session:
                 return
             wall = observed_at or now_ist()
-            if candle.at + timedelta(minutes=5) > wall:
+            if candle.at + self.bar_delta > wall:
                 # Explicit guard against future/partially completed candles.
                 return
             # Session candle window — config-driven so non-standard sessions work (e.g. the practice
@@ -330,7 +375,7 @@ class RadarEngine:
             if not (market_dt(self.session, _sess_open) <= candle.at < market_dt(self.session, _sess_close)):
                 return
             ts = int(candle.at.timestamp())
-            is_or = self._recent_opening(candle)
+            is_or = self._in_or_window(candle)
             if is_or and provisional:
                 return  # opening range must be authoritative; wait for REST history
             existing = ts in st.completed
@@ -338,16 +383,24 @@ class RadarEngine:
                 # Already stored, and this is not an authoritative reconciliation.
                 return
             # If bar feed is discontinuous, don't silently confirm a transition.
-            prev = st.completed.get(ts - 300)
+            prev = st.completed.get(ts - self.bar_seconds)
             st.completed[ts] = candle
             if provisional:
                 st.provisional_ts.add(ts)
             else:
                 st.provisional_ts.discard(ts)
             if is_or:
-                st.opening = candle
+                st.or_bars[ts] = candle
+                opening = self._build_opening(st)
+                if opening is None:
+                    st.state = 'WAIT_OR'
+                    st.reason = (f'Opening range forming: {len(st.or_bars)}/{self.or_bar_count} '
+                                 f'{self.bar_minutes}m bars of {self.or_minutes}m window received')
+                    return
+                st.opening = opening
                 st.state = 'NO_SETUP'
-                st.reason = 'Opening range finalized from FYERS historical 5m candle'
+                st.reason = (f'Opening range finalized from {self.or_bar_count} authoritative '
+                             f'{self.bar_minutes}m candle(s)')
                 return
             if st.opening is None:
                 return
@@ -381,7 +434,8 @@ class RadarEngine:
                 self._evaluate_retest(st, candle, wall, provisional=provisional)
                 return
             if prev is None:
-                st.reason = 'Missing previous 5-minute candle; cannot confirm breakout'
+                st.reason = (f'Missing previous {self.bar_minutes}-minute candle; '
+                             'cannot confirm breakout')
                 return
             if self.mode == 'LIVE' and (st.last_tick is None or
                     (wall - st.last_tick.time).total_seconds() >
@@ -407,10 +461,10 @@ class RadarEngine:
         st.retest_bar_ts = int(c.at.timestamp())
         st.retest_provisional = provisional
         prov_tag = 'PROVISIONAL (live) — ' if provisional else ''
-        age = (c.at + timedelta(minutes=5) - st.confirmed_at).total_seconds() / 60
+        age = (c.at + self.bar_delta - st.confirmed_at).total_seconds() / 60
         if age > self.config['retest_expiry_minutes']:
             st.state, st.reason = 'EXPIRED', 'No clean retest in allowed window'
-            self._event(st, 'EXPIRED', c.at + timedelta(minutes=5), st.reason,
+            self._event(st, 'EXPIRED', c.at + self.bar_delta, st.reason,
                         op.high if st.confirmed_side == 'LONG' else op.low,
                         provisional=provisional)
             return
@@ -418,14 +472,14 @@ class RadarEngine:
         if st.confirmed_side == 'LONG':
             if c.close < op.high * (1 - tol):
                 st.state, st.reason = 'FAILED', 'Retest candle closed below ORH support'
-                self._event(st, 'FAILED', c.at + timedelta(minutes=5), st.reason, op.high,
+                self._event(st, 'FAILED', c.at + self.bar_delta, st.reason, op.high,
                             provisional=provisional)
                 return
             retest_ok = c.low <= op.high * (1 + tol) and c.close >= op.high
         else:
             if c.close > op.low * (1 + tol):
                 st.state, st.reason = 'FAILED', 'Retest candle closed above ORL resistance'
-                self._event(st, 'FAILED', c.at + timedelta(minutes=5), st.reason, op.low,
+                self._event(st, 'FAILED', c.at + self.bar_delta, st.reason, op.low,
                             provisional=provisional)
                 return
             retest_ok = c.high >= op.low * (1 - tol) and c.close <= op.low
@@ -465,7 +519,7 @@ class RadarEngine:
                          f'net {rr:.2f}:1 (ESTIMATE ONLY). Check MIS, spreads, resistance.')
         st.side = st.confirmed_side
         st.score = max(st.score, 80 if st.state == 'RETEST_READY' else 40)
-        self._event(st, st.state, c.at + timedelta(minutes=5), st.reason,
+        self._event(st, st.state, c.at + self.bar_delta, st.reason,
                     op.high if st.side == 'LONG' else op.low, provisional=provisional)
 
     def needs_verification(self, symbol: str) -> bool:
@@ -549,13 +603,12 @@ class RadarEngine:
             sess_close = self.config.get('session_close') or '15:30'
             wall = now_ist()
             live = (wall.date() == self.session and
-                    wall < market_dt(self.session, sess_close) +
-                    timedelta(minutes=self.config.get('open_range_minutes', 5)))
+                    wall < market_dt(self.session, sess_close) + self.bar_delta)
             return {
                 'symbol': symbol, 'session': self.session.isoformat(), 'mode': self.mode,
                 'live': live,
                 'opening': ({'t': int(op.at.timestamp()), 'high': round(op.high, 2),
-                             'low': round(op.low, 2)} if op else None),
+                             'low': round(op.low, 2), 'minutes': self.or_minutes} if op else None),
                 'candles': candles, 'events': events,
                 'final': {'state': st.state, 'side': st.side, 'score': st.score,
                           'reason': st.reason, 'entry': st.entry, 'stop': st.stop,
@@ -563,7 +616,7 @@ class RadarEngine:
                           'net_rr': round(st.net_rr, 2) if st.net_rr is not None else None},
                 'info': {'industry': st.info.industry, 'atr_pct': st.info.daily_atr_pct,
                          'turnover_cr': st.info.median_turnover_cr},
-                'bar_minutes': self.config.get('open_range_minutes', 5),
+                'bar_minutes': self.bar_minutes,
             }
 
     def snapshot(self, reference_time: datetime | None = None):

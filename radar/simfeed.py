@@ -16,7 +16,7 @@ from datetime import timedelta
 
 from .engine import RadarEngine
 from .models import Candle, Instrument, Tick
-from .utils import market_dt, now_ist
+from .utils import market_dt, now_ist, signal_bar_minutes
 
 _BASE_SYMBOLS = ['SIMINFY', 'SIMSBIN', 'SIMTCS', 'SIMRELI', 'SIMHDFC', 'SIMICICI', 'SIMAXIS',
                  'SIMLT', 'SIMITC', 'SIMWIPRO', 'SIMTATA', 'SIMBHARTI', 'SIMMARUTI', 'SIMSUN',
@@ -38,77 +38,102 @@ _PATH = {
 }
 
 
-def _flat(sym: str, base: float, bars: list):
+def _or_candles(bars: list, base: float, orh: float, orl: float, volume: int) -> dict:
+    """The opening-range window, spread across however many bars cover it.
+
+    On the 5-minute setting that is one candle, exactly as before. On 1-minute it is five, and the
+    extremes are placed on the first and last so the merged range still comes out at orh/orl —
+    otherwise the sim would never reproduce the range the engine is supposed to find.
+    """
+    n = len(bars)
+    per = max(1, volume // n)
+    out = {}
+    for i, b in enumerate(bars):
+        high = orh if i == 0 else round(base * 1.002, 2)
+        low = orl if i == n - 1 else round(base * 0.998, 2)
+        out[b] = Candle(b, base, max(high, base), min(low, base), base, per)
+    return out
+
+
+def _flat(sym: str, base: float, bars: list, or_n: int, scale: float, tick_at):
     orh, orl = round(base * 1.004, 2), round(base * 0.996, 2)
-    candles = {bars[0]: Candle(bars[0], base, orh, orl, base, 60000)}
+    candles = _or_candles(bars[:or_n], base, orh, orl, int(60000 * scale))
     ticks = []
-    for i, b in enumerate(bars[1:]):
+    for i, b in enumerate(bars[or_n:]):
         p = base * (1 + 0.0007 * ((i % 3) - 1))
-        candles[b] = Candle(b, round(p, 2), round(p * 1.0012, 2), round(p * 0.9988, 2), round(p, 2), 32000)
-        ticks.append(Tick(sym, round(p, 2), b + timedelta(minutes=2), 32000, round(p, 2)))
+        vol = int(32000 * scale)
+        candles[b] = Candle(b, round(p, 2), round(p * 1.0012, 2), round(p * 0.9988, 2), round(p, 2), vol)
+        ticks.append(Tick(sym, round(p, 2), tick_at(b, 2), vol, round(p, 2)))
     return candles, ticks
 
 
-def _one(sym: str, base: float, eb: int, kind: str, bars: list):
+def _one(sym: str, base: float, eb: int, kind: str, bars: list, or_n: int, scale: float, tick_at):
     """Breakout at bar `eb`, retest at eb+1, then the gradual follow-through for `kind`."""
     r = round
-    candles, ticks = {}, []
+    v = lambda n: int(n * scale)
     orh, orl = r(base * 1.004, 2), r(base * 0.996, 2)
-    candles[bars[0]] = Candle(bars[0], base, orh, orl, base, 85000)
+    candles = _or_candles(bars[:or_n], base, orh, orl, v(85000))
+    ticks = []
     # pre-breakout bars sit inside the opening range (no signal), so entries can be staggered.
-    for i in range(1, eb):
-        candles[bars[i]] = Candle(bars[i], base, r(base * 1.001, 2), r(base * 0.999, 2), base, 30000)
+    for i in range(or_n, eb):
+        candles[bars[i]] = Candle(bars[i], base, r(base * 1.001, 2), r(base * 0.999, 2), base, v(30000))
     bb, rb = bars[eb], bars[eb + 1]
     rest = bars[eb + 2:]
     long_ = kind in ('win', 'loss')
     if long_:
-        ticks.append(Tick(sym, r(base * 1.003, 2), bb + timedelta(minutes=1), 120000, r(base, 2)))
-        ticks.append(Tick(sym, r(base * 1.006, 2), bb + timedelta(minutes=3), 200000, r(base * 1.002, 2)))
-        candles[bb] = Candle(bb, base, r(base * 1.007, 2), r(base * 1.001, 2), r(base * 1.006, 2), 190000)
-        ticks.append(Tick(sym, r(base * 1.0045, 2), rb + timedelta(seconds=20), 70000, r(base * 1.003, 2)))
-        candles[rb] = Candle(rb, r(base * 1.006, 2), r(base * 1.0065, 2), r(base * 1.0045, 2), r(base * 1.005, 2), 80000)
+        ticks.append(Tick(sym, r(base * 1.003, 2), tick_at(bb, 1), v(120000), r(base, 2)))
+        ticks.append(Tick(sym, r(base * 1.006, 2), tick_at(bb, 3), v(200000), r(base * 1.002, 2)))
+        candles[bb] = Candle(bb, base, r(base * 1.007, 2), r(base * 1.001, 2), r(base * 1.006, 2), v(190000))
+        ticks.append(Tick(sym, r(base * 1.0045, 2), tick_at(rb, 1 / 3), v(70000), r(base * 1.003, 2)))
+        candles[rb] = Candle(rb, r(base * 1.006, 2), r(base * 1.0065, 2), r(base * 1.0045, 2), r(base * 1.005, 2), v(80000))
     else:  # SHORT
-        ticks.append(Tick(sym, r(base * 0.997, 2), bb + timedelta(minutes=1), 120000, r(base, 2)))
-        ticks.append(Tick(sym, r(base * 0.994, 2), bb + timedelta(minutes=3), 200000, r(base * 0.998, 2)))
-        candles[bb] = Candle(bb, base, r(base * 0.999, 2), r(base * 0.993, 2), r(base * 0.994, 2), 190000)
-        ticks.append(Tick(sym, r(base * 0.9955, 2), rb + timedelta(seconds=20), 70000, r(base * 0.997, 2)))
-        candles[rb] = Candle(rb, r(base * 0.994, 2), r(base * 0.9958, 2), r(base * 0.993, 2), r(base * 0.9955, 2), 80000)
+        ticks.append(Tick(sym, r(base * 0.997, 2), tick_at(bb, 1), v(120000), r(base, 2)))
+        ticks.append(Tick(sym, r(base * 0.994, 2), tick_at(bb, 3), v(200000), r(base * 0.998, 2)))
+        candles[bb] = Candle(bb, base, r(base * 0.999, 2), r(base * 0.993, 2), r(base * 0.994, 2), v(190000))
+        ticks.append(Tick(sym, r(base * 0.9955, 2), tick_at(rb, 1 / 3), v(70000), r(base * 0.997, 2)))
+        candles[rb] = Candle(rb, r(base * 0.994, 2), r(base * 0.9958, 2), r(base * 0.993, 2), r(base * 0.9955, 2), v(80000))
     path = _PATH[kind]
     for i, b in enumerate(rest):
         f = path[min(i, len(path) - 1)]
         p = r(base * f, 2)
         candles[b] = Candle(b, r(base * (f + (0.001 if long_ else -0.001)), 2),
-                            r(base * (f + 0.0015), 2), r(base * (f - 0.0015), 2), p, 55000)
-        ticks.append(Tick(sym, p, b + timedelta(minutes=2), 55000, r(base * f, 2)))
+                            r(base * (f + 0.0015), 2), r(base * (f - 0.0015), 2), p, v(55000))
+        ticks.append(Tick(sym, p, tick_at(b, 2), v(55000), r(base * f, 2)))
     return candles, ticks
 
 
-def _make_scenarios(instruments, bars, rng):
+def _make_scenarios(instruments, bars, rng, or_n: int, scale: float, tick_at):
     """A freshly randomised set of per-symbol scenarios for one replay cycle."""
     scenarios = {}
-    max_eb = max(1, min(4, len(bars) - 10))    # keep entries early so trades resolve within the cycle
+    # Breakouts can only start once the opening range is complete, and must leave room for the
+    # retest bar plus some follow-through before the session ends.
+    max_eb = max(or_n, min(or_n + 3, len(bars) - 6))
     for ins in instruments:
         base = ins.previous_close
         if rng.random() < _FLAT_PROB:
-            scenarios[ins.symbol] = _flat(ins.symbol, base, bars)
+            scenarios[ins.symbol] = _flat(ins.symbol, base, bars, or_n, scale, tick_at)
             continue
-        eb = rng.randint(1, max_eb)
+        eb = rng.randint(or_n, max_eb)
         long_ = rng.random() < 0.5
         win = rng.random() < _WIN_PROB
         kind = ('win' if win else 'loss') if long_ else ('swin' if win else 'sloss')
-        scenarios[ins.symbol] = _one(ins.symbol, base, eb, kind, bars)
+        scenarios[ins.symbol] = _one(ins.symbol, base, eb, kind, bars, or_n, scale, tick_at)
     return scenarios
 
 
 def _bars(config: dict, day):
+    bar_minutes = signal_bar_minutes(config)
     sim_start = market_dt(day, config['open_range_start'])
     sim_end = market_dt(day, config.get('sim_end', config['new_signals_stop']))
+    step = timedelta(minutes=bar_minutes)
     bars, b = [], sim_start
     while b < sim_end:
         bars.append(b)
-        b += timedelta(minutes=5)
-    while len(bars) < 10:   # guarantee enough bars for a setup + follow-through
-        bars.append(bars[-1] + timedelta(minutes=5))
+        b += step
+    # Enough bars for the opening range, a setup and its follow-through.
+    minimum = max(10, (config.get('open_range_minutes', 5) // bar_minutes) + 9)
+    while len(bars) < minimum:
+        bars.append(bars[-1] + step)
     return bars
 
 
@@ -144,7 +169,9 @@ def run_sim(config: dict, port: int):
             print(f'Sim Telegram notify failed: {type(e).__name__}: {e}')
 
     engine = RadarEngine(instruments, config, day, mode='SIMULATION', on_signal=on_signal)
-    bl = {b.strftime('%H:%M'): 50000 for b in bars}
+    # Baseline scales with the bar, exactly as the synthetic volumes do, so RVOL — and therefore
+    # which setups confirm — is identical whichever interval the practice session runs at.
+    bl = {b.strftime('%H:%M'): int(50000 * engine.bar_minutes / 5) for b in bars}
     for ins in instruments:
         engine.set_baseline(ins.symbol, bl)
     engine.update_health('SIMULATION — synthetic accelerated feed, not a live market')
@@ -161,6 +188,13 @@ def _play(engine: RadarEngine, bars, instruments, config):
     loop = bool(config.get('sim_loop', False))
     speed = max(1.0, float(config.get('sim_speed', 10)))
     grace = config.get('history_confirmation_grace_seconds', 12)
+    bar_minutes = engine.bar_minutes
+    or_n = engine.or_bar_count
+    scale = bar_minutes / 5          # synthetic volume per bar, pro-rated to the bar's length
+    # Ticks must land inside the bar that carries them; offsets are written in 5-minute terms, so
+    # on a shorter bar they compress by the same ratio instead of spilling into the next one.
+    def tick_at(bar_dt, minutes_in_5m):
+        return bar_dt + timedelta(seconds=minutes_in_5m * 60 * scale)
     day = now_ist().date()
     sim_start = market_dt(day, config['open_range_start'])
     sim_end = market_dt(day, config.get('sim_end', config['new_signals_stop']))
@@ -169,13 +203,14 @@ def _play(engine: RadarEngine, bars, instruments, config):
     while True:
         engine.reset()
         engine.update_health('SIMULATION — synthetic accelerated feed, not a live market')
-        scenarios = _make_scenarios(instruments, bars, rng)
+        scenarios = _make_scenarios(instruments, bars, rng, or_n, scale, tick_at)
         evs = []
         for sym, (candles, ticks) in scenarios.items():
             for t in ticks:
                 evs.append(((t.time - sim_start).total_seconds(), 'tick', sym, t))
             for bdt, c in candles.items():
-                evs.append(((bdt + timedelta(minutes=5, seconds=grace) - sim_start).total_seconds(), 'bar', sym, c))
+                evs.append(((bdt + timedelta(minutes=bar_minutes, seconds=grace)
+                             - sim_start).total_seconds(), 'bar', sym, c))
         evs.sort(key=lambda e: e[0])
         reanchor_sim_clock()
         cycle_start = _time.monotonic()

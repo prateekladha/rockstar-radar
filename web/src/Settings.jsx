@@ -3,6 +3,8 @@ import { api } from './api.js'
 import { Select } from './ui.jsx'
 
 const TIME_KEYS = ['open_range_start', 'watch_start', 'new_signals_stop']
+// Rendered as switches rather than number boxes, and skipped by the numeric validator.
+const BOOL_KEYS = ['use_one_minute_candles']
 const okTime = (t) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(t))
 const human = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/Pct/g, '%').replace(/Inr/g, '₹').replace(/Cr/g, '(cr)').replace(/Atr/g, 'ATR').replace(/Rvol/g, 'RVOL').replace(/Or /g, 'OR ')
 
@@ -23,6 +25,7 @@ export default function Settings() {
 
   const err = (k, v) => {
     if (k === 'auto_trade_trigger') return ''   // enum, rendered as a dropdown below
+    if (BOOL_KEYS.includes(k)) return ''        // switch; can't be out of range
     if (TIME_KEYS.includes(k)) return okTime(v) ? '' : 'HH:MM'
     return v === '' || isNaN(Number(v)) ? 'number' : (Number(v) < 0 ? '≥ 0' : '')
   }
@@ -54,6 +57,22 @@ export default function Settings() {
         <div className="settings-grid">
           {Object.entries(cfg).filter(([k]) => k !== 'auto_trade_trigger').map(([k, v]) => {
             const e = err(k, v)
+            if (BOOL_KEYS.includes(k)) {
+              return (
+                <div className="field" key={k}><label>{human(k)}</label>
+                  <button className={'toggle' + (v ? ' on' : '')} role="switch" aria-checked={!!v}
+                    onClick={() => set(k, !v)}><span className="knob" />{v ? 'On' : 'Off'}</button>
+                  {k === 'use_one_minute_candles' && (
+                    <p className="note" style={{ marginTop: 8 }}>
+                      On: breakouts and retests are judged on 1-minute candles, so setups are
+                      spotted sooner and more of them appear. Off: 5-minute candles — slower,
+                      fewer, steadier. The opening range stays 09:15–09:20 either way.
+                      Takes effect when the scanner next starts.
+                    </p>
+                  )}
+                </div>
+              )
+            }
             return (
               <div className="field" key={k}><label>{human(k)}</label>
                 <input type={TIME_KEYS.includes(k) ? 'text' : 'number'} value={v ?? ''}
