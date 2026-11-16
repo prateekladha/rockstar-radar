@@ -11,11 +11,11 @@ from pathlib import Path
 from .aggregator import LiveCandleBuilder
 from .engine import RadarEngine, same_time_baseline
 from .health import write_health
-from .fyers import (ApiAuthError, ApiError, ApiPermissionError,
+from .fyers import (ApiAuthError, ApiError, ApiInputError, ApiPermissionError,
                     ApiProviderError, ApiRateLimitError, FyersAdapter)
 from .models import Candle, Signal
 from .selecting import read_selection
-from .utils import IST, ROOT, bar_start, market_dt, now_ist
+from .utils import IST, ROOT, bar_start, market_dt, now_ist, signal_bar_minutes
 
 
 class SessionJournal:
@@ -80,8 +80,13 @@ class SessionJournal:
                     [bar.at.isoformat(),symbol,bar.open,bar.high,bar.low,bar.close,bar.volume])
 
 
-def cache_path(day: date):
-    return ROOT / 'data' / f'baseline_{day.isoformat()}.json'
+def cache_path(day: date, bar_minutes: int = 5):
+    """Baselines are per bar width — a 1-minute median is roughly a fifth of a 5-minute one.
+
+    The width is in the filename so flipping `use_one_minute_candles` cannot silently reuse the
+    other setting's cache and divide every RVOL by the wrong number.
+    """
+    return ROOT / 'data' / f'baseline_{day.isoformat()}_{int(bar_minutes)}m.json'
 
 
 def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
@@ -97,6 +102,9 @@ def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
     events_path = journal.events_path
     restored_candles = 0
     restored_events = 0
+    bar_delta = timedelta(minutes=engine.bar_minutes)
+    or_start = market_dt(journal.day, engine.config['open_range_start'])
+    or_end = or_start + timedelta(minutes=engine.or_minutes)
     if candles_path.exists():
         with candles_path.open(newline='', encoding='utf-8') as source:
             for row in csv.DictReader(source):
@@ -105,7 +113,7 @@ def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
                     if symbol not in engine.states:
                         continue
                     at = datetime.fromisoformat(row['bar_start_ist']).astimezone(IST)
-                    if at.date() != journal.day or at + timedelta(minutes=5) > observed:
+                    if at.date() != journal.day or at + bar_delta > observed:
                         continue
                     candle = Candle(at, float(row['open']), float(row['high']),
                                     float(row['low']), float(row['close']), int(row['volume']))
@@ -117,12 +125,19 @@ def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
                         continue
                     st.completed[key] = candle
                     journal.bar_ids.add((symbol, candle.at))
-                    if candle.at == market_dt(journal.day, engine.config['open_range_start']):
-                        st.opening = candle
-                        st.state = 'RECOVERING'
-                        st.reason = 'Opening range restored from local log; awaiting fresh FYERS data'
-                        st.score = 0
-                        journal.anchor_ids.add(symbol)
+                    if or_start <= candle.at < or_end:
+                        # Rebuild through the engine so a partial window (fewer bars logged than
+                        # the range needs) leaves `opening` unset rather than producing a range
+                        # that is too narrow and wrong for the rest of the day.
+                        st.or_bars[key] = candle
+                        opening = engine._build_opening(st)
+                        if opening is not None:
+                            st.opening = opening
+                            st.state = 'RECOVERING'
+                            st.reason = ('Opening range restored from local log; '
+                                         'awaiting fresh FYERS data')
+                            st.score = 0
+                            journal.anchor_ids.add(symbol)
                     restored_candles += 1
                 except (KeyError, TypeError, ValueError, OverflowError):
                     continue  # A malformed historical line must not crash fresh data collection.
@@ -171,7 +186,7 @@ def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
 
 def load_existing_baselines(engine: RadarEngine, today: date) -> int:
     """Read local baselines without contacting FYERS during a closed session."""
-    path = cache_path(today)
+    path = cache_path(today, engine.bar_minutes)
     if not path.exists():
         return 0
     try:
@@ -184,12 +199,41 @@ def load_existing_baselines(engine: RadarEngine, today: date) -> int:
     return sum(bool(engine.baselines.get(s)) for s in engine.states)
 
 
+def baseline_history(adapter: FyersAdapter, symbol: str, resolution: str,
+                     from_dt: datetime, to_dt: datetime, max_days: int = 25) -> list[Candle]:
+    """Prior-session candles for one symbol, re-requested in windows only if the broker refuses.
+
+    The lookback is ~15,000 candles at 1-minute resolution against ~3,000 at 5-minute, and brokers
+    cap how wide an intraday history window may be. The full range is attempted first, so nothing
+    changes on accounts that accept it; the split costs one extra request and only where needed.
+    Only an input/range rejection is retried — an expired token, a missing permission or a rate
+    limit must still stop baseline preparation outright rather than become N more identical calls.
+    """
+    try:
+        return adapter.history(symbol, resolution, int(from_dt.timestamp()), int(to_dt.timestamp()))
+    except ApiInputError:
+        pass
+    out: list[Candle] = []
+    cursor = from_dt
+    while cursor < to_dt:
+        end = min(cursor + timedelta(days=max_days), to_dt)
+        out.extend(adapter.history(symbol, resolution, int(cursor.timestamp()), int(end.timestamp())))
+        cursor = end + timedelta(seconds=1)      # disjoint windows: no double-counted volume
+    return sorted(out, key=lambda c: c.at)
+
+
 def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
                     config: dict, force: bool = False, on_progress=None) -> dict[str, dict[str, float]]:
-    """Only previous sessions' 5m candles; cached so market-day startup needs no REST warmup.
+    """Only previous sessions' candles; cached so market-day startup needs no REST warmup.
+
+    Resolution follows the configured signal bar, because RVOL compares a live bar against the
+    median of the same clock slot: a 1-minute bar has to be measured against 1-minute history.
+    The request count is unchanged (one per symbol) — only the rows per response grow.
     on_progress(done, total) is called as symbols are processed, so a warming scanner can surface
     'X/N symbols ready' before its dashboard is up."""
-    path = cache_path(day)
+    bar_minutes = signal_bar_minutes(config)
+    resolution = str(bar_minutes)
+    path = cache_path(day, bar_minutes)
     stored = json.loads(path.read_text(encoding='utf-8')) if path.exists() and not force else {}
     from_dt = market_dt(day - timedelta(days=40), '00:00')
     to_dt = market_dt(day, '00:00') - timedelta(seconds=1)
@@ -202,11 +246,12 @@ def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
         if symbol in stored and stored[symbol]:
             continue
         try:
-            candles = adapter.history(symbol, '5', int(from_dt.timestamp()), int(to_dt.timestamp()))
+            candles = baseline_history(adapter, symbol, resolution, from_dt, to_dt)
             baseline = same_time_baseline(candles, day, config['baseline_sessions'])
             stored[symbol] = baseline
             if not baseline:
-                print(f'  Warning: {symbol} lacks >=10 prior sessions of 5m volume history')
+                print(f'  Warning: {symbol} lacks >=10 prior sessions of '
+                      f'{bar_minutes}m volume history')
         except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError):
             # A provider block must end ALL history preparation, not become
             # 100 more identical requests and 100 empty baselines.
@@ -217,7 +262,7 @@ def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
             stored[symbol] = {}
         if i % 10 == 0:
             path.write_text(json.dumps(stored), encoding='utf-8')
-            print(f'  FYERS 5m volume baselines: {i}/{len(symbols)}')
+            print(f'  FYERS {bar_minutes}m volume baselines: {i}/{len(symbols)}')
     path.write_text(json.dumps(stored), encoding='utf-8')
     return stored
 
@@ -270,7 +315,8 @@ def start_live(config: dict, selection_path: Path, port: int):
         return
 
     adapter = FyersAdapter(config)
-    print('Loading cached prior-session 5m volume baselines (warm up before 09:15 IST).')
+    print(f'Loading cached prior-session {engine.bar_minutes}m volume baselines '
+          '(warm up before 09:15 IST).')
 
     def _warm(done, total):
         write_health(_scanner_id, ok=True, warmup={'done': done, 'total': total, 'phase': 'baselines'})
@@ -285,10 +331,10 @@ def start_live(config: dict, selection_path: Path, port: int):
         raise ValueError(f'Only {good}/{len(info)} same-time baselines ready. '
                          'Insufficient history; refusing unreliable scans.')
     print(f'{good}/{len(info)} same-time volume baselines ready.')
-    # Realtime path: aggregate websocket ticks into completed 5m candles and feed them
-    # as PROVISIONAL bars (confirm ~1s after close). REST history reconciles each one.
+    # Realtime path: aggregate websocket ticks into completed signal-interval candles and feed
+    # them as PROVISIONAL bars (confirm ~1s after close). REST history reconciles each one.
     builder = LiveCandleBuilder(
-        bar_minutes=config.get('open_range_minutes', 5),
+        bar_minutes=engine.bar_minutes,
         on_bar=lambda sym, candle: engine.ingest_live_bar(sym, candle))
 
     def on_tick(t):
@@ -330,7 +376,14 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
     failures_in_a_row = 0
     last_heartbeat = 0.0
     cfg = engine.config
-    start = market_dt(engine.session, '09:15')
+    bar_minutes = engine.bar_minutes
+    bar_delta = timedelta(minutes=bar_minutes)
+    resolution = str(bar_minutes)
+    start = market_dt(engine.session, '09:15')          # how far back each history call reaches
+    # The opening-range window comes from config, not from `start`: on a special session (Muhurat)
+    # the range opens in the afternoon while history is still fetched from 09:15.
+    or_start = market_dt(engine.session, cfg['open_range_start'])
+    or_end = or_start + timedelta(minutes=engine.or_minutes)
     while True:
         now = now_ist()
         mono = time.monotonic()
@@ -351,10 +404,10 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
             engine.update_health('Scanning completed for the day; audit after close')
             return
         # FYERS intraday history can include partial candles. Filter using completed candle time.
-        if now.second < cfg['history_confirmation_grace_seconds'] and now.minute % 5 == 0:
+        if now.second < cfg['history_confirmation_grace_seconds'] and now.minute % bar_minutes == 0:
             time.sleep(0.6)
             continue
-        latest_completed_start = bar_start(now) - timedelta(minutes=5)
+        latest_completed_start = bar_start(now, bar_minutes) - bar_delta
         target_epoch = int(latest_completed_start.timestamp())
         if target_epoch < int(start.timestamp()):
             time.sleep(1)
@@ -384,16 +437,19 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
         symbol = queue[0]
         try:
             until = int((now - timedelta(seconds=60)).timestamp())
-            candles = adapter.history(symbol, '5', int(start.timestamp()), until)
+            candles = adapter.history(symbol, resolution, int(start.timestamp()), until)
             # Strictly discard unfinished bars, and avoid displaying late discovered historical
             # alerts as though real time. Only bootstrap OR bars when much later than closure.
             for bar in candles:
-                if bar.at + timedelta(minutes=5, seconds=cfg['history_confirmation_grace_seconds']) > now:
+                if bar.at + bar_delta + timedelta(
+                        seconds=cfg['history_confirmation_grace_seconds']) > now:
                     continue
                 bar_ts = int(bar.at.timestamp())
                 is_prov = engine.is_provisional(symbol, bar_ts)
-                if (bar.at + timedelta(minutes=5) < now - timedelta(seconds=105)
-                        and bar.at != start and not is_prov):
+                # Bars inside the opening-range window are always ingested, however late: they
+                # build the range itself, and on 1m that is five bars rather than just the first.
+                if (bar.at + bar_delta < now - timedelta(seconds=105)
+                        and not (or_start <= bar.at < or_end) and not is_prov):
                     # Old bar never seen live: save for audit/continuity, but don't trigger
                     # late historical signals. (A provisional bar MUST still be reconciled.)
                     with engine.lock:
@@ -404,7 +460,9 @@ def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: Sessi
                 # Authoritative ingest: confirms live candidates and reconciles (validates
                 # or retracts) any provisional signal built from this bar.
                 engine.ingest_closed_bar(symbol, bar, observed_at=now)
-                if bar.at == start and engine.states[symbol].opening:
+                # On 1m the range is only complete after the last bar of the window, so record the
+                # anchor the moment `opening` is actually set rather than on the first bar.
+                if (or_start <= bar.at < or_end) and engine.states[symbol].opening:
                     journal.anchor(symbol, now)
                 journal.candle(symbol, bar)
             checked[symbol] = target_epoch

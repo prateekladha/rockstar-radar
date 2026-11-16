@@ -47,9 +47,22 @@ def market_dt(day: date, hhmm: str) -> datetime:
     return datetime.combine(day, time(hour, minute), IST)
 
 
-def bar_start(dt: datetime) -> datetime:
+def signal_bar_minutes(config: dict) -> int:
+    """Minutes per candle the state machine watches for breakout / retest / confirmation.
+
+    This is NOT the opening range, which stays `open_range_minutes` wide (09:15-09:20) whatever
+    this returns. Only the resolution the engine observes AFTERWARDS changes: on 1m the same rules
+    are tested five times as often, so setups are seen sooner and more of them appear.
+    """
+    return 1 if config.get('use_one_minute_candles', True) else 5
+
+
+def bar_start(dt: datetime, minutes: int = 5) -> datetime:
+    """Floor a timestamp onto the exchange bar grid. The NSE day opens at 09:15, so a grid of 1, 3,
+    5, 15 or 30 minutes aligns on the hour and stays in step with the broker's own candles."""
     t = dt.astimezone(IST)
-    return t.replace(minute=(t.minute // 5) * 5, second=0, microsecond=0)
+    m = max(1, int(minutes))
+    return t.replace(minute=(t.minute // m) * m, second=0, microsecond=0)
 
 
 # Special NSE sessions (e.g. Diwali Muhurat) with a non-standard window. Auto-activates on the date
@@ -110,6 +123,11 @@ def load_config(path: str | Path | None = None) -> dict:
     if special:
         for k in ('open_range_start', 'watch_start', 'new_signals_stop'):
             cfg[k] = special[k]
+    # A scanner is a separate process reading this shared file, so a per-user choice that the
+    # ENGINE needs has to arrive by environment. Only settings in that category belong here.
+    one_min = os.environ.get('RADAR_ONE_MINUTE', '').strip().lower()
+    if one_min:
+        cfg['use_one_minute_candles'] = one_min in ('1', 'true', 'yes', 'on')
     return cfg
 
 

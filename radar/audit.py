@@ -5,12 +5,12 @@ import statistics
 from datetime import datetime, timedelta
 from pathlib import Path
 from .models import Candle
-from .utils import IST, ROOT, market_dt, now_ist
+from .utils import IST, ROOT, market_dt, now_ist, signal_bar_minutes
 
 
 def eval_after_signal(side: str, entry: float, stop: float, target: float,
                       from_time: datetime, candles: list[Candle], cost_pct: float,
-                      end_time: datetime) -> tuple[str, float | None, float | None]:
+                      end_time: datetime, bar_minutes: int = 5) -> tuple[str, float | None, float | None]:
     """Simulate an immediate close-price fill AFTER retest completion.
 
     If stop and target touch in same OHLC interval, assign stop first.
@@ -20,7 +20,7 @@ def eval_after_signal(side: str, entry: float, stop: float, target: float,
         return 'INVALID', None, None
     active = [c for c in sorted(candles, key=lambda x: x.at)
               if c.at >= from_time and c.at < end_time and
-              c.at + timedelta(minutes=5) <= end_time]
+              c.at + timedelta(minutes=bar_minutes) <= end_time]
     if not active:
         return 'INCOMPLETE', None, None
     ex_price = None
@@ -57,6 +57,8 @@ def audit_day(adapter, cfg: dict, day, input_file: Path | None = None,
         print('No RETEST_READY candidates were logged that day; no paper outcomes to audit.')
         return []
     cutoff = market_dt(day, '15:15')
+    bar_minutes = signal_bar_minutes(cfg)
+    resolution = str(bar_minutes)
     outcomes = []
     for e in events:
         try:
@@ -65,10 +67,10 @@ def audit_day(adapter, cfg: dict, day, input_file: Path | None = None,
                 continue
             from_ep = int((dt - timedelta(minutes=1)).timestamp())
             through_ep = int((market_dt(day, '15:30') - timedelta(seconds=60)).timestamp())
-            candles = adapter.history(e['symbol'], '5', from_ep, through_ep)
+            candles = adapter.history(e['symbol'], resolution, from_ep, through_ep)
             status, price, r = eval_after_signal(e['side'], float(e['entry']),
                 float(e['stop']), float(e['target']), dt, candles,
-                cfg['estimated_roundtrip_cost_pct'], cutoff)
+                cfg['estimated_roundtrip_cost_pct'], cutoff, bar_minutes)
             outcomes.append({'time_ist':e['time_ist'], 'symbol':e['symbol'],
                 'side':e['side'], 'entry_est':e['entry'], 'stop_est':e['stop'],
                 'target_est':e['target'], 'outcome':status,

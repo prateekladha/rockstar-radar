@@ -77,6 +77,9 @@ class SymbolState:
     info: Instrument
     opening: Optional[Candle] = None
     completed: dict[int, Candle] = field(default_factory=dict)
+    # Authoritative bars covering the opening-range window, keyed by epoch. On the 5-minute setting
+    # that is a single candle; on 1-minute it is five, merged into `opening` once all have arrived.
+    or_bars: dict[int, Candle] = field(default_factory=dict)
     last_tick: Optional[Tick] = None
     state: str = 'WAIT_OR'
     side: str = ''
@@ -99,7 +102,7 @@ class SymbolState:
     stale: bool = True
     # --- realtime provisional / reconciliation bookkeeping ---
     provisional_ts: set = field(default_factory=set)  # bar ts whose stored candle is live-provisional
-    confirm_bar_ts: int = 0            # ts of the 5m bar that produced CONFIRMED
+    confirm_bar_ts: int = 0            # ts of the signal bar that produced CONFIRMED
     confirm_provisional: bool = False  # the confirmation is live-provisional, pending REST
     retest_provisional: bool = False   # the RETEST_READY/RISK_FAIL is live-provisional, pending REST
-    retest_bar_ts: int = 0             # ts of the 5m bar that produced the retest outcome
+    retest_bar_ts: int = 0             # ts of the signal bar that produced the retest outcome

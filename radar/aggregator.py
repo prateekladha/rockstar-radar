@@ -1,7 +1,8 @@
-"""Realtime 5-minute candle aggregation from FYERS SymbolUpdate ticks.
+"""Realtime candle aggregation from FYERS SymbolUpdate ticks.
 
 Phase 1 of the product roadmap: lets breakout confirmation fire ~1 second after a
-5-minute bar closes, instead of waiting for the throttled REST-history sweep.
+bar closes, instead of waiting for the throttled REST-history sweep. Bar width comes
+from the caller (see `signal_bar_minutes`), so the same builder serves both settings.
 
 IMPORTANT — these are PROVISIONAL candles. A tick stream is LTP snapshots plus a
 cumulative daily volume counter, not every executed trade. Open/high/low/close and
@@ -32,7 +33,7 @@ class _Partial:
 
 
 class LiveCandleBuilder:
-    """Aggregates ticks into completed 5-minute candles aligned to the exchange grid.
+    """Aggregates ticks into completed candles aligned to the exchange grid.
 
     Volume for a bar = (cumulative daily volume at bar end) - (cumulative at previous
     bar end). The first bar observed for a symbol can only measure the intra-bar delta
@@ -70,7 +71,7 @@ class LiveCandleBuilder:
         later bar rolls the current one over, otherwise None."""
         if tick.price <= 0:
             return None
-        bs = bar_start(tick.time)
+        bs = bar_start(tick.time, self.bar_minutes)
         with self._lock:
             p = self._partial.get(tick.symbol)
             if p is None:
@@ -99,7 +100,7 @@ class LiveCandleBuilder:
             return completed
 
     def flush_completed(self, now: datetime, grace_seconds: float = 2.0) -> list[tuple[str, Candle]]:
-        """Finalize any in-progress bar whose 5-minute window has already elapsed,
+        """Finalize any in-progress bar whose window has already elapsed,
         even if no new-bar tick has arrived yet (thin/illiquid symbols). Keeps the
         feed realtime without fabricating empty bars for symbols with no ticks."""
         emitted: list[tuple[str, Candle]] = []

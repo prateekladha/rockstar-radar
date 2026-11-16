@@ -19,7 +19,12 @@ def demo_engine(config: dict) -> RadarEngine:
             previous_close=price,
             resistance=sorted([price * 1.015, price * 1.035, price * 1.055]),
             support=sorted([price * .97, price * .98])))
-    engine = RadarEngine(instruments, config, day, mode='SIMULATION')
+    # The fixture below IS a set of 5-minute candles (09:15 / 09:20 / 09:25), so the demo pins that
+    # setting rather than following the global flag — on 1m it would wait forever for an opening
+    # range that these fabricated bars never complete. The practice simulation, which is what
+    # people actually rehearse against, does follow the flag.
+    engine = RadarEngine(instruments, dict(config, use_one_minute_candles=False),
+                         day, mode='SIMULATION')
     for s in symbols:
         engine.set_baseline(s, {'09:15': 50000, '09:20': 50000,
                                 '09:25': 50000, '09:30': 50000})
