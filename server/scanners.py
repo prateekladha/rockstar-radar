@@ -71,11 +71,11 @@ def _sim_speed(user: User) -> str:
 def _one_minute(user: User) -> str:
     """The user's signal-candle choice, as the env flag the scanner subprocess reads.
 
-    Defaults to on, matching config.json, so a user who has never opened Settings gets the
-    same behaviour as a fresh install rather than silently falling back to 5-minute.
+    Defaults to off, matching config.json, so a user who has never opened Settings scans on
+    5-minute candles — the setting this product ran on for its whole history.
     """
     data = (user.settings.data if user.settings else None) or {}
-    return '1' if data.get('use_one_minute_candles', True) else '0'
+    return '1' if data.get('use_one_minute_candles', False) else '0'
 
 
 def _sim_cc_for(user: User) -> ControlCenter:

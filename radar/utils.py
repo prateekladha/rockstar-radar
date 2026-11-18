@@ -53,8 +53,12 @@ def signal_bar_minutes(config: dict) -> int:
     This is NOT the opening range, which stays `open_range_minutes` wide (09:15-09:20) whatever
     this returns. Only the resolution the engine observes AFTERWARDS changes: on 1m the same rules
     are tested five times as often, so setups are seen sooner and more of them appear.
+
+    Absent, this is 5. A missing key means nobody chose, and 1-minute needs every minute of the
+    opening range to be present: a symbol that did not trade for one of them gets no range, and
+    so no signals, for the rest of the day.
     """
-    return 1 if config.get('use_one_minute_candles', True) else 5
+    return 1 if config.get('use_one_minute_candles', False) else 5
 
 
 def bar_start(dt: datetime, minutes: int = 5) -> datetime:
