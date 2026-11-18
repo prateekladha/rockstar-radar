@@ -5,6 +5,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from .engine import RadarEngine
+from .smc_engine import SMCEngine
 
 PAGE = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -52,12 +53,39 @@ el('source').addEventListener('change',render);el('side').addEventListener('chan
 </script></body></html>'''
 
 
-def serve(engine: RadarEngine, port: int = 8765, mode: str = 'LIVE'):
+def serve(engine: RadarEngine, port: int = 8765, mode: str = 'LIVE', smc_engine: SMCEngine = None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             route = urlsplit(self.path)
             if route.path == '/api/state':
                 content = json.dumps(engine.snapshot(), allow_nan=False).encode('utf-8')
+                mime = 'application/json; charset=utf-8'
+            elif route.path == '/api/smc-state':
+                if smc_engine is None:
+                    self.send_error(404)
+                    return
+                # Get SMC opportunities
+                opportunities = smc_engine.get_opportunities()
+                data = {
+                    'opportunities': [
+                        {
+                            'symbol': opp.symbol,
+                            'price': opp.price,
+                            'score': opp.score,
+                            'zone': opp.zone.zone_type if opp.zone else None,
+                            'strong_high': opp.strong_high,
+                            'strong_low': opp.strong_low,
+                            'weak_high': opp.weak_high,
+                            'weak_low': opp.weak_low,
+                            'note': opp.note,
+                            'bullish_order_blocks': len(opp.bullish_order_blocks),
+                            'bearish_order_blocks': len(opp.bearish_order_blocks),
+                            'recent_structure': opp.recent_structure.structure_type if opp.recent_structure else None,
+                        }
+                        for opp in opportunities
+                    ]
+                }
+                content = json.dumps(data, allow_nan=False).encode('utf-8')
                 mime = 'application/json; charset=utf-8'
             elif route.path == '/api/replay':
                 symbol = (parse_qs(route.query).get('symbol') or [''])[0]

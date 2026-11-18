@@ -106,3 +106,95 @@ class SymbolState:
     confirm_provisional: bool = False  # the confirmation is live-provisional, pending REST
     retest_provisional: bool = False   # the RETEST_READY/RISK_FAIL is live-provisional, pending REST
     retest_bar_ts: int = 0             # ts of the signal bar that produced the retest outcome
+
+
+# SMC (Smart Money Concepts) models
+@dataclass
+class SMCPivot:
+    """Represents a swing high or low pivot point"""
+    level: float
+    time: datetime
+    bar_index: int
+    pivot_type: str  # 'HIGH' or 'LOW'
+    is_strong: bool = False  # Strong high/low vs weak high/low
+
+
+@dataclass
+class SMCOrderBlock:
+    """Order block zone - institutional demand/supply area"""
+    high: float
+    low: float
+    time: datetime
+    bias: str  # 'BULLISH' or 'BEARISH'
+    block_type: str  # 'SWING' or 'INTERNAL'
+
+
+@dataclass
+class SMCZone:
+    """Premium, Discount, or Equilibrium zone"""
+    zone_type: str  # 'PREMIUM', 'DISCOUNT', 'EQUILIBRIUM'
+    high: float
+    low: float
+
+
+@dataclass
+class SMCStructure:
+    """Market structure - BOS or CHoCH"""
+    structure_type: str  # 'BOS' or 'CHOCH'
+    bias: str  # 'BULLISH' or 'BEARISH'
+    level: float
+    time: datetime
+    internal: bool = False  # Internal vs swing structure
+
+
+@dataclass
+class SMCOpportunity:
+    """SMC-based trading opportunity with scoring"""
+    symbol: str
+    price: float
+    score: int  # 0-100 based on confluence of factors
+    zone: Optional[SMCZone] = None
+    strong_high: Optional[float] = None
+    strong_low: Optional[float] = None
+    weak_high: Optional[float] = None
+    weak_low: Optional[float] = None
+    bullish_order_blocks: list[SMCOrderBlock] = field(default_factory=list)
+    bearish_order_blocks: list[SMCOrderBlock] = field(default_factory=list)
+    recent_structure: Optional[SMCStructure] = None
+    time: Optional[datetime] = None
+    note: str = ''
+
+
+@dataclass
+class SMCSymbolState:
+    """State tracking for SMC analysis of a symbol"""
+    info: Instrument
+    candles: list[Candle] = field(default_factory=list)  # Recent candles for analysis
+    last_tick: Optional[Tick] = None
+
+    # Swing structure tracking
+    swing_high: Optional[SMCPivot] = None
+    swing_low: Optional[SMCPivot] = None
+    internal_high: Optional[SMCPivot] = None
+    internal_low: Optional[SMCPivot] = None
+
+    # Extremes for premium/discount calculation
+    trailing_high: Optional[float] = None
+    trailing_low: Optional[float] = None
+    trailing_high_time: Optional[datetime] = None
+    trailing_low_time: Optional[datetime] = None
+
+    # Current trend
+    trend: str = 'NEUTRAL'  # 'BULLISH', 'BEARISH', 'NEUTRAL'
+
+    # Order blocks
+    order_blocks: list[SMCOrderBlock] = field(default_factory=list)
+
+    # Recent structures
+    structures: list[SMCStructure] = field(default_factory=list)
+
+    # Current opportunity
+    opportunity: Optional[SMCOpportunity] = None
+
+    # ATR for volatility measurement
+    atr: float = 0.0
