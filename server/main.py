@@ -318,7 +318,7 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
 
         try:
             os.environ['FYERS_APP_ID'] = conn.app_id
-            os.environ['FYERS_ACCESS_TOKEN'] = decrypt(conn.token_enc)
+            os.environ['FYERS_ACCESS_TOKEN'] = decrypt(conn.token_enc) or ''
 
             # Create adapter with user's credentials (reads from env vars we just set)
             adapter = FyersAdapter(load_config())
