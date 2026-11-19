@@ -144,7 +144,7 @@ def detect_fair_value_gaps(candles: list[Candle]) -> list[SMCFairValueGap]:
         candle_2 = candles[i + 2]
 
         # Bullish FVG: gap between candle[0] high and candle[2] low
-        if candle_0.high < candle[2].low:
+        if candle_0.high < candle_2.low:
             gap_high = candle_2.low
             gap_low = candle_0.high
             gap_size = gap_high - gap_low
