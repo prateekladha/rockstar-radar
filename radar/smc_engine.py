@@ -59,41 +59,63 @@ def detect_leg(candles: list[Candle], size: int = 5) -> int:
 
 
 def detect_pivot(candles: list[Candle], size: int = 5) -> tuple[Optional[SMCPivot], Optional[SMCPivot]]:
-    """Detect swing high and low pivots"""
+    """Detect swing high and low pivots by scanning recent candles.
+
+    Returns the most recent confirmed pivot high and pivot low found in the lookback window.
+    A pivot is confirmed when it has 'size' candles on both left and right that don't exceed/break it.
+    """
     if len(candles) < size * 2 + 1:
         return None, None
 
     pivot_high = None
     pivot_low = None
 
-    # Check for pivot high
-    pivot_idx = -size - 1
-    pivot_candle = candles[pivot_idx]
+    # Scan from most recent possible pivot position backwards
+    # Start from position -(size+1) and go back up to 50 candles
+    # This finds the most recent pivots, not just one fixed position
+    scan_start = min(len(candles) - size - 1, 50)  # Don't scan too far back
 
-    left_highs = [c.high for c in candles[pivot_idx - size:pivot_idx]]
-    right_highs = [c.high for c in candles[pivot_idx + 1:pivot_idx + size + 1]]
+    for i in range(size, scan_start):
+        pivot_idx = -(i + 1)  # Negative index from end
+        pivot_candle = candles[pivot_idx]
 
-    if left_highs and right_highs:
-        if pivot_candle.high >= max(left_highs) and pivot_candle.high >= max(right_highs):
-            pivot_high = SMCPivot(
-                level=pivot_candle.high,
-                time=pivot_candle.at,
-                bar_index=len(candles) + pivot_idx,
-                pivot_type='HIGH'
-            )
+        # Get left and right context for this potential pivot
+        left_start = pivot_idx - size
+        left_end = pivot_idx
+        right_start = pivot_idx + 1
+        right_end = pivot_idx + size + 1
 
-    # Check for pivot low
-    left_lows = [c.low for c in candles[pivot_idx - size:pivot_idx]]
-    right_lows = [c.low for c in candles[pivot_idx + 1:pivot_idx + size + 1]]
+        # Check for pivot high (only if we haven't found one yet)
+        if pivot_high is None:
+            left_highs = [c.high for c in candles[left_start:left_end]]
+            right_highs = [c.high for c in candles[right_start:right_end]]
 
-    if left_lows and right_lows:
-        if pivot_candle.low <= min(left_lows) and pivot_candle.low <= min(right_lows):
-            pivot_low = SMCPivot(
-                level=pivot_candle.low,
-                time=pivot_candle.at,
-                bar_index=len(candles) + pivot_idx,
-                pivot_type='LOW'
-            )
+            if left_highs and right_highs:
+                if pivot_candle.high >= max(left_highs) and pivot_candle.high >= max(right_highs):
+                    pivot_high = SMCPivot(
+                        level=pivot_candle.high,
+                        time=pivot_candle.at,
+                        bar_index=len(candles) + pivot_idx,
+                        pivot_type='HIGH'
+                    )
+
+        # Check for pivot low (only if we haven't found one yet)
+        if pivot_low is None:
+            left_lows = [c.low for c in candles[left_start:left_end]]
+            right_lows = [c.low for c in candles[right_start:right_end]]
+
+            if left_lows and right_lows:
+                if pivot_candle.low <= min(left_lows) and pivot_candle.low <= min(right_lows):
+                    pivot_low = SMCPivot(
+                        level=pivot_candle.low,
+                        time=pivot_candle.at,
+                        bar_index=len(candles) + pivot_idx,
+                        pivot_type='LOW'
+                    )
+
+        # If we found both, we can stop scanning
+        if pivot_high and pivot_low:
+            break
 
     return pivot_high, pivot_low
 
@@ -284,38 +306,53 @@ class SMCEngine:
         swing_high, swing_low = detect_pivot(state.candles, size=50)
         internal_high, internal_low = detect_pivot(state.candles, size=5)
 
-        # Update swing pivots
+        # Update swing pivots - ONLY update if we found a NEW pivot
+        # This ensures we always have the most recent pivot available
         if swing_high:
-            # Determine if strong or weak high
-            if state.swing_high:
-                swing_high.is_strong = swing_high.level > state.swing_high.level
-            else:
-                swing_high.is_strong = True
-            state.swing_high = swing_high
+            # Check if this is a different pivot than what we have
+            is_new_pivot = (state.swing_high is None or
+                           state.swing_high.time != swing_high.time or
+                           state.swing_high.level != swing_high.level)
 
-            # Detect order block
-            ob = detect_order_block(state.candles, swing_high, 'BEARISH')
-            if ob:
-                state.order_blocks.append(ob)
-                if len(state.order_blocks) > 10:
-                    state.order_blocks.pop(0)
+            if is_new_pivot:
+                # Determine if strong or weak high compared to previous
+                if state.swing_high:
+                    swing_high.is_strong = swing_high.level > state.swing_high.level
+                else:
+                    swing_high.is_strong = True
+
+                state.swing_high = swing_high
+
+                # Detect order block for new pivot
+                ob = detect_order_block(state.candles, swing_high, 'BEARISH')
+                if ob:
+                    state.order_blocks.append(ob)
+                    if len(state.order_blocks) > 10:
+                        state.order_blocks.pop(0)
 
         if swing_low:
-            # Determine if strong or weak low
-            if state.swing_low:
-                swing_low.is_strong = swing_low.level < state.swing_low.level
-            else:
-                swing_low.is_strong = True
-            state.swing_low = swing_low
+            # Check if this is a different pivot than what we have
+            is_new_pivot = (state.swing_low is None or
+                           state.swing_low.time != swing_low.time or
+                           state.swing_low.level != swing_low.level)
 
-            # Detect order block
-            ob = detect_order_block(state.candles, swing_low, 'BULLISH')
-            if ob:
-                state.order_blocks.append(ob)
-                if len(state.order_blocks) > 10:
-                    state.order_blocks.pop(0)
+            if is_new_pivot:
+                # Determine if strong or weak low compared to previous
+                if state.swing_low:
+                    swing_low.is_strong = swing_low.level < state.swing_low.level
+                else:
+                    swing_low.is_strong = True
 
-        # Update internal pivots
+                state.swing_low = swing_low
+
+                # Detect order block for new pivot
+                ob = detect_order_block(state.candles, swing_low, 'BULLISH')
+                if ob:
+                    state.order_blocks.append(ob)
+                    if len(state.order_blocks) > 10:
+                        state.order_blocks.pop(0)
+
+        # Update internal pivots (these can change more frequently)
         if internal_high:
             state.internal_high = internal_high
         if internal_low:
@@ -386,8 +423,9 @@ class SMCEngine:
             state = self.states[symbol]
             state.last_tick = tick
 
-            # Update opportunity if we have enough data
-            if len(state.candles) >= 50:
+            # Update opportunity only if we have enough candles for proper analysis
+            # Need 101+ candles to have detected pivots
+            if len(state.candles) >= 101:
                 self._update_opportunity(state, tick.price)
 
     def _update_opportunity(self, state: SMCSymbolState, current_price: float):
