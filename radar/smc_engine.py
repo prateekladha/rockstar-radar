@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Tuple, Dict
+from .utils import now_ist
 from .models import (
     Candle, Instrument, Tick, SMCPivot, SMCOrderBlock, SMCFairValueGap, SMCZone,
     SMCStructure, SMCOpportunity, SMCSymbolState
@@ -77,12 +78,13 @@ def detect_pivot(candles: list[Candle], size: int = 5) -> tuple[Optional[SMCPivo
     pivot_high = None
     pivot_low = None
 
-    # Scan from most recent possible pivot position backwards
-    # Start from position -(size+1) and go back up to 50 candles
-    # This finds the most recent pivots, not just one fixed position
-    scan_start = min(len(candles) - size - 1, 50)  # Don't scan too far back
+    # Scan from most recent possible pivot position backwards, checking the ~50 most
+    # recent candidate positions. NB: the end bound must be depth-relative to `size`;
+    # a fixed cap of 50 made `range(size, 50)` empty for size>=50, so major (size=50)
+    # swings were never detected.
+    scan_end = min(len(candles) - size, size + 50)
 
-    for i in range(size, scan_start):
+    for i in range(size, scan_end):
         pivot_idx = -(i + 1)  # Negative index from end
         pivot_candle = candles[pivot_idx]
 
@@ -91,11 +93,13 @@ def detect_pivot(candles: list[Candle], size: int = 5) -> tuple[Optional[SMCPivo
         left_end = pivot_idx
         right_start = pivot_idx + 1
         right_end = pivot_idx + size + 1
+        # right_end == 0 makes candles[right_start:0] empty; slice to the end instead.
+        right_ctx = candles[right_start:] if right_end == 0 else candles[right_start:right_end]
 
         # Check for pivot high (only if we haven't found one yet)
         if pivot_high is None:
             left_highs = [c.high for c in candles[left_start:left_end]]
-            right_highs = [c.high for c in candles[right_start:right_end]]
+            right_highs = [c.high for c in right_ctx]
 
             if left_highs and right_highs:
                 if pivot_candle.high >= max(left_highs) and pivot_candle.high >= max(right_highs):
@@ -109,7 +113,7 @@ def detect_pivot(candles: list[Candle], size: int = 5) -> tuple[Optional[SMCPivo
         # Check for pivot low (only if we haven't found one yet)
         if pivot_low is None:
             left_lows = [c.low for c in candles[left_start:left_end]]
-            right_lows = [c.low for c in candles[right_start:right_end]]
+            right_lows = [c.low for c in right_ctx]
 
             if left_lows and right_lows:
                 if pivot_candle.low <= min(left_lows) and pivot_candle.low <= min(right_lows):
@@ -411,7 +415,7 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     # === 5. RECENCY FACTOR (0-15 points bonus/penalty) ===
     # Recent pivots and zone entries are more valuable
     from datetime import datetime, timedelta
-    now = datetime.now()
+    now = now_ist()
     recency_bonus = 0
 
     # Check pivot recency (how recently the pivot was formed)
@@ -670,7 +674,7 @@ def calculate_smc_score_with_breakdown(state: SMCSymbolState, current_price: flo
 
     # === 5. RECENCY FACTOR ===
     from datetime import datetime
-    now = datetime.now()
+    now = now_ist()
     recency_bonus = 0
     recency_details = []
 
@@ -946,7 +950,7 @@ class SMCEngine:
             if state.current_zone_type != zone_type:
                 # Zone changed - record entry time
                 state.current_zone_type = zone_type
-                state.zone_entry_time = datetime.now()
+                state.zone_entry_time = now_ist()
 
         # Update order block mitigation status before scoring
         if state.order_blocks:
@@ -973,7 +977,7 @@ class SMCEngine:
             bullish_order_blocks=[ob for ob in state.order_blocks if ob.bias == 'BULLISH'][-3:],
             bearish_order_blocks=[ob for ob in state.order_blocks if ob.bias == 'BEARISH'][-3:],
             recent_structure=state.structures[-1] if state.structures else None,
-            time=datetime.now(),
+            time=now_ist(),
             note=self._generate_note(state, current_zone)
         )
 
