@@ -64,10 +64,11 @@ export default function Settings() {
                     onClick={() => set(k, !v)}><span className="knob" />{v ? 'On' : 'Off'}</button>
                   {k === 'use_one_minute_candles' && (
                     <p className="note" style={{ marginTop: 8 }}>
-                      On: breakouts and retests are judged on 1-minute candles, so setups are
-                      spotted sooner and more of them appear. Off: 5-minute candles — slower,
-                      fewer, steadier. The opening range stays 09:15–09:20 either way.
-                      Takes effect when the scanner next starts.
+                      Off (default): breakouts and retests are judged on 5-minute candles.
+                      On: 1-minute candles, so setups are spotted sooner and more of them
+                      appear — but a stock that doesn't trade for one minute of 09:15–09:20
+                      gets no opening range, and no signals, that day. The opening range stays
+                      09:15–09:20 either way. Takes effect when the scanner next starts.
                     </p>
                   )}
                 </div>

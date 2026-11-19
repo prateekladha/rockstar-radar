@@ -7,6 +7,7 @@ import { useUpdateAvailable } from './useAppVersion.js'
 import { initAnalytics, identify, resetIdentity, pageview } from './analytics.js'
 import Login from './Login.jsx'
 import Radar from './Radar.jsx'
+import SMCRadar from './SMCRadar.jsx'
 import Watchlist from './Watchlist.jsx'
 import Trades from './Trades.jsx'
 import Settings from './Settings.jsx'
@@ -30,7 +31,7 @@ function ViewModeToggle({ sim }) {
   )
 }
 
-const NAV = [['/radar', 'Radar'], ['/watchlist', 'Watchlist'], ['/trades', 'Trades'], ['/journal', 'Journal'], ['/insights', 'Insights']]
+const NAV = [['/radar', 'Radar'], ['/smc-radar', 'SMC Radar'], ['/watchlist', 'Watchlist'], ['/trades', 'Trades'], ['/journal', 'Journal'], ['/insights', 'Insights']]
 const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings', '/preferences']
 
 export default function App() {
@@ -160,6 +161,7 @@ function Shell({ user, onLogout }) {
 
         <Routes>
           <Route path="/radar" element={<Radar />} />
+          <Route path="/smc-radar" element={<SMCRadar />} />
           <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/trades" element={<Trades />} />
           <Route path="/journal" element={<Journal />} />

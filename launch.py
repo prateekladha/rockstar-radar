@@ -153,14 +153,21 @@ def main():
         elif args.command == 'warmup':
             from radar.fyers import FyersAdapter
             from radar.selecting import read_selection
-            from radar.service import build_baselines
+            from radar.service import build_baselines, cache_smc_history
             payload, infos = read_selection(Path(args.selection))
             day = now_ist().date()
             if payload.get('for_session') != day.isoformat():
                 raise ValueError('Selection must be prepared for today before warmup.')
             adapter = FyersAdapter(cfg)
+
+            # Load ORB baselines (volume patterns)
             result = build_baselines(adapter, [s.symbol for s in infos], day, cfg, force=args.force)
             print('Volume baseline ready:', sum(bool(x) for x in result.values()), '/', len(infos))
+
+            # Load SMC historical context (swing detection, pivots, structure)
+            print('\nWarming SMC historical context...')
+            smc_result = cache_smc_history(adapter, [s.symbol for s in infos], day, cfg, force=args.force)
+            print('SMC history ready:', sum(bool(x) for x in smc_result.values()), '/', len(infos))
         elif args.command == 'live':
             from radar.service import start_live
             start_live(cfg, Path(args.selection), args.port)

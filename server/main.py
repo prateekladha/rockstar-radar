@@ -265,6 +265,25 @@ def api_radar(user: User = Depends(require_user), db: Session = Depends(get_db))
     return state
 
 
+@app.get('/api/smc-radar')
+def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    from . import scanners
+    # Get the effective control center for this user
+    cc = scanners.effective_cc(db, user)
+    if cc is None:
+        return {'offline': True, 'reason': 'Scanner not running', 'opportunities': []}
+
+    # Proxy the SMC state from the scanner subprocess
+    try:
+        import urllib.request
+        import json
+        with urllib.request.urlopen(
+                f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except (urllib.error.URLError, OSError, ValueError):
+        return {'offline': True, 'reason': 'SMC scanner starting...', 'opportunities': []}
+
+
 @app.get('/api/universe')
 def api_universe(user: User = Depends(require_user)):
     from radar import universe as U

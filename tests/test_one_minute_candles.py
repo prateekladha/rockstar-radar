@@ -180,10 +180,15 @@ class ScaledThresholdTests(unittest.TestCase):
 
 
 class PlumbingTests(unittest.TestCase):
-    def test_signal_bar_minutes_reads_the_flag_and_defaults_to_one(self):
-        self.assertEqual(signal_bar_minutes({}), 1)                      # default when absent
+    def test_signal_bar_minutes_reads_the_flag_and_defaults_to_five(self):
+        self.assertEqual(signal_bar_minutes({}), 5)                      # default when absent
         self.assertEqual(signal_bar_minutes(ONE_MIN), 1)
         self.assertEqual(signal_bar_minutes(FIVE_MIN), 5)
+
+    def test_shipped_config_defaults_to_five_minute_candles(self):
+        # The file and the code have to agree; a mismatch would make the scanner and the engine
+        # disagree about bar width depending on which one supplied the value.
+        self.assertEqual(signal_bar_minutes(load_config()), 5)
 
     def test_bar_start_floors_onto_the_requested_grid(self):
         t = market_dt(DAY, '09:23') + timedelta(seconds=47)

@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from .aggregator import LiveCandleBuilder
 from .engine import RadarEngine, same_time_baseline
+from .smc_engine import SMCEngine
 from .health import write_health
 from .fyers import (ApiAuthError, ApiError, ApiInputError, ApiPermissionError,
                     ApiProviderError, ApiRateLimitError, FyersAdapter)
@@ -87,6 +88,11 @@ def cache_path(day: date, bar_minutes: int = 5):
     other setting's cache and divide every RVOL by the wrong number.
     """
     return ROOT / 'data' / f'baseline_{day.isoformat()}_{int(bar_minutes)}m.json'
+
+
+def smc_cache_path(day: date, bar_minutes: int = 5):
+    """SMC historical candles cache path (per bar width and session date)."""
+    return ROOT / 'data' / f'smc_history_{day.isoformat()}_{int(bar_minutes)}m.json'
 
 
 def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
@@ -182,6 +188,136 @@ def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
                      'No duplicate trade alerts after restart.')
     engine.events = engine.events[-150:]
     return restored_candles, restored_events
+
+
+def cache_smc_history(adapter: FyersAdapter, symbols: list[str], day: date,
+                      config: dict, force: bool = False) -> dict[str, bool]:
+    """Pre-fetch and cache SMC historical candles (for warmup phase).
+
+    Like baselines, this can run before market open to prepare the SMC engine's historical context.
+    Caches 5 days of historical candles per symbol for swing detection and structure analysis.
+
+    Returns dict[symbol -> bool] indicating which symbols have cached history.
+    """
+    bar_minutes = signal_bar_minutes(config)
+    resolution = str(bar_minutes)
+    path = smc_cache_path(day, bar_minutes)
+
+    # Load existing cache
+    if path.exists() and not force:
+        stored = json.loads(path.read_text(encoding='utf-8'))
+    else:
+        stored = {}
+
+    # Fetch last 5 days of candles for SMC analysis
+    from_dt = market_dt(day - timedelta(days=5), '09:15')
+    to_dt = market_dt(day, '09:15')
+    total = len(symbols)
+
+    for i, symbol in enumerate(symbols, 1):
+        if symbol in stored and stored[symbol]:
+            continue  # Already cached
+
+        try:
+            candles = baseline_history(adapter, symbol, resolution, from_dt, to_dt)
+            # Store as serializable dict
+            stored[symbol] = [
+                {
+                    'at': c.at.isoformat(),
+                    'open': c.open,
+                    'high': c.high,
+                    'low': c.low,
+                    'close': c.close,
+                    'volume': c.volume
+                }
+                for c in candles
+            ]
+            if not candles:
+                print(f'  Warning: {symbol} has no SMC history available')
+        except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError):
+            path.write_text(json.dumps(stored), encoding='utf-8')
+            raise
+        except Exception as e:
+            print(f'  SMC history unavailable for {symbol}: {type(e).__name__}: {e}')
+            stored[symbol] = []
+
+        if i % 10 == 0:
+            path.write_text(json.dumps(stored), encoding='utf-8')
+            print(f'  SMC history cached: {i}/{total}')
+
+    path.write_text(json.dumps(stored), encoding='utf-8')
+    return {sym: bool(data) for sym, data in stored.items()}
+
+
+def load_smc_history(adapter: FyersAdapter, smc_engine: SMCEngine, today: date,
+                     config: dict) -> int:
+    """Load SMC historical candles into the engine (from cache or fetch).
+
+    First tries to load from cache (created by warmup phase). If cache doesn't exist or is
+    incomplete, fetches from broker API. This allows instant loading if warmup was run, or
+    graceful fallback if it wasn't.
+
+    Returns number of symbols successfully loaded.
+    """
+    bar_minutes = signal_bar_minutes(config)
+    path = smc_cache_path(today, bar_minutes)
+    loaded = 0
+    symbols = list(smc_engine.states.keys())
+
+    # Try to load from cache first (instant if warmup was run)
+    if path.exists():
+        try:
+            stored = json.loads(path.read_text(encoding='utf-8'))
+            print(f'Loading SMC history from cache ({len(stored)} symbols)...')
+
+            for symbol in symbols:
+                if symbol not in stored or not stored[symbol]:
+                    continue
+
+                # Reconstruct Candle objects from cached data
+                candles = [
+                    Candle(
+                        at=datetime.fromisoformat(c['at']),
+                        open=c['open'],
+                        high=c['high'],
+                        low=c['low'],
+                        close=c['close'],
+                        volume=c['volume']
+                    )
+                    for c in stored[symbol]
+                ]
+
+                smc_engine.load_historical_candles(symbol, candles)
+                loaded += 1
+
+            print(f'SMC engine ready: {loaded}/{len(symbols)} symbols loaded from cache')
+            return loaded
+
+        except Exception as e:
+            print(f'SMC cache load failed: {type(e).__name__}: {e}')
+            print('Falling back to live fetch...')
+
+    # Fallback: fetch from broker (if cache doesn't exist or failed)
+    print(f'Fetching SMC historical data from broker ({bar_minutes}m candles, last 5 days)...')
+    resolution = str(bar_minutes)
+    from_dt = market_dt(today - timedelta(days=5), '09:15')
+    to_dt = market_dt(today, '09:15')
+
+    for i, symbol in enumerate(symbols, 1):
+        try:
+            candles = baseline_history(adapter, symbol, resolution, from_dt, to_dt)
+            if candles:
+                smc_engine.load_historical_candles(symbol, candles)
+                loaded += 1
+            if i % 20 == 0:
+                print(f'  SMC history loaded: {i}/{len(symbols)}')
+        except Exception as e:
+            # Non-critical - SMC will work with less data, just less accurate initially
+            print(f'  SMC history unavailable for {symbol}: {type(e).__name__}')
+            continue
+
+    print(f'SMC engine ready: {loaded}/{len(symbols)} symbols have historical context')
+    return loaded
 
 
 def load_existing_baselines(engine: RadarEngine, today: date) -> int:
@@ -289,6 +425,7 @@ def start_live(config: dict, selection_path: Path, port: int):
         except Exception as e:             # a notifier failure must never break scanning
             print(f'Telegram notify failed: {type(e).__name__}: {e}')
     engine = RadarEngine(info, config, today, on_signal=on_signal)
+    smc_engine = SMCEngine(info, config)  # SMC engine for Smart Money Concepts analysis
     restored_candles, restored_events = restore_today_from_local_logs(engine, journal)
     if restored_candles or restored_events:
         print(f'Restored {restored_candles} prior completed candles and '
@@ -331,14 +468,29 @@ def start_live(config: dict, selection_path: Path, port: int):
         raise ValueError(f'Only {good}/{len(info)} same-time baselines ready. '
                          'Insufficient history; refusing unreliable scans.')
     print(f'{good}/{len(info)} same-time volume baselines ready.')
+
+    # Load historical candles for SMC analysis (swing detection needs 100+ historical bars)
+    print('Loading SMC historical context...')
+    try:
+        smc_loaded = load_smc_history(adapter, smc_engine, today, config)
+        print(f'SMC engine initialized with history for {smc_loaded}/{len(info)} symbols')
+    except Exception as e:
+        print(f'SMC history loading failed (non-critical): {type(e).__name__}: {e}')
+        print('SMC engine will build context from real-time data (slower to start)')
+
     # Realtime path: aggregate websocket ticks into completed signal-interval candles and feed
     # them as PROVISIONAL bars (confirm ~1s after close). REST history reconciles each one.
+    def on_bar_completed(sym, candle):
+        engine.ingest_live_bar(sym, candle)   # Feed to ORB radar
+        smc_engine.process_candle(sym, candle)  # Feed to SMC engine
+
     builder = LiveCandleBuilder(
         bar_minutes=engine.bar_minutes,
-        on_bar=lambda sym, candle: engine.ingest_live_bar(sym, candle))
+        on_bar=on_bar_completed)
 
     def on_tick(t):
         engine.update_tick(t)      # intrabar WATCH/READY/BREAKOUT_PENDING early warning
+        smc_engine.process_tick(t.symbol, t)  # Update SMC with current price
         builder.add_tick(t)        # roll completed bars -> provisional confirmation
 
     # FYERS WebSocket can run in a background SDK-owned thread.
@@ -365,7 +517,7 @@ def start_live(config: dict, selection_path: Path, port: int):
     threading.Thread(target=reconcile_history, args=(adapter, engine, journal, _scanner_id),
                      daemon=True, name='history-candle-reconciliation').start()
     from .dashboard import serve
-    serve(engine, port=port)
+    serve(engine, port=port, smc_engine=smc_engine)
 
 
 def reconcile_history(adapter: FyersAdapter, engine: RadarEngine, journal: SessionJournal,

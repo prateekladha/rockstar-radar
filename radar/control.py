@@ -39,9 +39,10 @@ EDITABLE_CONFIG = {
     'max_industry_members': ('int', 1, 100),
     'open_range_start': ('time', None, None),
     'open_range_minutes': ('int', 1, 60),
-    # Candle the state machine watches AFTER the opening range. True = 1-minute (default): the same
-    # breakout/retest rules, tested every minute instead of every five, so setups surface sooner.
-    # False = the original 5-minute behaviour. The opening range is 09:15-09:20 either way.
+    # Candle the state machine watches AFTER the opening range. False = 5-minute (default), the
+    # original behaviour. True = the same breakout/retest rules tested every minute instead of
+    # every five, so setups surface sooner — at the cost of needing all five minutes of the
+    # opening range to have traded. The opening range is 09:15-09:20 either way.
     'use_one_minute_candles': ('bool', None, None),
     'watch_start': ('time', None, None),
     'new_signals_stop': ('time', None, None),
