@@ -157,12 +157,53 @@ export default function DebugRadar() {
                     <h2>SMC Opportunity Detected</h2>
                   </div>
                   <div className="panel-b" style={{ padding: 20 }}>
-                    <OpportunityCard opp={result.opportunity} />
+                    <OpportunityCard opp={result.opportunity} swingHigh={result.swing_high} swingLow={result.swing_low} />
                   </div>
                 </div>
               ) : (
                 <div className="banner" style={{ marginTop: 20, borderColor: '#6b5435', background: '#33291e' }}>
-                  ℹ️ <strong>No Opportunity Found</strong> — {result.message || 'Score below 40 or insufficient confluence'}
+                  ℹ️ <strong>No Opportunity Found</strong> — {result.message || 'Score below 35 or insufficient confluence'}
+                </div>
+              )}
+
+              {/* Show pivot details table even without opportunity */}
+              {!result.opportunity && (result.swing_high || result.swing_low) && (
+                <div className="panel" style={{ marginTop: 20, background: '#131b2e' }}>
+                  <div className="panel-h">
+                    <h2>Detected Pivots (No Opportunity Yet)</h2>
+                  </div>
+                  <div className="panel-b" style={{ padding: 20 }}>
+                    <div className="tbl-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Strong High</th>
+                            <th>Strong Low</th>
+                            <th>Weak High</th>
+                            <th>Weak Low</th>
+                            <th>Structure</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="num">
+                              {result.swing_high?.is_strong ? fmt(result.swing_high.level) : '—'}
+                            </td>
+                            <td className="num">
+                              {result.swing_low?.is_strong ? fmt(result.swing_low.level) : '—'}
+                            </td>
+                            <td className="num">
+                              {result.swing_high && !result.swing_high.is_strong ? fmt(result.swing_high.level) : '—'}
+                            </td>
+                            <td className="num">
+                              {result.swing_low && !result.swing_low.is_strong ? fmt(result.swing_low.level) : '—'}
+                            </td>
+                            <td style={{ fontSize: 11 }}>—</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -263,82 +304,90 @@ const StatCard = ({ label, value, color }) => (
   </div>
 )
 
-const OpportunityCard = ({ opp }) => (
-  <div style={{ display: 'grid', gap: 16 }}>
-    <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
-      <div>
-        <div style={{ fontSize: 12, color: '#93a0b6', marginBottom: 4 }}>Score</div>
+const OpportunityCard = ({ opp, swingHigh, swingLow }) => {
+  // Use opportunity data if available, otherwise fallback to swing pivot data
+  const strongHigh = opp.strong_high || (swingHigh?.is_strong ? swingHigh.level : null)
+  const strongLow = opp.strong_low || (swingLow?.is_strong ? swingLow.level : null)
+  const weakHigh = opp.weak_high || (swingHigh && !swingHigh.is_strong ? swingHigh.level : null)
+  const weakLow = opp.weak_low || (swingLow && !swingLow.is_strong ? swingLow.level : null)
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 12, color: '#93a0b6', marginBottom: 4 }}>Score</div>
+          <div style={{
+            fontSize: 32,
+            fontWeight: 700,
+            color: opp.score >= 85 ? '#48d3a4' : opp.score >= 70 ? '#e9c46a' : '#93a0b6'
+          }}>
+            {opp.score}
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#93a0b6', marginBottom: 4 }}>Zone</div>
+          <span style={{
+            padding: '8px 16px',
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 700,
+            backgroundColor: getZoneColor(opp.zone) + '20',
+            color: getZoneColor(opp.zone),
+            border: `1px solid ${getZoneColor(opp.zone)}40`,
+            display: 'inline-block'
+          }}>
+            {opp.zone || '—'}
+          </span>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#93a0b6', marginBottom: 4 }}>Price</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>
+            {fmt(opp.price)}
+          </div>
+        </div>
+      </div>
+
+      <div className="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Strong High</th>
+              <th>Strong Low</th>
+              <th>Weak High</th>
+              <th>Weak Low</th>
+              <th>Structure</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="num">{strongHigh ? fmt(strongHigh) : '—'}</td>
+              <td className="num">{strongLow ? fmt(strongLow) : '—'}</td>
+              <td className="num">{weakHigh ? fmt(weakHigh) : '—'}</td>
+              <td className="num">{weakLow ? fmt(weakLow) : '—'}</td>
+              <td style={{ fontSize: 11 }}>{opp.recent_structure || '—'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {opp.note && (
         <div style={{
-          fontSize: 32,
-          fontWeight: 700,
-          color: opp.score >= 85 ? '#48d3a4' : opp.score >= 70 ? '#e9c46a' : '#93a0b6'
-        }}>
-          {opp.score}
-        </div>
-      </div>
-
-      <div>
-        <div style={{ fontSize: 12, color: '#93a0b6', marginBottom: 4 }}>Zone</div>
-        <span style={{
-          padding: '8px 16px',
+          padding: 12,
+          background: '#1b263a',
+          border: '1px solid #2a3650',
           borderRadius: 8,
-          fontSize: 13,
-          fontWeight: 700,
-          backgroundColor: getZoneColor(opp.zone) + '20',
-          color: getZoneColor(opp.zone),
-          border: `1px solid ${getZoneColor(opp.zone)}40`,
-          display: 'inline-block'
+          fontSize: 12,
+          color: '#93a0b6',
+          lineHeight: 1.5
         }}>
-          {opp.zone || '—'}
-        </span>
-      </div>
-
-      <div>
-        <div style={{ fontSize: 12, color: '#93a0b6', marginBottom: 4 }}>Price</div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>
-          {fmt(opp.price)}
+          <strong style={{ color: '#f2f6ff' }}>Note:</strong> {opp.note}
         </div>
-      </div>
+      )}
     </div>
-
-    <div className="tbl-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Strong High</th>
-            <th>Strong Low</th>
-            <th>Weak High</th>
-            <th>Weak Low</th>
-            <th>Structure</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td className="num">{opp.strong_high ? fmt(opp.strong_high) : '—'}</td>
-            <td className="num">{opp.strong_low ? fmt(opp.strong_low) : '—'}</td>
-            <td className="num">{opp.weak_high ? fmt(opp.weak_high) : '—'}</td>
-            <td className="num">{opp.weak_low ? fmt(opp.weak_low) : '—'}</td>
-            <td style={{ fontSize: 11 }}>{opp.recent_structure || '—'}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    {opp.note && (
-      <div style={{
-        padding: 12,
-        background: '#1b263a',
-        border: '1px solid #2a3650',
-        borderRadius: 8,
-        fontSize: 12,
-        color: '#93a0b6',
-        lineHeight: 1.5
-      }}>
-        <strong style={{ color: '#f2f6ff' }}>Note:</strong> {opp.note}
-      </div>
-    )}
-  </div>
-)
+  )
+}
 
 const ScoreBreakdown = ({ breakdown }) => {
   if (!breakdown) return null
