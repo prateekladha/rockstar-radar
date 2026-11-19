@@ -307,7 +307,7 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
             'message': 'Connect your broker to use debug analysis'
         }, status_code=400)
 
-    from .broker_tokens import decrypt
+    from .crypto import decrypt
     import os
     import traceback
 
