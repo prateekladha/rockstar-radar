@@ -307,7 +307,7 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
             'message': 'Connect your broker to use debug analysis'
         }, status_code=400)
 
-    from .broker_tokens import decrypt
+    from .crypto import decrypt
     import os
     import traceback
 
@@ -318,7 +318,7 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
 
         try:
             os.environ['FYERS_APP_ID'] = conn.app_id
-            os.environ['FYERS_ACCESS_TOKEN'] = decrypt(conn.token_enc)
+            os.environ['FYERS_ACCESS_TOKEN'] = decrypt(conn.token_enc) or ''
 
             # Create adapter with user's credentials (reads from env vars we just set)
             adapter = FyersAdapter(load_config())
