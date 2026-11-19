@@ -1,6 +1,7 @@
 """Smart Money Concepts (SMC) engine for identifying institutional trading opportunities.
 
 Implements structure detection, order blocks, premium/discount zones based on SMC methodology.
+Enhanced with institutional-grade OB and FVG detection.
 """
 from __future__ import annotations
 import threading
@@ -11,6 +12,12 @@ from typing import Optional
 from .models import (
     Candle, Instrument, Tick, SMCPivot, SMCOrderBlock, SMCZone,
     SMCStructure, SMCOpportunity, SMCSymbolState
+)
+from .smc_detection import (
+    detect_order_block_enhanced,
+    detect_fair_value_gaps,
+    update_order_block_mitigation,
+    update_fvg_fill_status
 )
 
 
@@ -121,7 +128,11 @@ def detect_pivot(candles: list[Candle], size: int = 5) -> tuple[Optional[SMCPivo
 
 
 def detect_order_block(candles: list[Candle], pivot: SMCPivot, bias: str) -> Optional[SMCOrderBlock]:
-    """Detect order block around a pivot point"""
+    """DEPRECATED: Basic order block detection - replaced by detect_order_block_enhanced().
+
+    This function is kept for backwards compatibility but is no longer used.
+    Use detect_order_block_enhanced() from smc_detection.py instead.
+    """
     if len(candles) < 3:
         return None
 
@@ -189,7 +200,7 @@ def get_current_zone(price: float, zones: list[SMCZone]) -> Optional[SMCZone]:
 def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     """Calculate SMC opportunity score (0-100) based on confluence factors.
 
-    Enhanced scoring system with 5 components (0-100 total):
+    Enhanced scoring system with 6 components (0-115 total, capped at 100):
 
     1. ZONE PROXIMITY (0-35 points):
        - Premium/Discount depth: 25-35 points (deeper = higher)
@@ -201,10 +212,22 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
        - Within 2% of strong high/low: 20/10 points
        - Further away: 10/5 points
 
-    3. ORDER BLOCK CONFLUENCE (0-20 points):
-       - Price IN aligned order block: 15 points
-       - Price IN misaligned order block: 8 points
-       - Price NEAR order block (1%): 8/4 points
+    3. ORDER BLOCK CONFLUENCE (0-20 points) ⭐ ENHANCED:
+       - Fresh OB (not mitigated):
+         * IN 50% body zone + strong (>0.7): 20 points
+         * IN 50% body zone + decent (>0.5): 15 points
+         * IN 50% body zone + weak: 10 points
+         * IN full OB range: 5-10 points
+         * NEAR OB (<0.5%): 8 * strength
+       - Mitigated OBs: 0 points (ignored)
+
+    3B. FAIR VALUE GAP CONFLUENCE (0-15 points) ⭐ NEW:
+       - Unfilled FVG:
+         * IN large gap (>1%): 15 points
+         * IN medium gap (>0.5%): 10 points
+         * IN small gap: 5 points
+         * NEAR gap (<0.5%): 5-8 points
+       - Filled FVGs (>80%): 0 points (ignored)
 
     4. STRUCTURE ALIGNMENT (0-10 points):
        - Structure matches zone bias: 10 points
@@ -224,10 +247,10 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
          - < 60 minutes: +1 point
 
     This creates meaningful differentiation:
-    - Premium + Strong High + Fresh: 90-100 (excellent setup)
-    - Discount + Strong Low + Fresh: 90-100 (excellent setup)
+    - Premium + Strong High + Fresh OB + FVG: 95-100 (perfect setup)
+    - Discount + Strong Low + Fresh OB + FVG: 95-100 (perfect setup)
     - Premium + Weak High + Aligned OB: 70-85 (good setup)
-    - Discount + Weak Low + Aligned OB: 70-85 (good setup)
+    - Discount + Mitigated OB (ignored): 35-55 (correctly lower)
     - Equilibrium setups: 40-60 (marginal)
     - Old setups get penalized progressively
     """
@@ -292,26 +315,88 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     score += proximity_bonus
 
     # === 3. ORDER BLOCK CONFLUENCE (0-20 points) ===
-    # Price at order block = bonus points
+    # Enhanced: Uses mitigation status, strength, and 50% body zones
     ob_bonus = 0
     for ob in state.order_blocks[-5:]:  # Check last 5 order blocks
-        # Check if price is within the order block
-        if ob.low <= current_price <= ob.high:
-            # Price IS in the order block
-            if current_zone.zone_type == 'PREMIUM' and ob.bias == 'BEARISH':
-                ob_bonus += 15  # Bearish OB in premium = strong confluence
-            elif current_zone.zone_type == 'DISCOUNT' and ob.bias == 'BULLISH':
-                ob_bonus += 15  # Bullish OB in discount = strong confluence
-            else:
-                ob_bonus += 8  # Some confluence but not aligned
+        # Skip mitigated OBs (they've been touched and are less valuable)
+        if ob.mitigated:
+            continue
 
-        # Check if price is near the order block (within 1%)
-        elif abs(current_price - ob.low) / current_price < 0.01:
-            ob_bonus += 8 if ob.bias == current_zone.zone_type else 4
-        elif abs(current_price - ob.high) / current_price < 0.01:
-            ob_bonus += 8 if ob.bias == current_zone.zone_type else 4
+        # Check if price is within the enhanced body zone (50% retracement)
+        in_body_zone = False
+        if ob.body_low is not None and ob.body_high is not None:
+            in_body_zone = ob.body_low <= current_price <= ob.body_high
+
+        if in_body_zone:
+            # Price IS in the key institutional zone (50% body)
+            base_score = 20 if ob.strength > 0.7 else (15 if ob.strength > 0.5 else 10)
+
+            # Apply zone alignment multiplier
+            if current_zone.zone_type == 'PREMIUM' and ob.bias == 'BEARISH':
+                ob_bonus += base_score  # Perfect alignment
+            elif current_zone.zone_type == 'DISCOUNT' and ob.bias == 'BULLISH':
+                ob_bonus += base_score  # Perfect alignment
+            else:
+                ob_bonus += base_score * 0.5  # Some confluence but not aligned
+
+        # Check if price is within the full OB range (but not body zone)
+        elif ob.low <= current_price <= ob.high:
+            # In OB but not at optimal 50% zone
+            base_score = 10 if ob.strength > 0.6 else 5
+            ob_bonus += base_score
+
+        # Check if price is near the OB (within 0.5%)
+        elif ob.low > 0:
+            distance_pct = min(abs(current_price - ob.low) / current_price,
+                             abs(current_price - ob.high) / current_price)
+            if distance_pct < 0.005:  # Within 0.5%
+                ob_bonus += 8 * ob.strength
+
+        # Only count the best OB, don't stack
+        if ob_bonus > 0:
+            break
 
     score += min(ob_bonus, 20)  # Cap at 20 points
+
+    # === 3B. FAIR VALUE GAP CONFLUENCE (0-15 points) ===
+    # NEW: Scores unfilled FVGs (institutional price imbalances)
+    fvg_bonus = 0
+    if hasattr(state, 'fair_value_gaps') and state.fair_value_gaps:
+        for fvg in state.fair_value_gaps[-10:]:  # Check last 10 FVGs
+            # Skip filled FVGs (no longer valid)
+            if fvg.filled:
+                continue
+
+            # Check if price is within the FVG
+            if fvg.low <= current_price <= fvg.high:
+                # Price IS in the unfilled gap - high value setup
+                if fvg.gap_size_pct > 1.0:
+                    base_score = 15  # Large gap (>1%)
+                elif fvg.gap_size_pct > 0.5:
+                    base_score = 10  # Medium gap
+                else:
+                    base_score = 5   # Small gap
+
+                # Apply zone alignment bonus
+                if current_zone.zone_type == 'PREMIUM' and fvg.bias == 'BEARISH':
+                    fvg_bonus += base_score  # Bearish FVG in premium
+                elif current_zone.zone_type == 'DISCOUNT' and fvg.bias == 'BULLISH':
+                    fvg_bonus += base_score  # Bullish FVG in discount
+                else:
+                    fvg_bonus += base_score * 0.6  # Some value but not aligned
+
+            # Check if price is near the FVG (within 0.5%)
+            elif fvg.low > 0:
+                distance_pct = min(abs(current_price - fvg.low) / current_price,
+                                 abs(current_price - fvg.high) / current_price)
+                if distance_pct < 0.005:  # Within 0.5%
+                    fvg_bonus += 8 if fvg.gap_size_pct > 0.5 else 5
+
+            # Only count the best FVG, don't stack
+            if fvg_bonus > 0:
+                break
+
+    score += min(fvg_bonus, 15)  # Cap at 15 points
 
     # === 4. STRUCTURE ALIGNMENT (0-10 points) ===
     if state.structures:
@@ -458,8 +543,8 @@ class SMCEngine:
 
                 state.swing_high = swing_high
 
-                # Detect order block for new pivot
-                ob = detect_order_block(state.candles, swing_high, 'BEARISH')
+                # Detect order block for new pivot (enhanced with 50% body zones)
+                ob = detect_order_block_enhanced(state.candles, swing_high, 'BEARISH')
                 if ob:
                     state.order_blocks.append(ob)
                     if len(state.order_blocks) > 10:
@@ -480,8 +565,8 @@ class SMCEngine:
 
                 state.swing_low = swing_low
 
-                # Detect order block for new pivot
-                ob = detect_order_block(state.candles, swing_low, 'BULLISH')
+                # Detect order block for new pivot (enhanced with 50% body zones)
+                ob = detect_order_block_enhanced(state.candles, swing_low, 'BULLISH')
                 if ob:
                     state.order_blocks.append(ob)
                     if len(state.order_blocks) > 10:
@@ -492,6 +577,14 @@ class SMCEngine:
             state.internal_high = internal_high
         if internal_low:
             state.internal_low = internal_low
+
+        # Detect Fair Value Gaps (FVG) - 3-candle price imbalances
+        if len(state.candles) >= 3:
+            new_fvgs = detect_fair_value_gaps(state.candles)
+            if new_fvgs:
+                state.fair_value_gaps = new_fvgs
+                # Update fill status for all FVGs
+                update_fvg_fill_status(state.fair_value_gaps, state.candles)
 
         # Detect structure (simplified - full BOS/CHoCH detection would be more complex)
         if len(state.candles) >= 2:
@@ -578,6 +671,10 @@ class SMCEngine:
                 # Zone changed - record entry time
                 state.current_zone_type = zone_type
                 state.zone_entry_time = datetime.now()
+
+        # Update order block mitigation status before scoring
+        if state.order_blocks:
+            update_order_block_mitigation(state.order_blocks, current_price, state.candles)
 
         score = calculate_smc_score(state, current_price)
 

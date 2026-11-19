@@ -127,6 +127,24 @@ class SMCOrderBlock:
     time: datetime
     bias: str  # 'BULLISH' or 'BEARISH'
     block_type: str  # 'SWING' or 'INTERNAL'
+    # Enhanced fields for better tracking
+    body_high: Optional[float] = None  # 50% retracement level (key OB zone)
+    body_low: Optional[float] = None   # 50% retracement level
+    strength: float = 0.0  # 0-1 score based on candle quality
+    mitigated: bool = False  # Has price returned to OB?
+    touch_count: int = 0  # How many times price touched OB
+
+
+@dataclass
+class SMCFairValueGap:
+    """Fair Value Gap (FVG) - price imbalance zone"""
+    high: float  # Top of the gap
+    low: float   # Bottom of the gap
+    time: datetime  # When gap was formed
+    bias: str  # 'BULLISH' or 'BEARISH'
+    gap_size_pct: float  # Gap size as % of price
+    filled: bool = False  # Has gap been filled?
+    fill_percentage: float = 0.0  # How much of gap is filled (0-100%)
 
 
 @dataclass
@@ -193,6 +211,9 @@ class SMCSymbolState:
 
     # Order blocks
     order_blocks: list[SMCOrderBlock] = field(default_factory=list)
+
+    # Fair Value Gaps
+    fair_value_gaps: list[SMCFairValueGap] = field(default_factory=list)
 
     # Recent structures
     structures: list[SMCStructure] = field(default_factory=list)
