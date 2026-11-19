@@ -303,18 +303,45 @@ def load_smc_history(adapter: FyersAdapter, smc_engine: SMCEngine, today: date,
     from_dt = market_dt(today - timedelta(days=5), '09:15')
     to_dt = market_dt(today, '09:15')
 
+    # Store fetched data so we can cache it
+    fetched_data = {}
+
     for i, symbol in enumerate(symbols, 1):
         try:
             candles = baseline_history(adapter, symbol, resolution, from_dt, to_dt)
             if candles:
                 smc_engine.load_historical_candles(symbol, candles)
                 loaded += 1
+
+                # Store in serializable format for caching
+                fetched_data[symbol] = [
+                    {
+                        'at': c.at.isoformat(),
+                        'open': c.open,
+                        'high': c.high,
+                        'low': c.low,
+                        'close': c.close,
+                        'volume': c.volume
+                    }
+                    for c in candles
+                ]
+
             if i % 20 == 0:
                 print(f'  SMC history loaded: {i}/{len(symbols)}')
         except Exception as e:
             # Non-critical - SMC will work with less data, just less accurate initially
             print(f'  SMC history unavailable for {symbol}: {type(e).__name__}')
+            fetched_data[symbol] = []  # Mark as attempted but failed
             continue
+
+    # Save fetched data to cache for future use
+    if fetched_data:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(fetched_data), encoding='utf-8')
+            print(f'  ✓ Cached SMC history to {path.name} for future restarts')
+        except Exception as e:
+            print(f'  Warning: Could not cache SMC history: {type(e).__name__}: {e}')
 
     print(f'SMC engine ready: {loaded}/{len(symbols)} symbols have historical context')
     return loaded
