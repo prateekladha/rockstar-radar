@@ -290,6 +290,7 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
     from radar.fyers import FyersAdapter
     from radar.debug_analysis import analyze_single_stock
     from radar.utils import load_config
+    from . import scanners
 
     body = await request.json()
     symbol_input = (body.get('symbol') or '').strip()
