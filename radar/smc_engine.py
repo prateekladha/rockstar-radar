@@ -211,12 +211,13 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
        - Structure present but misaligned: 5 points
 
     5. RECENCY FACTOR (-5 to +15 points):
-       Pivot age:
-         - < 1 hour: +10 points
-         - < 3 hours: +7 points
-         - < 6 hours: +4 points
-         - < 24 hours: +1 point
-         - > 24 hours: -5 points (penalty)
+       Pivot age (market-hours aware):
+         - < 2 hours: +10 points
+         - < 6 hours: +7 points
+         - < 1 day: +5 points
+         - < 2 days: +3 points
+         - < 5 days: 0 points (neutral)
+         - > 5 days: -5 points (penalty)
        Zone entry age:
          - < 15 minutes: +5 points
          - < 30 minutes: +3 points
@@ -329,31 +330,40 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     recency_bonus = 0
 
     # Check pivot recency (how recently the pivot was formed)
+    # Use lenient thresholds to avoid filtering good setups during non-market hours
     if current_zone.zone_type == 'PREMIUM' and state.swing_high:
-        pivot_age = (now - state.swing_high.time).total_seconds() / 3600  # hours
-        if pivot_age < 1:  # Last hour - very fresh
+        pivot_age_hours = (now - state.swing_high.time).total_seconds() / 3600  # hours
+        pivot_age_days = pivot_age_hours / 24  # days
+
+        if pivot_age_hours < 2:  # Last 2 hours - very fresh
             recency_bonus += 10
-        elif pivot_age < 3:  # Last 3 hours - fresh
+        elif pivot_age_hours < 6:  # Last 6 hours - fresh
             recency_bonus += 7
-        elif pivot_age < 6:  # Last 6 hours - recent
-            recency_bonus += 4
-        elif pivot_age < 24:  # Same day - still relevant
-            recency_bonus += 1
+        elif pivot_age_days < 1:  # Same calendar day - recent
+            recency_bonus += 5
+        elif pivot_age_days < 2:  # Yesterday - still relevant
+            recency_bonus += 3
+        elif pivot_age_days < 5:  # Last few days - aging but OK
+            recency_bonus += 0  # neutral, don't penalize
         else:
-            recency_bonus -= 5  # Old pivot - penalize
+            recency_bonus -= 5  # Multiple days old - penalize
 
     elif current_zone.zone_type == 'DISCOUNT' and state.swing_low:
-        pivot_age = (now - state.swing_low.time).total_seconds() / 3600  # hours
-        if pivot_age < 1:  # Last hour - very fresh
+        pivot_age_hours = (now - state.swing_low.time).total_seconds() / 3600  # hours
+        pivot_age_days = pivot_age_hours / 24  # days
+
+        if pivot_age_hours < 2:  # Last 2 hours - very fresh
             recency_bonus += 10
-        elif pivot_age < 3:  # Last 3 hours - fresh
+        elif pivot_age_hours < 6:  # Last 6 hours - fresh
             recency_bonus += 7
-        elif pivot_age < 6:  # Last 6 hours - recent
-            recency_bonus += 4
-        elif pivot_age < 24:  # Same day - still relevant
-            recency_bonus += 1
+        elif pivot_age_days < 1:  # Same calendar day - recent
+            recency_bonus += 5
+        elif pivot_age_days < 2:  # Yesterday - still relevant
+            recency_bonus += 3
+        elif pivot_age_days < 5:  # Last few days - aging but OK
+            recency_bonus += 0  # neutral, don't penalize
         else:
-            recency_bonus -= 5  # Old pivot - penalize
+            recency_bonus -= 5  # Multiple days old - penalize
 
     # Check when price entered the current zone (MORE IMPORTANT)
     if state.zone_entry_time:
@@ -572,7 +582,8 @@ class SMCEngine:
         score = calculate_smc_score(state, current_price)
 
         # Filter out low-score opportunities
-        if score < 40:
+        # Lower threshold (35) to avoid filtering good setups during non-market hours
+        if score < 35:
             state.opportunity = None
             return
 
@@ -630,7 +641,7 @@ class SMCEngine:
         with self.lock:
             opportunities = []
             for state in self.states.values():
-                if state.opportunity and state.opportunity.score >= 40:
+                if state.opportunity and state.opportunity.score >= 35:
                     opportunities.append(state.opportunity)
 
             # Sort by score descending
