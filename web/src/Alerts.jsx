@@ -22,7 +22,9 @@ export default function Alerts() {
   const payload = (over = {}) => ({
     enabled: a.enabled, states: a.states, min_score: a.min_score, channels: a.channels,
     telegram_chat_id: a.telegram_chat_id, telegram_token: token || undefined,
-    quiet_from: a.quiet_from, quiet_to: a.quiet_to, ...over,
+    quiet_from: a.quiet_from, quiet_to: a.quiet_to,
+    smc_alerts_enabled: a.smc_alerts_enabled, smc_min_score: a.smc_min_score,
+    ...over,
   })
   const toggleState = (s) => {
     const has = (a.states || []).includes(s)
@@ -92,6 +94,35 @@ export default function Alerts() {
               {!okTime(a.quiet_to) && <div className="err-txt">Use 24h HH:MM</div>}</div>
           </div>
           <button className="btn primary" disabled={!okTime(a.quiet_from) || !okTime(a.quiet_to)} onClick={save}>Save alert rule</button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-h">
+          <h2>SMC Alerts</h2>
+          <span className="spring" />
+          <button className={'toggle' + (a.smc_alerts_enabled ? ' on' : '')} role="switch" aria-checked={a.smc_alerts_enabled}
+            onClick={() => setA({ ...a, smc_alerts_enabled: !a.smc_alerts_enabled })}><span className="knob" />{a.smc_alerts_enabled ? 'On' : 'Off'}</button>
+        </div>
+        <div className="panel-b">
+          <p className="note" style={{ marginTop: 0 }}>
+            Get alerts for Smart Money Concepts (SMC) opportunities from the SMC Radar tab.
+            These are separate from ORB breakout alerts and use the same Telegram channel.
+          </p>
+          <div className="field">
+            <label>Minimum SMC score</label>
+            <input
+              type="number"
+              min="35"
+              max="100"
+              value={a.smc_min_score || 70}
+              onChange={e => setA({ ...a, smc_min_score: parseInt(e.target.value) || 70 })}
+            />
+            <div className="hint" style={{ fontSize: 11, color: 'var(--faint)', marginTop: 4 }}>
+              Alert when SMC score ≥ this value (recommended: 70-85)
+            </div>
+          </div>
+          <button className="btn primary" onClick={save}>Save SMC alerts</button>
         </div>
       </div>
 

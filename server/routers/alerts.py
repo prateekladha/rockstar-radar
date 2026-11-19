@@ -51,6 +51,8 @@ def get_alerts(user: User = Depends(require_user), db: Session = Depends(get_db)
               .order_by(AlertDelivery.sent_at.desc()).limit(12).all())
     return {'enabled': bool(c.enabled), 'states': _clean_states(c.states), 'min_score': c.min_score,
             'available_states': ALERT_STATES,
+            'smc_alerts_enabled': bool(c.smc_alerts_enabled),
+            'smc_min_score': c.smc_min_score or 70,
             'channels': c.channels or {}, 'telegram_chat_id': c.telegram_chat_id or '',
             'has_telegram_token': bool(c.telegram_token_enc),
             'quiet_from': c.quiet_from or '', 'quiet_to': c.quiet_to or '',
@@ -79,6 +81,10 @@ async def put_alerts(request: Request, user: User = Depends(require_user),
         c.states = _clean_states(b['states'])
     if 'min_score' in b:
         c.min_score = int(b['min_score'] or 0)
+    if 'smc_alerts_enabled' in b:
+        c.smc_alerts_enabled = 1 if b.get('smc_alerts_enabled') else 0
+    if 'smc_min_score' in b:
+        c.smc_min_score = int(b['smc_min_score'] or 70)
     if 'channels' in b:
         c.channels = b['channels']
     if 'telegram_chat_id' in b:

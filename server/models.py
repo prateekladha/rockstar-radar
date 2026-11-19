@@ -109,6 +109,9 @@ class AlertConfig(Base):
     enabled = Column(Integer, default=1)
     states = Column(JSON, default=lambda: ['RETEST_READY', 'CONFIRMED'])
     min_score = Column(Integer, default=0)
+    # SMC (Smart Money Concepts) alert settings
+    smc_alerts_enabled = Column(Integer, default=0)
+    smc_min_score = Column(Integer, default=70)
     channels = Column(JSON, default=lambda: {'telegram': True, 'inapp': True, 'email': False})
     telegram_token_enc = Column(Text)
     telegram_chat_id = Column(String(64))

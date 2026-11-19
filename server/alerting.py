@@ -69,6 +69,56 @@ def _ticket(row: dict, when) -> SimpleNamespace:
         net_rr=_num(row.get('net_rr')), provisional=bool(row.get('provisional')))
 
 
+def _format_smc_alert(opp: dict, simulated: bool = False) -> str:
+    """Format SMC opportunity as a Telegram message."""
+    symbol = opp.get('symbol', '').replace('NSE:', '').replace('-EQ', '')
+    score = opp.get('score', 0)
+    price = opp.get('price', 0)
+    zone = opp.get('zone', 'EQUILIBRIUM')
+    note = opp.get('note', '')
+
+    # Zone emoji
+    zone_emoji = '🔴' if zone == 'PREMIUM' else '🟢' if zone == 'DISCOUNT' else '🟡'
+
+    # Structure info
+    structure = opp.get('recent_structure', '')
+    structure_text = f"\n📊 <b>Structure:</b> {structure}" if structure else ''
+
+    # Key levels
+    levels = []
+    if opp.get('strong_high'):
+        levels.append(f"Strong High: {opp['strong_high']:.2f}")
+    if opp.get('strong_low'):
+        levels.append(f"Strong Low: {opp['strong_low']:.2f}")
+    if opp.get('weak_high'):
+        levels.append(f"Weak High: {opp['weak_high']:.2f}")
+    if opp.get('weak_low'):
+        levels.append(f"Weak Low: {opp['weak_low']:.2f}")
+    levels_text = '\n📍 <b>Levels:</b> ' + ', '.join(levels) if levels else ''
+
+    # Order blocks / FVG
+    ob_count = (opp.get('bullish_order_blocks', 0) or 0) + (opp.get('bearish_order_blocks', 0) or 0)
+    ob_text = f"\n📦 <b>Order Blocks:</b> {ob_count} detected" if ob_count > 0 else ''
+
+    banner = '🧪 <b>PRACTICE MODE</b> — ' if simulated else ''
+
+    msg = (f"{banner}<b>SMC OPPORTUNITY ALERT</b>\n\n"
+           f"📈 <b>{symbol}</b>\n"
+           f"💰 <b>Price:</b> ₹{price:.2f}\n"
+           f"{zone_emoji} <b>Zone:</b> {zone}\n"
+           f"⭐ <b>Score:</b> {score}/100"
+           f"{structure_text}"
+           f"{levels_text}"
+           f"{ob_text}\n")
+
+    if note:
+        msg += f"\n💡 {note}\n"
+
+    msg += f"\n🕐 {now_ist().strftime('%d %b %Y, %I:%M %p')} IST"
+
+    return msg
+
+
 def dispatch(db: Session, user: User, state: dict) -> int:
     """Send alerts for any newly-reached state in this user's radar. Returns messages sent."""
     cfg = db.query(AlertConfig).filter_by(user_id=user.id).first()
@@ -92,6 +142,8 @@ def dispatch(db: Session, user: User, state: dict) -> int:
                db.query(AlertDelivery).filter_by(user_id=user.id, day=day).all()}
 
     sent = 0
+
+    # === ORB ALERTS ===
     for row in (state.get('all') or []):
         st = row.get('state')
         if st not in wanted or (row.get('score') or 0) < floor:
@@ -123,6 +175,42 @@ def dispatch(db: Session, user: User, state: dict) -> int:
         db.commit()
         if res.get('ok'):
             sent += 1
+
+    # === SMC ALERTS ===
+    if cfg.smc_alerts_enabled:
+        smc_floor = int(cfg.smc_min_score or 70)
+        smc_already = {d.symbol for d in
+                       db.query(AlertDelivery).filter_by(
+                           user_id=user.id, day=day, state='SMC', side='').all()}
+
+        for opp in (state.get('smc_opportunities') or []):
+            score = opp.get('score', 0)
+            if score < smc_floor:
+                continue
+
+            symbol = opp.get('symbol', '')
+            if not symbol or symbol in smc_already:
+                continue
+
+            # Claim the key
+            row_rec = AlertDelivery(user_id=user.id, day=day, symbol=symbol, side='', state='SMC')
+            db.add(row_rec)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                smc_already.add(symbol)
+                continue
+            smc_already.add(symbol)
+
+            res = send_telegram(_format_smc_alert(opp, simulated=simulated),
+                                token=token, chat_id=chat)
+            row_rec.ok = 1 if res.get('ok') else 0
+            row_rec.detail = (res.get('message') or '')[:300]
+            db.commit()
+            if res.get('ok'):
+                sent += 1
+
     return sent
 
 
@@ -149,6 +237,9 @@ def sweep(db: Session) -> int:
     broker session or spend quota on behalf of someone who isn't even using the app.
     """
     from . import scanners
+    import urllib.request
+    import json as jsonlib
+
     users = (db.query(User).join(AlertConfig, AlertConfig.user_id == User.id)
              .filter(AlertConfig.enabled == 1).all())
     total = 0
@@ -160,6 +251,19 @@ def sweep(db: Session) -> int:
             state = cc.live_state()
             if state.get('offline'):
                 continue
+
+            # Fetch SMC opportunities if SMC alerts are enabled
+            cfg = db.query(AlertConfig).filter_by(user_id=user.id).first()
+            if cfg and cfg.smc_alerts_enabled:
+                try:
+                    with urllib.request.urlopen(
+                        f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
+                        smc_data = jsonlib.loads(resp.read())
+                        state['smc_opportunities'] = smc_data.get('opportunities', [])
+                except Exception as e:
+                    print(f'[alerts] failed to fetch SMC state for user {user.id}: {e}')
+                    state['smc_opportunities'] = []
+
             total += dispatch(db, user, state)
         except Exception as e:     # one user's failure must never stop the others
             db.rollback()
