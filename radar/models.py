@@ -184,6 +184,10 @@ class SMCSymbolState:
     trailing_high_time: Optional[datetime] = None
     trailing_low_time: Optional[datetime] = None
 
+    # Zone tracking for recency
+    current_zone_type: Optional[str] = None  # 'PREMIUM', 'DISCOUNT', 'EQUILIBRIUM'
+    zone_entry_time: Optional[datetime] = None  # When price entered current zone
+
     # Current trend
     trend: str = 'NEUTRAL'  # 'BULLISH', 'BEARISH', 'NEUTRAL'
 

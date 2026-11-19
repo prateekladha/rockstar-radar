@@ -189,13 +189,47 @@ def get_current_zone(price: float, zones: list[SMCZone]) -> Optional[SMCZone]:
 def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     """Calculate SMC opportunity score (0-100) based on confluence factors.
 
-    Scoring logic:
-    - Premium + Strong High: 90-100
-    - Discount + Strong Low: 90-100
-    - Premium + Weak High: 70-85
-    - Discount + Weak Low: 70-85
-    - Equilibrium + any structure: 40-60
-    - Other combinations: 0-40
+    Enhanced scoring system with 5 components (0-100 total):
+
+    1. ZONE PROXIMITY (0-35 points):
+       - Premium/Discount depth: 25-35 points (deeper = higher)
+       - Equilibrium: 15 points (neutral zone, lower score)
+
+    2. KEY LEVEL PROXIMITY (0-30 points):
+       - Within 0.5% of strong high/low: 30/20 points
+       - Within 1% of strong high/low: 25/15 points
+       - Within 2% of strong high/low: 20/10 points
+       - Further away: 10/5 points
+
+    3. ORDER BLOCK CONFLUENCE (0-20 points):
+       - Price IN aligned order block: 15 points
+       - Price IN misaligned order block: 8 points
+       - Price NEAR order block (1%): 8/4 points
+
+    4. STRUCTURE ALIGNMENT (0-10 points):
+       - Structure matches zone bias: 10 points
+       - Structure present but misaligned: 5 points
+
+    5. RECENCY FACTOR (-5 to +15 points):
+       Pivot age (market-hours aware):
+         - < 2 hours: +10 points
+         - < 6 hours: +7 points
+         - < 1 day: +5 points
+         - < 2 days: +3 points
+         - < 5 days: 0 points (neutral)
+         - > 5 days: -5 points (penalty)
+       Zone entry age:
+         - < 15 minutes: +5 points
+         - < 30 minutes: +3 points
+         - < 60 minutes: +1 point
+
+    This creates meaningful differentiation:
+    - Premium + Strong High + Fresh: 90-100 (excellent setup)
+    - Discount + Strong Low + Fresh: 90-100 (excellent setup)
+    - Premium + Weak High + Aligned OB: 70-85 (good setup)
+    - Discount + Weak Low + Aligned OB: 70-85 (good setup)
+    - Equilibrium setups: 40-60 (marginal)
+    - Old setups get penalized progressively
     """
     if not state.trailing_high or not state.trailing_low:
         return 0
@@ -207,47 +241,148 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
         return 0
 
     score = 0
+    range_size = state.trailing_high - state.trailing_low
 
-    # Base score from zone
+    # === 1. ZONE PROXIMITY SCORING (0-35 points) ===
+    # How deep into the premium/discount zone?
     if current_zone.zone_type == 'PREMIUM':
-        score = 60
+        # Higher score when deeper into premium (closer to top)
+        zone_depth = (current_price - current_zone.low) / (current_zone.high - current_zone.low)
+        score += int(25 + (zone_depth * 10))  # 25-35 points
+
     elif current_zone.zone_type == 'DISCOUNT':
-        score = 60
+        # Higher score when deeper into discount (closer to bottom)
+        zone_depth = (current_zone.high - current_price) / (current_zone.high - current_zone.low)
+        score += int(25 + (zone_depth * 10))  # 25-35 points
+
     else:  # EQUILIBRIUM
-        score = 30
+        # Lower base score for equilibrium
+        score += 15  # 15 points
 
-    # Bonus for strong/weak highs and lows
-    if current_zone.zone_type == 'PREMIUM':
-        if state.swing_high and state.swing_high.is_strong:
-            score += 35  # Strong high in premium = bearish setup
-        elif state.swing_high:
-            score += 20  # Weak high in premium
+    # === 2. KEY LEVEL PROXIMITY (0-30 points) ===
+    # Closer to strong/weak highs/lows = higher score
+    proximity_bonus = 0
 
-    elif current_zone.zone_type == 'DISCOUNT':
-        if state.swing_low and state.swing_low.is_strong:
-            score += 35  # Strong low in discount = bullish setup
-        elif state.swing_low:
-            score += 20  # Weak low in discount
+    if current_zone.zone_type == 'PREMIUM' and state.swing_high:
+        # Distance to swing high (bearish setup)
+        distance_pct = abs(current_price - state.swing_high.level) / state.swing_high.level
 
-    # Bonus for order blocks nearby
+        if distance_pct < 0.005:  # Within 0.5%
+            proximity_bonus = 30 if state.swing_high.is_strong else 20
+        elif distance_pct < 0.01:  # Within 1%
+            proximity_bonus = 25 if state.swing_high.is_strong else 15
+        elif distance_pct < 0.02:  # Within 2%
+            proximity_bonus = 20 if state.swing_high.is_strong else 10
+        else:
+            proximity_bonus = 10 if state.swing_high.is_strong else 5
+
+    elif current_zone.zone_type == 'DISCOUNT' and state.swing_low:
+        # Distance to swing low (bullish setup)
+        distance_pct = abs(current_price - state.swing_low.level) / state.swing_low.level
+
+        if distance_pct < 0.005:  # Within 0.5%
+            proximity_bonus = 30 if state.swing_low.is_strong else 20
+        elif distance_pct < 0.01:  # Within 1%
+            proximity_bonus = 25 if state.swing_low.is_strong else 15
+        elif distance_pct < 0.02:  # Within 2%
+            proximity_bonus = 20 if state.swing_low.is_strong else 10
+        else:
+            proximity_bonus = 10 if state.swing_low.is_strong else 5
+
+    score += proximity_bonus
+
+    # === 3. ORDER BLOCK CONFLUENCE (0-20 points) ===
+    # Price at order block = bonus points
     ob_bonus = 0
-    for ob in state.order_blocks[-3:]:  # Check last 3 order blocks
-        if abs(current_price - ob.low) / current_price < 0.02:  # Within 2%
-            ob_bonus += 5
-        if abs(current_price - ob.high) / current_price < 0.02:
-            ob_bonus += 5
+    for ob in state.order_blocks[-5:]:  # Check last 5 order blocks
+        # Check if price is within the order block
+        if ob.low <= current_price <= ob.high:
+            # Price IS in the order block
+            if current_zone.zone_type == 'PREMIUM' and ob.bias == 'BEARISH':
+                ob_bonus += 15  # Bearish OB in premium = strong confluence
+            elif current_zone.zone_type == 'DISCOUNT' and ob.bias == 'BULLISH':
+                ob_bonus += 15  # Bullish OB in discount = strong confluence
+            else:
+                ob_bonus += 8  # Some confluence but not aligned
 
-    score += min(ob_bonus, 15)
+        # Check if price is near the order block (within 1%)
+        elif abs(current_price - ob.low) / current_price < 0.01:
+            ob_bonus += 8 if ob.bias == current_zone.zone_type else 4
+        elif abs(current_price - ob.high) / current_price < 0.01:
+            ob_bonus += 8 if ob.bias == current_zone.zone_type else 4
 
-    # Bonus for recent structure breaks
+    score += min(ob_bonus, 20)  # Cap at 20 points
+
+    # === 4. STRUCTURE ALIGNMENT (0-10 points) ===
     if state.structures:
         recent_structure = state.structures[-1]
         if current_zone.zone_type == 'PREMIUM' and recent_structure.bias == 'BEARISH':
-            score += 10
+            score += 10  # Bearish structure in premium
         elif current_zone.zone_type == 'DISCOUNT' and recent_structure.bias == 'BULLISH':
-            score += 10
+            score += 10  # Bullish structure in discount
+        elif recent_structure.bias == 'BEARISH' or recent_structure.bias == 'BULLISH':
+            score += 5  # Some structure present
 
-    return min(score, 100)
+    # === 5. RECENCY FACTOR (0-15 points bonus/penalty) ===
+    # Recent pivots and zone entries are more valuable
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    recency_bonus = 0
+
+    # Check pivot recency (how recently the pivot was formed)
+    # Use lenient thresholds to avoid filtering good setups during non-market hours
+    if current_zone.zone_type == 'PREMIUM' and state.swing_high:
+        pivot_age_hours = (now - state.swing_high.time).total_seconds() / 3600  # hours
+        pivot_age_days = pivot_age_hours / 24  # days
+
+        if pivot_age_hours < 2:  # Last 2 hours - very fresh
+            recency_bonus += 10
+        elif pivot_age_hours < 6:  # Last 6 hours - fresh
+            recency_bonus += 7
+        elif pivot_age_days < 1:  # Same calendar day - recent
+            recency_bonus += 5
+        elif pivot_age_days < 2:  # Yesterday - still relevant
+            recency_bonus += 3
+        elif pivot_age_days < 5:  # Last few days - aging but OK
+            recency_bonus += 0  # neutral, don't penalize
+        else:
+            recency_bonus -= 5  # Multiple days old - penalize
+
+    elif current_zone.zone_type == 'DISCOUNT' and state.swing_low:
+        pivot_age_hours = (now - state.swing_low.time).total_seconds() / 3600  # hours
+        pivot_age_days = pivot_age_hours / 24  # days
+
+        if pivot_age_hours < 2:  # Last 2 hours - very fresh
+            recency_bonus += 10
+        elif pivot_age_hours < 6:  # Last 6 hours - fresh
+            recency_bonus += 7
+        elif pivot_age_days < 1:  # Same calendar day - recent
+            recency_bonus += 5
+        elif pivot_age_days < 2:  # Yesterday - still relevant
+            recency_bonus += 3
+        elif pivot_age_days < 5:  # Last few days - aging but OK
+            recency_bonus += 0  # neutral, don't penalize
+        else:
+            recency_bonus -= 5  # Multiple days old - penalize
+
+    # Check when price entered the current zone (MORE IMPORTANT)
+    if state.zone_entry_time:
+        zone_entry_age = (now - state.zone_entry_time).total_seconds() / 60  # minutes
+        if zone_entry_age < 15:  # Last 15 minutes - VERY fresh setup
+            recency_bonus += 5
+        elif zone_entry_age < 30:  # Last 30 minutes - fresh
+            recency_bonus += 3
+        elif zone_entry_age < 60:  # Last hour - recent
+            recency_bonus += 1
+        # No penalty for older zone entries - just no bonus
+
+    score += recency_bonus
+
+    # === FINAL SCORE ===
+    # Ensure score is between 0-100
+    final_score = max(0, min(score, 100))
+
+    return final_score
 
 
 class SMCEngine:
@@ -435,10 +570,20 @@ class SMCEngine:
 
         zones = calculate_zones(state.trailing_high, state.trailing_low)
         current_zone = get_current_zone(current_price, zones)
+
+        # Track zone changes for recency scoring
+        if current_zone:
+            zone_type = current_zone.zone_type
+            if state.current_zone_type != zone_type:
+                # Zone changed - record entry time
+                state.current_zone_type = zone_type
+                state.zone_entry_time = datetime.now()
+
         score = calculate_smc_score(state, current_price)
 
         # Filter out low-score opportunities
-        if score < 40:
+        # Lower threshold (35) to avoid filtering good setups during non-market hours
+        if score < 35:
             state.opportunity = None
             return
 
@@ -496,7 +641,7 @@ class SMCEngine:
         with self.lock:
             opportunities = []
             for state in self.states.values():
-                if state.opportunity and state.opportunity.score >= 40:
+                if state.opportunity and state.opportunity.score >= 35:
                     opportunities.append(state.opportunity)
 
             # Sort by score descending
