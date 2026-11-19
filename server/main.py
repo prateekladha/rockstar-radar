@@ -307,17 +307,36 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
         }, status_code=400)
 
     from .broker_tokens import decrypt
+    import os
+
     try:
-        # Create adapter with user's credentials
-        adapter = FyersAdapter(load_config())
-        adapter.app_id = conn.app_id
-        adapter.token = decrypt(conn.token_enc)
+        # Temporarily set env vars for adapter creation (FyersAdapter reads from env in __init__)
+        old_app_id = os.environ.get('FYERS_APP_ID')
+        old_token = os.environ.get('FYERS_ACCESS_TOKEN')
 
-        # Run analysis
-        force = body.get('force', False)
-        result = analyze_single_stock(adapter, symbol_input, load_config(), force=force)
+        try:
+            os.environ['FYERS_APP_ID'] = conn.app_id
+            os.environ['FYERS_ACCESS_TOKEN'] = decrypt(conn.token_enc)
 
-        return result
+            # Create adapter with user's credentials (reads from env vars we just set)
+            adapter = FyersAdapter(load_config())
+
+            # Run analysis
+            force = body.get('force', False)
+            result = analyze_single_stock(adapter, symbol_input, load_config(), force=force)
+
+            return result
+        finally:
+            # Restore original env vars
+            if old_app_id is None:
+                os.environ.pop('FYERS_APP_ID', None)
+            else:
+                os.environ['FYERS_APP_ID'] = old_app_id
+
+            if old_token is None:
+                os.environ.pop('FYERS_ACCESS_TOKEN', None)
+            else:
+                os.environ['FYERS_ACCESS_TOKEN'] = old_token
     except Exception as e:
         return JSONResponse({
             'success': False,
