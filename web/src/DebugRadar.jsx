@@ -151,6 +151,20 @@ export default function DebugRadar() {
                 <StatCard label="Trend" value={result.trend || '—'} />
               </div>
 
+              {/* DEBUG: Show raw data */}
+              <details style={{ marginTop: 20, padding: 16, background: '#1a1f2e', border: '1px solid #2a3650', borderRadius: 8 }}>
+                <summary style={{ cursor: 'pointer', color: '#93a0b6', fontSize: 12, fontWeight: 600 }}>
+                  🔍 DEBUG: Raw API Response
+                </summary>
+                <pre style={{ fontSize: 11, color: '#93a0b6', overflow: 'auto', marginTop: 12 }}>
+                  {JSON.stringify({
+                    opportunity: result.opportunity,
+                    swing_high: result.swing_high,
+                    swing_low: result.swing_low
+                  }, null, 2)}
+                </pre>
+              </details>
+
               {result.opportunity ? (
                 <div className="panel" style={{ marginTop: 20, background: '#131b2e' }}>
                   <div className="panel-h">
@@ -310,6 +324,17 @@ const OpportunityCard = ({ opp, swingHigh, swingLow }) => {
   const strongLow = opp.strong_low || (swingLow?.is_strong ? swingLow.level : null)
   const weakHigh = opp.weak_high || (swingHigh && !swingHigh.is_strong ? swingHigh.level : null)
   const weakLow = opp.weak_low || (swingLow && !swingLow.is_strong ? swingLow.level : null)
+
+  // Debug logging
+  console.log('OpportunityCard data:', {
+    oppStrongHigh: opp.strong_high,
+    oppStrongLow: opp.strong_low,
+    oppWeakHigh: opp.weak_high,
+    oppWeakLow: opp.weak_low,
+    swingHigh: swingHigh,
+    swingLow: swingLow,
+    computed: { strongHigh, strongLow, weakHigh, weakLow }
+  })
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>

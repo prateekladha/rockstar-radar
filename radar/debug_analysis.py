@@ -203,7 +203,7 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
         }
     else:
         result['opportunity'] = None
-        result['message'] = 'No opportunity found (score < 40 or insufficient confluence)'
+        result['message'] = 'No opportunity found (score < 35 or insufficient confluence)'
 
     # Add pivot information
     if state.swing_high:
