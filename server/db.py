@@ -48,6 +48,10 @@ _ADDED_COLUMNS = {
         'filled_at': 'TIMESTAMP',
         'sim': 'INTEGER DEFAULT 0',
     },
+    'alert_configs': {
+        'smc_alerts_enabled': 'INTEGER DEFAULT 0',
+        'smc_min_score': 'INTEGER DEFAULT 70',
+    },
 }
 
 
