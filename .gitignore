@@ -18,3 +18,17 @@ web/dist/
 
 # Claude Code runtime lock (not shared)
 .claude/scheduled_tasks.lock
+
+# Local development SSL workaround (never deploy to production)
+ssl_fix.py
+
+# Local development helper scripts
+start_dev.py
+stop_dev.sh
+restart_dev.sh
+.backend.pid
+.frontend.pid
+
+# FYERS API logs
+fyersApi.log
+fyersRequests.log

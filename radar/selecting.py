@@ -157,6 +157,16 @@ def prepare_selection(adapter, config: dict, universe_path: Path, output_path: P
     today = now_ist().date()
     stocks = load_universe(universe_path)
     pins = load_morning_pins(config)
+
+    # Local development: limit stocks for faster testing
+    # Set RADAR_LOCAL_LIMIT=10 in .env to test with only 10 stocks
+    local_limit = os.environ.get('RADAR_LOCAL_LIMIT', '').strip()
+    if local_limit and local_limit.isdigit():
+        limit = int(local_limit)
+        if limit > 0 and limit < len(stocks):
+            stocks = stocks[:limit]
+            print(f'🔧 LOCAL MODE: Limited to {limit} stocks for faster testing (set by RADAR_LOCAL_LIMIT)')
+
     # Allow nominated NSE EQ stocks outside NIFTY 500, provided FYERS recognizes
     # them and all price, liquidity, ATR and diversification checks still pass.
     present = {sym for sym, _ in stocks}

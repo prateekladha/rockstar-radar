@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """Read-only FYERS NIFTY ORB pilot. No order APIs or broker write operations."""
 from __future__ import annotations
+
+# Local development SSL workaround (only if ssl_fix.py exists and DEV_LOGIN=1)
+try:
+    import ssl_fix  # noqa: F401
+except ImportError:
+    pass
+
 # macOS/Windows/Linux native trust store, retaining full TLS certificate verification.
 try:
     import truststore
     truststore.inject_into_ssl()
 except ImportError:
     pass  # Fall back to Python's normal CA bundle if truststore is not installed.
+
 import argparse
 import fcntl  # macOS/Linux advisory lock; prevents two Radar instances using the FYERS REST quota.
 import os
