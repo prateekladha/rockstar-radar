@@ -1,5 +1,12 @@
 """Rockstar Radar platform API (v1) — Google auth, per-user DB, serves the React SPA."""
 from __future__ import annotations
+
+# CRITICAL: Import SSL fix FIRST for local development
+try:
+    import ssl_fix  # noqa: F401
+except ImportError:
+    pass  # SSL fix not needed in production
+
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
