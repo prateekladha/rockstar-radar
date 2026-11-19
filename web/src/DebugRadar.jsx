@@ -206,6 +206,17 @@ export default function DebugRadar() {
                   </div>
                 </div>
               )}
+
+              {result.score_breakdown && (
+                <div className="panel" style={{ marginTop: 20, background: '#131b2e' }}>
+                  <div className="panel-h">
+                    <h2>📊 Score Breakdown</h2>
+                  </div>
+                  <div className="panel-b" style={{ padding: 20 }}>
+                    <ScoreBreakdown breakdown={result.score_breakdown} />
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -328,3 +339,99 @@ const OpportunityCard = ({ opp }) => (
     )}
   </div>
 )
+
+const ScoreBreakdown = ({ breakdown }) => {
+  if (!breakdown) return null
+
+  const getScoreColor = (score, max) => {
+    const pct = (score / max) * 100
+    if (pct >= 80) return '#48d3a4'  // Green
+    if (pct >= 60) return '#e9c46a'  // Yellow
+    if (pct >= 40) return '#f2f6ff'  // White
+    return '#93a0b6'  // Gray
+  }
+
+  const components = [
+    { key: 'zone_score', label: 'Zone Proximity', max: 35, detail: breakdown.details?.zone },
+    { key: 'key_level_score', label: 'Key Level', max: 30, detail: breakdown.details?.key_level },
+    { key: 'order_block_score', label: 'Order Blocks', max: 20, detail: breakdown.details?.order_blocks },
+    { key: 'fvg_score', label: 'Fair Value Gap', max: 15, detail: breakdown.details?.fvg },
+    { key: 'structure_score', label: 'Structure', max: 10, detail: breakdown.details?.structure },
+    { key: 'recency_score', label: 'Recency', max: 15, detail: breakdown.details?.recency }
+  ]
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      {/* Summary */}
+      <div style={{ display: 'flex', gap: 20, alignItems: 'baseline', paddingBottom: 16, borderBottom: '1px solid #2a3650' }}>
+        <div>
+          <span style={{ fontSize: 12, color: '#93a0b6', marginRight: 8 }}>Final Score:</span>
+          <span style={{
+            fontSize: 28,
+            fontWeight: 700,
+            color: breakdown.final_score >= 85 ? '#48d3a4' : breakdown.final_score >= 70 ? '#e9c46a' : '#93a0b6'
+          }}>
+            {breakdown.final_score}
+          </span>
+          <span style={{ fontSize: 14, color: '#6b7a92', marginLeft: 4 }}>/100</span>
+        </div>
+        {breakdown.raw_total > 100 && (
+          <div style={{ fontSize: 12, color: '#93a0b6' }}>
+            (Raw: {breakdown.raw_total}, capped at 100)
+          </div>
+        )}
+      </div>
+
+      {/* Component Breakdown */}
+      <div style={{ display: 'grid', gap: 12 }}>
+        {components.map(comp => {
+          const score = breakdown[comp.key] || 0
+          const percentage = (score / comp.max) * 100
+
+          return (
+            <div key={comp.key} style={{ display: 'grid', gap: 6 }}>
+              {/* Label and Score */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#f2f6ff' }}>
+                  {comp.label}
+                </span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: getScoreColor(score, comp.max) }}>
+                  {score} <span style={{ fontSize: 11, color: '#6b7a92' }}>/ {comp.max}</span>
+                </span>
+              </div>
+
+              {/* Progress Bar */}
+              <div style={{
+                height: 6,
+                background: '#1b263a',
+                borderRadius: 3,
+                overflow: 'hidden',
+                position: 'relative'
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.min(percentage, 100)}%`,
+                  background: getScoreColor(score, comp.max),
+                  borderRadius: 3,
+                  transition: 'width 0.3s ease'
+                }} />
+              </div>
+
+              {/* Detail */}
+              {comp.detail && (
+                <div style={{
+                  fontSize: 11,
+                  color: '#93a0b6',
+                  fontStyle: 'italic',
+                  paddingLeft: 4
+                }}>
+                  {comp.detail}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}

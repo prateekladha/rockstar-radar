@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 # Local development SSL workaround (only if ssl_fix.py exists and DEV_LOGIN=1)
-try:
-    import ssl_fix  # noqa: F401
-except ImportError:
-    pass
+import os
+if os.path.exists(os.path.join(os.path.dirname(__file__), 'ssl_fix.py')):
+    os.environ.setdefault('DEV_LOGIN', '1')
+    try:
+        import ssl_fix  # noqa: F401
+    except ImportError:
+        pass
 
 # macOS/Windows/Linux native trust store, retaining full TLS certificate verification.
 try:

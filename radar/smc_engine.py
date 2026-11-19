@@ -8,9 +8,9 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple, Dict
 from .models import (
-    Candle, Instrument, Tick, SMCPivot, SMCOrderBlock, SMCZone,
+    Candle, Instrument, Tick, SMCPivot, SMCOrderBlock, SMCFairValueGap, SMCZone,
     SMCStructure, SMCOpportunity, SMCSymbolState
 )
 from .smc_detection import (
@@ -468,6 +468,282 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     final_score = max(0, min(score, 100))
 
     return final_score
+
+
+def calculate_smc_score_with_breakdown(state: SMCSymbolState, current_price: float) -> Tuple[int, Dict[str, any]]:
+    """Calculate SMC score and return detailed breakdown of each component.
+
+    Returns:
+        Tuple of (final_score: int, breakdown: dict)
+
+    Breakdown contains:
+        - zone_score: 0-35 pts
+        - key_level_score: 0-30 pts
+        - order_block_score: 0-20 pts
+        - fvg_score: 0-15 pts
+        - structure_score: 0-10 pts
+        - recency_score: -5 to +15 pts
+        - raw_total: Sum before capping
+        - final_score: 0-100 (capped)
+        - details: Additional context for each component
+    """
+    if not state.trailing_high or not state.trailing_low:
+        return 0, {
+            'zone_score': 0,
+            'key_level_score': 0,
+            'order_block_score': 0,
+            'fvg_score': 0,
+            'structure_score': 0,
+            'recency_score': 0,
+            'raw_total': 0,
+            'final_score': 0,
+            'details': {'error': 'No trailing high/low available'}
+        }
+
+    zones = calculate_zones(state.trailing_high, state.trailing_low)
+    current_zone = get_current_zone(current_price, zones)
+
+    if not current_zone:
+        return 0, {
+            'zone_score': 0,
+            'key_level_score': 0,
+            'order_block_score': 0,
+            'fvg_score': 0,
+            'structure_score': 0,
+            'recency_score': 0,
+            'raw_total': 0,
+            'final_score': 0,
+            'details': {'error': 'Price not in any zone'}
+        }
+
+    breakdown = {
+        'zone_score': 0,
+        'key_level_score': 0,
+        'order_block_score': 0,
+        'fvg_score': 0,
+        'structure_score': 0,
+        'recency_score': 0,
+        'details': {}
+    }
+
+    range_size = state.trailing_high - state.trailing_low
+
+    # === 1. ZONE PROXIMITY ===
+    if current_zone.zone_type == 'PREMIUM':
+        zone_depth = (current_price - current_zone.low) / (current_zone.high - current_zone.low)
+        breakdown['zone_score'] = int(25 + (zone_depth * 10))
+        breakdown['details']['zone'] = f"Premium (depth: {zone_depth:.1%})"
+    elif current_zone.zone_type == 'DISCOUNT':
+        zone_depth = (current_zone.high - current_price) / (current_zone.high - current_zone.low)
+        breakdown['zone_score'] = int(25 + (zone_depth * 10))
+        breakdown['details']['zone'] = f"Discount (depth: {zone_depth:.1%})"
+    else:
+        breakdown['zone_score'] = 15
+        breakdown['details']['zone'] = "Equilibrium"
+
+    # === 2. KEY LEVEL PROXIMITY ===
+    proximity_bonus = 0
+    if current_zone.zone_type == 'PREMIUM' and state.swing_high:
+        distance_pct = abs(current_price - state.swing_high.level) / state.swing_high.level
+        if distance_pct < 0.005:
+            proximity_bonus = 30 if state.swing_high.is_strong else 20
+        elif distance_pct < 0.01:
+            proximity_bonus = 25 if state.swing_high.is_strong else 15
+        elif distance_pct < 0.02:
+            proximity_bonus = 20 if state.swing_high.is_strong else 10
+        else:
+            proximity_bonus = 10 if state.swing_high.is_strong else 5
+
+        breakdown['details']['key_level'] = f"{'Strong' if state.swing_high.is_strong else 'Weak'} High ({distance_pct:.2%} away)"
+
+    elif current_zone.zone_type == 'DISCOUNT' and state.swing_low:
+        distance_pct = abs(current_price - state.swing_low.level) / state.swing_low.level
+        if distance_pct < 0.005:
+            proximity_bonus = 30 if state.swing_low.is_strong else 20
+        elif distance_pct < 0.01:
+            proximity_bonus = 25 if state.swing_low.is_strong else 15
+        elif distance_pct < 0.02:
+            proximity_bonus = 20 if state.swing_low.is_strong else 10
+        else:
+            proximity_bonus = 10 if state.swing_low.is_strong else 5
+
+        breakdown['details']['key_level'] = f"{'Strong' if state.swing_low.is_strong else 'Weak'} Low ({distance_pct:.2%} away)"
+    else:
+        breakdown['details']['key_level'] = "None"
+
+    breakdown['key_level_score'] = proximity_bonus
+
+    # === 3. ORDER BLOCK CONFLUENCE ===
+    ob_bonus = 0
+    ob_details = []
+    for ob in state.order_blocks[-5:]:
+        if ob.mitigated:
+            continue
+
+        in_body_zone = False
+        if ob.body_low is not None and ob.body_high is not None:
+            in_body_zone = ob.body_low <= current_price <= ob.body_high
+
+        if in_body_zone:
+            base_score = 20 if ob.strength > 0.7 else (15 if ob.strength > 0.5 else 10)
+            if current_zone.zone_type == 'PREMIUM' and ob.bias == 'BEARISH':
+                ob_bonus += base_score
+                ob_details.append(f"In {ob.bias} OB (strength: {ob.strength:.1f}, aligned)")
+            elif current_zone.zone_type == 'DISCOUNT' and ob.bias == 'BULLISH':
+                ob_bonus += base_score
+                ob_details.append(f"In {ob.bias} OB (strength: {ob.strength:.1f}, aligned)")
+            else:
+                ob_bonus += base_score * 0.5
+                ob_details.append(f"In {ob.bias} OB (strength: {ob.strength:.1f}, not aligned)")
+        elif ob.low <= current_price <= ob.high:
+            base_score = 10 if ob.strength > 0.6 else 5
+            ob_bonus += base_score
+            ob_details.append(f"In {ob.bias} OB range (strength: {ob.strength:.1f})")
+        elif ob.low > 0:
+            distance_pct = min(abs(current_price - ob.low) / current_price,
+                             abs(current_price - ob.high) / current_price)
+            if distance_pct < 0.005:
+                ob_bonus += 8 * ob.strength
+                ob_details.append(f"Near {ob.bias} OB ({distance_pct:.2%})")
+
+        if ob_bonus > 0:
+            break
+
+    breakdown['order_block_score'] = min(ob_bonus, 20)
+    breakdown['details']['order_blocks'] = ob_details[0] if ob_details else "None fresh/aligned"
+
+    # === 3B. FAIR VALUE GAP ===
+    fvg_bonus = 0
+    fvg_details = []
+    if hasattr(state, 'fair_value_gaps') and state.fair_value_gaps:
+        for fvg in state.fair_value_gaps[-10:]:
+            if fvg.filled:
+                continue
+
+            if fvg.low <= current_price <= fvg.high:
+                if fvg.gap_size_pct > 1.0:
+                    base_score = 15
+                elif fvg.gap_size_pct > 0.5:
+                    base_score = 10
+                else:
+                    base_score = 5
+
+                if current_zone.zone_type == 'PREMIUM' and fvg.bias == 'BEARISH':
+                    fvg_bonus += base_score
+                    fvg_details.append(f"In {fvg.bias} FVG ({fvg.gap_size_pct:.2f}%, aligned)")
+                elif current_zone.zone_type == 'DISCOUNT' and fvg.bias == 'BULLISH':
+                    fvg_bonus += base_score
+                    fvg_details.append(f"In {fvg.bias} FVG ({fvg.gap_size_pct:.2f}%, aligned)")
+                else:
+                    fvg_bonus += base_score * 0.6
+                    fvg_details.append(f"In {fvg.bias} FVG ({fvg.gap_size_pct:.2f}%, not aligned)")
+            elif fvg.low > 0:
+                distance_pct = min(abs(current_price - fvg.low) / current_price,
+                                 abs(current_price - fvg.high) / current_price)
+                if distance_pct < 0.005:
+                    fvg_bonus += 8 if fvg.gap_size_pct > 0.5 else 5
+                    fvg_details.append(f"Near {fvg.bias} FVG ({distance_pct:.2%})")
+
+            if fvg_bonus > 0:
+                break
+
+    breakdown['fvg_score'] = min(fvg_bonus, 15)
+    breakdown['details']['fvg'] = fvg_details[0] if fvg_details else "None unfilled"
+
+    # === 4. STRUCTURE ALIGNMENT ===
+    structure_score = 0
+    if state.structures:
+        recent_structure = state.structures[-1]
+        if current_zone.zone_type == 'PREMIUM' and recent_structure.bias == 'BEARISH':
+            structure_score = 10
+            breakdown['details']['structure'] = f"{recent_structure.bias} {recent_structure.structure_type} (aligned)"
+        elif current_zone.zone_type == 'DISCOUNT' and recent_structure.bias == 'BULLISH':
+            structure_score = 10
+            breakdown['details']['structure'] = f"{recent_structure.bias} {recent_structure.structure_type} (aligned)"
+        elif recent_structure.bias in ('BEARISH', 'BULLISH'):
+            structure_score = 5
+            breakdown['details']['structure'] = f"{recent_structure.bias} {recent_structure.structure_type}"
+    else:
+        breakdown['details']['structure'] = "None"
+
+    breakdown['structure_score'] = structure_score
+
+    # === 5. RECENCY FACTOR ===
+    from datetime import datetime
+    now = datetime.now()
+    recency_bonus = 0
+    recency_details = []
+
+    if current_zone.zone_type == 'PREMIUM' and state.swing_high:
+        pivot_age_hours = (now - state.swing_high.time).total_seconds() / 3600
+        pivot_age_days = pivot_age_hours / 24
+
+        if pivot_age_hours < 2:
+            recency_bonus += 10
+            recency_details.append(f"Pivot < 2hrs (+10)")
+        elif pivot_age_hours < 6:
+            recency_bonus += 7
+            recency_details.append(f"Pivot < 6hrs (+7)")
+        elif pivot_age_days < 1:
+            recency_bonus += 5
+            recency_details.append(f"Pivot < 1day (+5)")
+        elif pivot_age_days < 2:
+            recency_bonus += 3
+            recency_details.append(f"Pivot < 2days (+3)")
+        elif pivot_age_days < 5:
+            recency_details.append(f"Pivot {pivot_age_days:.1f}days (0)")
+        else:
+            recency_bonus -= 5
+            recency_details.append(f"Pivot old (-5)")
+
+    elif current_zone.zone_type == 'DISCOUNT' and state.swing_low:
+        pivot_age_hours = (now - state.swing_low.time).total_seconds() / 3600
+        pivot_age_days = pivot_age_hours / 24
+
+        if pivot_age_hours < 2:
+            recency_bonus += 10
+            recency_details.append(f"Pivot < 2hrs (+10)")
+        elif pivot_age_hours < 6:
+            recency_bonus += 7
+            recency_details.append(f"Pivot < 6hrs (+7)")
+        elif pivot_age_days < 1:
+            recency_bonus += 5
+            recency_details.append(f"Pivot < 1day (+5)")
+        elif pivot_age_days < 2:
+            recency_bonus += 3
+            recency_details.append(f"Pivot < 2days (+3)")
+        elif pivot_age_days < 5:
+            recency_details.append(f"Pivot {pivot_age_days:.1f}days (0)")
+        else:
+            recency_bonus -= 5
+            recency_details.append(f"Pivot old (-5)")
+
+    if state.zone_entry_time:
+        zone_entry_age = (now - state.zone_entry_time).total_seconds() / 60
+        if zone_entry_age < 15:
+            recency_bonus += 5
+            recency_details.append(f"Zone entry < 15min (+5)")
+        elif zone_entry_age < 30:
+            recency_bonus += 3
+            recency_details.append(f"Zone entry < 30min (+3)")
+        elif zone_entry_age < 60:
+            recency_bonus += 1
+            recency_details.append(f"Zone entry < 1hr (+1)")
+
+    breakdown['recency_score'] = recency_bonus
+    breakdown['details']['recency'] = ", ".join(recency_details) if recency_details else "No bonus"
+
+    # === FINAL ===
+    raw_total = (breakdown['zone_score'] + breakdown['key_level_score'] +
+                 breakdown['order_block_score'] + breakdown['fvg_score'] +
+                 breakdown['structure_score'] + breakdown['recency_score'])
+
+    final_score = max(0, min(raw_total, 100))
+
+    breakdown['raw_total'] = raw_total
+    breakdown['final_score'] = final_score
+
+    return final_score, breakdown
 
 
 class SMCEngine:

@@ -8,7 +8,7 @@ from .fyers import FyersAdapter
 from .models import Candle, Instrument, Tick
 from .selecting import normalize_morning_symbol
 from .service import baseline_history, signal_bar_minutes
-from .smc_engine import SMCEngine
+from .smc_engine import SMCEngine, calculate_smc_score_with_breakdown
 from .utils import ROOT, market_dt, now_ist
 
 
@@ -168,6 +168,9 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
     # Build response
     opportunity = state.opportunity
 
+    # Calculate score breakdown for detailed analysis
+    score, breakdown = calculate_smc_score_with_breakdown(state, current_price)
+
     result = {
         'success': True,
         'symbol': symbol,
@@ -178,6 +181,7 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
         'trailing_low': state.trailing_low,
         'atr': state.atr,
         'trend': state.trend,
+        'score_breakdown': breakdown,  # Add detailed score breakdown
     }
 
     if opportunity:
