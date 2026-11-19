@@ -284,6 +284,48 @@ def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_
         return {'offline': True, 'reason': 'SMC scanner starting...', 'opportunities': []}
 
 
+@app.post('/api/debug-stock')
+async def api_debug_stock(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Debug endpoint: analyze a single stock with SMC engine."""
+    from radar.fyers import FyersAdapter
+    from radar.debug_analysis import analyze_single_stock
+    from radar.utils import load_config
+
+    body = await request.json()
+    symbol_input = (body.get('symbol') or '').strip()
+
+    if not symbol_input:
+        return JSONResponse({'success': False, 'error': 'Symbol required'}, status_code=400)
+
+    # Use user's broker connection if available, otherwise simulation won't work
+    conn, _ = scanners.effective_broker(db, user)
+    if not conn or not conn.token_enc:
+        return JSONResponse({
+            'success': False,
+            'error': 'Broker not connected',
+            'message': 'Connect your broker to use debug analysis'
+        }, status_code=400)
+
+    from .broker_tokens import decrypt
+    try:
+        # Create adapter with user's credentials
+        adapter = FyersAdapter(load_config())
+        adapter.app_id = conn.app_id
+        adapter.token = decrypt(conn.token_enc)
+
+        # Run analysis
+        force = body.get('force', False)
+        result = analyze_single_stock(adapter, symbol_input, load_config(), force=force)
+
+        return result
+    except Exception as e:
+        return JSONResponse({
+            'success': False,
+            'error': 'Analysis failed',
+            'message': f'{type(e).__name__}: {e}'
+        }, status_code=500)
+
+
 @app.get('/api/universe')
 def api_universe(user: User = Depends(require_user)):
     from radar import universe as U
