@@ -290,6 +290,7 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
     from radar.fyers import FyersAdapter
     from radar.debug_analysis import analyze_single_stock
     from radar.utils import load_config
+    from . import scanners
 
     body = await request.json()
     symbol_input = (body.get('symbol') or '').strip()
@@ -308,6 +309,7 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
 
     from .broker_tokens import decrypt
     import os
+    import traceback
 
     try:
         # Temporarily set env vars for adapter creation (FyersAdapter reads from env in __init__)
@@ -338,10 +340,14 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
             else:
                 os.environ['FYERS_ACCESS_TOKEN'] = old_token
     except Exception as e:
+        # Log full traceback for debugging
+        print(f'[DEBUG API ERROR] {type(e).__name__}: {e}')
+        print(traceback.format_exc())
         return JSONResponse({
             'success': False,
             'error': 'Analysis failed',
-            'message': f'{type(e).__name__}: {e}'
+            'message': f'{type(e).__name__}: {e}',
+            'traceback': traceback.format_exc()
         }, status_code=500)
 
 

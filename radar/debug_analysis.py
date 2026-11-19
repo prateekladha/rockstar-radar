@@ -1,11 +1,11 @@
 """Debug single-stock SMC analysis — fetch historical data and run SMC engine for one symbol."""
 from __future__ import annotations
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .fyers import FyersAdapter
-from .models import Candle, Instrument
+from .models import Candle, Instrument, Tick
 from .selecting import normalize_morning_symbol
 from .service import baseline_history, signal_bar_minutes
 from .smc_engine import SMCEngine
@@ -57,7 +57,6 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
             print(f'[Debug] Loading {symbol} from cache: {cache_path.name}')
 
             # Reconstruct candles from cache
-            from datetime import datetime
             candles = [
                 Candle(
                     at=datetime.fromisoformat(c['at']),
@@ -135,10 +134,7 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
 
     # Create a minimal instrument for this symbol
     instrument = Instrument(
-        symbol=symbol,
-        token='',  # Not needed for historical analysis
-        exchange='NSE',
-        name=symbol.replace('NSE:', '').replace('-EQ', '')
+        symbol=symbol
     )
 
     # Initialize SMC engine with single stock
@@ -151,7 +147,6 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
     current_price = candles[-1].close
 
     # Simulate a tick to trigger opportunity calculation
-    from .models import Tick
     tick = Tick(
         symbol=symbol,
         price=current_price,
