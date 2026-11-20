@@ -277,8 +277,6 @@ def _auto_trade_smc(db: Session) -> int:
             if score < min_score:
                 continue
             plan = o.get('trade') or {}
-            if not plan.get('in_fresh_ob'):
-                continue   # price not inside a fresh order block -> no entry
             side = plan.get('side')
             entry, stop, target, rr = (plan.get('entry'), plan.get('stop'),
                                        plan.get('target'), plan.get('rr'))
@@ -295,10 +293,11 @@ def _auto_trade_smc(db: Session) -> int:
             qty = int(floor(max_risk / rps)) if rps else 0
             if qty < 1:
                 continue
+            stop_src = 'OB stop' if plan.get('in_fresh_ob') else 'ATR stop'
             db.add(Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
                          target=target, status='pending', order_type='market', mode='paper',
                          sim=1 if u.sim_enabled else 0, source='auto_smc',
-                         note=f'Auto SMC trade — {side} score {score}, R:R {rr} ({today}).'))
+                         note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src} ({today}).'))
             held.add(sym)
             changed += 1
     if changed:

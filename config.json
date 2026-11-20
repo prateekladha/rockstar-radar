@@ -39,5 +39,6 @@
   "auto_trade_trigger": "RETEST_READY",
   "auto_trade_fresh_seconds": 300,
   "auto_trade_smc": false,
-  "auto_trade_smc_min_score": 80
+  "auto_trade_smc_min_score": 80,
+  "auto_trade_smc_atr_stop_mult": 1.5
 }
