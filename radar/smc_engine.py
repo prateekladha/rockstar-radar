@@ -959,8 +959,9 @@ class SMCEngine:
         score = calculate_smc_score(state, current_price)
 
         # Filter out low-score opportunities
-        # Lower threshold (35) to avoid filtering good setups during non-market hours
-        if score < 35:
+        # Lower threshold (25) to show more opportunities during consolidation
+        # Raised to 35 later if too many low-quality setups
+        if score < 25:
             state.opportunity = None
             return
 
@@ -1018,7 +1019,7 @@ class SMCEngine:
         with self.lock:
             opportunities = []
             for state in self.states.values():
-                if state.opportunity and state.opportunity.score >= 35:
+                if state.opportunity and state.opportunity.score >= 25:
                     opportunities.append(state.opportunity)
 
             # Sort by score descending
