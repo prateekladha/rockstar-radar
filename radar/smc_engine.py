@@ -201,6 +201,65 @@ def get_current_zone(price: float, zones: list[SMCZone]) -> Optional[SMCZone]:
     return None
 
 
+def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Optional[dict]:
+    """Derive a long/short auto-trade plan for an SMC opportunity, or None if untradeable.
+
+    Product rules:
+      - DISCOUNT zone -> LONG off a fresh BULLISH order block; PREMIUM zone -> SHORT off a fresh
+        BEARISH order block. EQUILIBRIUM is never traded.
+      - Price MUST sit inside a fresh (unmitigated) order block of that bias; the stop goes just
+        beyond the block. Target = the next strong swing, else the opposite range extreme.
+      - Reports net reward:risk (after round-trip costs). The order engine still enforces the 2:1
+        gate, so a thin-R:R plan is reported (rr) but won't actually be traded.
+    """
+    if zone is None or not current_price or current_price <= 0:
+        return None
+    zt = zone.zone_type
+    if zt == 'DISCOUNT':
+        side, want_bias = 'LONG', 'BULLISH'
+    elif zt == 'PREMIUM':
+        side, want_bias = 'SHORT', 'BEARISH'
+    else:
+        return None  # equilibrium — no trade
+
+    # Most-recent fresh order block of the right bias that currently contains price.
+    ob = None
+    for cand in reversed(state.order_blocks or []):
+        if cand.bias == want_bias and not cand.mitigated and cand.low <= current_price <= cand.high:
+            ob = cand
+            break
+    if ob is None:
+        return {'side': side, 'in_fresh_ob': False}
+
+    atr = state.atr or 0.0
+    buf = max(atr * 0.1, current_price * 0.0005)  # small cushion beyond the block
+    if side == 'LONG':
+        stop = ob.low - buf
+        target = (state.swing_high.level if (state.swing_high and state.swing_high.level > current_price)
+                  else state.trailing_high)
+    else:  # SHORT
+        stop = ob.high + buf
+        target = (state.swing_low.level if (state.swing_low and state.swing_low.level < current_price)
+                  else state.trailing_low)
+
+    plan = {'side': side, 'in_fresh_ob': True}
+    if stop is None or target is None:
+        return plan
+    risk = abs(current_price - stop)
+    reward = abs(target - current_price)
+    if risk <= 0 or reward <= 0:
+        return plan
+    cost_pct = float(config.get('estimated_roundtrip_cost_pct', 0.15) or 0.0)
+    net_reward = reward - (current_price * cost_pct / 100.0)
+    plan.update({
+        'entry': round(current_price, 2),
+        'stop': round(stop, 2),
+        'target': round(target, 2),
+        'rr': round(net_reward / risk, 2),
+    })
+    return plan
+
+
 def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     """Calculate SMC opportunity score (0-100) based on confluence factors.
 
@@ -980,6 +1039,10 @@ class SMCEngine:
             time=now_ist(),
             note=self._generate_note(state, current_zone)
         )
+        # Derived auto-trade plan (long in discount / short in premium, only inside a fresh order
+        # block). None/not-in-OB setups are simply not auto-traded; the order engine reads this.
+        state.opportunity.trade = derive_smc_trade_plan(
+            state, current_zone, current_price, self.config)
 
     def _generate_note(self, state: SMCSymbolState, zone: Optional[SMCZone]) -> str:
         """Generate descriptive note for the opportunity"""

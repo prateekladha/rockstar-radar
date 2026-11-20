@@ -37,5 +37,7 @@
   "intraday_atr_stop_mult": 0.5,
   "alert_fresh_seconds": 360,
   "auto_trade_trigger": "RETEST_READY",
-  "auto_trade_fresh_seconds": 300
+  "auto_trade_fresh_seconds": 300,
+  "auto_trade_smc": false,
+  "auto_trade_smc_min_score": 80
 }
