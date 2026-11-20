@@ -81,6 +81,7 @@ def serve(engine: RadarEngine, port: int = 8765, mode: str = 'LIVE', smc_engine:
                             'bullish_order_blocks': len(opp.bullish_order_blocks),
                             'bearish_order_blocks': len(opp.bearish_order_blocks),
                             'recent_structure': opp.recent_structure.structure_type if opp.recent_structure else None,
+                            'trade': opp.trade,  # derived auto-trade plan (side/entry/stop/target/rr) or None
                         }
                         for opp in opportunities
                     ]

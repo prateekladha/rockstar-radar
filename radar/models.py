@@ -181,6 +181,11 @@ class SMCOpportunity:
     recent_structure: Optional[SMCStructure] = None
     time: Optional[datetime] = None
     note: str = ''
+    # Derived auto-trade plan (None when the setup isn't tradeable). Keys when present:
+    # side ('LONG'/'SHORT'), in_fresh_ob (bool), and — only once in a fresh OB with a target —
+    # entry, stop, target, rr (net reward:risk after costs). The order engine trades it only when
+    # in_fresh_ob is True and rr clears the configured minimum.
+    trade: Optional[dict] = None
 
 
 @dataclass

@@ -101,10 +101,13 @@ def _price_map(db: Session, user: User) -> dict:
 
 
 def _entered_today(db: Session, user_id: int, sym: str, today: str) -> bool:
-    """True if an auto trade for this symbol was already opened today (one entry per symbol/day)."""
+    """True if an auto trade for this symbol was already opened today (one entry per symbol/day).
+    Shared across BOTH auto strategies (ORB 'auto' + SMC 'auto_smc') so they can't double-stack
+    the same stock on the same day."""
     from datetime import timezone as _tz
     from radar.utils import IST
-    prior = (db.query(Order).filter_by(user_id=user_id, symbol=sym, source='auto')
+    prior = (db.query(Order).filter(Order.user_id == user_id, Order.symbol == sym,
+                                     Order.source.in_(('auto', 'auto_smc')))
              .order_by(Order.created_at.desc()).first())
     return bool(prior and prior.created_at and
                 prior.created_at.replace(tzinfo=_tz.utc).astimezone(IST).date().isoformat() == today)
@@ -220,6 +223,89 @@ def _auto_trade(db: Session) -> int:
     return changed
 
 
+def _auto_trade_smc(db: Session) -> int:
+    """Per-user auto PAPER trading on SMC opportunities — opt-in, separate from the ORB auto-trade.
+    For each user who has auto-trade ON (admin master switch) AND opted into SMC
+    (settings.auto_trade_smc), enter a fresh high-conviction setup: LONG in a discount zone / SHORT
+    in a premium zone, ONLY when price is inside a fresh order block and the net R:R clears the 2:1
+    gate. Sized by the user's risk; one entry per symbol/day shared with the ORB strategy. Paper
+    only — live never auto-fires. Stop/target exits and the session square-off run through the same
+    machinery as every other paper order. Returns the number of entries made."""
+    from radar.utils import load_config, now_ist
+    users = db.query(User).filter(User.auto_paper_trade == 1).all()
+    if not users:
+        return 0
+    cfg = load_config()
+    today = now_ist().date().isoformat()
+    min_rr = float(cfg.get('min_net_reward_risk', 2.0) or 2.0)
+    changed = 0
+    for u in users:
+        sdata = (u.settings.data if u.settings else {}) or {}
+        if not bool(sdata.get('auto_trade_smc', cfg.get('auto_trade_smc', False))):
+            continue
+        try:
+            st = scanners.radar_state(db, u)
+        except Exception:
+            continue
+        if st.get('data_mode') != 'live':
+            continue
+        if u.sim_enabled and st.get('session_closed'):
+            continue   # frozen one-pass sim — stop re-entering
+        try:
+            min_score = int(sdata.get('auto_trade_smc_min_score',
+                                      cfg.get('auto_trade_smc_min_score', 80)) or 80)
+        except (TypeError, ValueError):
+            min_score = 80
+        capital = float(sdata.get('capital_inr', cfg.get('capital_inr', 0)) or 0)
+        risk_pct = float(sdata.get('risk_pct', cfg.get('risk_pct', 0)) or 0)
+        max_risk = capital * risk_pct / 100 if (capital and risk_pct) else 0
+        if not max_risk:
+            continue
+        try:
+            opps = (scanners.smc_state(db, u).get('opportunities')) or []
+        except Exception:
+            continue
+        # Symbols already held by EITHER auto strategy — never stack the same stock.
+        held = {watchpins.bare(o.symbol) for o in db.query(Order)
+                .filter(Order.user_id == u.id, Order.source.in_(('auto', 'auto_smc')),
+                        Order.status.in_(('pending', 'open'))).all()}
+        for o in opps:
+            try:
+                score = int(o.get('score') or 0)
+            except (TypeError, ValueError):
+                continue
+            if score < min_score:
+                continue
+            plan = o.get('trade') or {}
+            if not plan.get('in_fresh_ob'):
+                continue   # price not inside a fresh order block -> no entry
+            side = plan.get('side')
+            entry, stop, target, rr = (plan.get('entry'), plan.get('stop'),
+                                       plan.get('target'), plan.get('rr'))
+            if side not in ('LONG', 'SHORT') or not entry or not stop or not target:
+                continue
+            if rr is None or rr < min_rr:
+                continue   # fails the 2:1 net reward:risk gate
+            sym = watchpins.bare(o.get('symbol') or '')
+            if not sym or sym in held:
+                continue
+            if not u.sim_enabled and _entered_today(db, u.id, sym, today):
+                continue
+            rps = abs(entry - stop)
+            qty = int(floor(max_risk / rps)) if rps else 0
+            if qty < 1:
+                continue
+            db.add(Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
+                         target=target, status='pending', order_type='market', mode='paper',
+                         sim=1 if u.sim_enabled else 0, source='auto_smc',
+                         note=f'Auto SMC trade — {side} score {score}, R:R {rr} ({today}).'))
+            held.add(sym)
+            changed += 1
+    if changed:
+        db.commit()
+    return changed
+
+
 def _square_off_paper(db: Session) -> int:
     """Intraday safety: force-close any still-open real PAPER position when its session ends and the
     feed-based stop/target didn't trigger — 15:15 (live) or when the feed's session closes. Simulation
@@ -297,6 +383,7 @@ def _square_off_sim(db: Session) -> int:
 def tick(db: Session, live_sync: bool = True) -> int:
     """One processing pass: auto-trade, fills/exits, live sync, end-of-day square-off."""
     created = _auto_trade(db)
+    created += _auto_trade_smc(db)   # SMC opt-in strategy, entered the same pass
     active = (db.query(Order)
               .filter(Order.status.in_(('pending', 'open')))
               .all())

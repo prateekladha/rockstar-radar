@@ -245,6 +245,24 @@ def effective_cc(db: Session, user: User) -> ControlCenter | None:
     return _demo if os.environ.get('RADAR_DEMO') == '1' else None
 
 
+def smc_state(db: Session, user: User) -> dict:
+    """SMC opportunities for the user's effective (already-running) scanner — sim, own, or shared.
+    Read-only: never starts a scanner (mirrors the /api/smc-radar proxy). Returns
+    {'opportunities': [...]} — an empty list when offline/none, so callers can iterate safely."""
+    import json
+    import urllib.request
+    import urllib.error
+    cc = effective_cc(db, user)
+    if cc is None:
+        return {'opportunities': []}
+    try:
+        with urllib.request.urlopen(
+                f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except (urllib.error.URLError, OSError, ValueError):
+        return {'opportunities': []}
+
+
 def connected_brokers(db: Session) -> list[BrokerConnection]:
     """All registered broker connections (for the scheduler to start/refresh)."""
     return (db.query(BrokerConnection)
