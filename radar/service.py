@@ -344,6 +344,16 @@ def load_smc_history(adapter: FyersAdapter, smc_engine: SMCEngine, today: date,
 
             if i % 20 == 0:
                 print(f'  SMC history loaded: {i}/{len(symbols)}')
+        except (ApiAuthError, ApiPermissionError, ApiRateLimitError) as e:
+            # The token is invalid/expired, lacks market-data permission, or the daily
+            # REST budget is spent — the SAME failure would hit every remaining symbol.
+            # Stop now instead of grinding through ~100 doomed calls (this is the
+            # "skip the SMC warmup until a valid token exists" guard). The scanner
+            # reloads SMC history on its next start, which recycles once the user logs
+            # in with a fresh token. Whatever loaded so far is kept, never empties.
+            print(f'  SMC history fetch stopped early ({type(e).__name__}); '
+                  f'{loaded}/{len(symbols)} loaded. Will reload on next scanner start.')
+            break
         except Exception as e:
             # Non-critical - SMC will work with less data, just less accurate initially.
             # Do NOT cache an empty list — leave the symbol absent so a later restart
