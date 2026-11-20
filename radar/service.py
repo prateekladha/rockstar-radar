@@ -220,26 +220,31 @@ def cache_smc_history(adapter: FyersAdapter, symbols: list[str], day: date,
 
         try:
             candles = baseline_history(adapter, symbol, resolution, from_dt, to_dt)
-            # Store as serializable dict
-            stored[symbol] = [
-                {
-                    'at': c.at.isoformat(),
-                    'open': c.open,
-                    'high': c.high,
-                    'low': c.low,
-                    'close': c.close,
-                    'volume': c.volume
-                }
-                for c in candles
-            ]
-            if not candles:
+            # Only cache symbols that actually returned candles. Persisting an empty
+            # list poisons the cache: a later restart loads it as "0 candles" and the
+            # SMC engine never reaches its 101-candle minimum, so the radar stays empty
+            # for the whole session. Leaving a failed symbol ABSENT lets the next run
+            # (or restart) re-fetch it instead.
+            if candles:
+                stored[symbol] = [
+                    {
+                        'at': c.at.isoformat(),
+                        'open': c.open,
+                        'high': c.high,
+                        'low': c.low,
+                        'close': c.close,
+                        'volume': c.volume
+                    }
+                    for c in candles
+                ]
+            else:
                 print(f'  Warning: {symbol} has no SMC history available')
         except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError):
             path.write_text(json.dumps(stored), encoding='utf-8')
             raise
         except Exception as e:
             print(f'  SMC history unavailable for {symbol}: {type(e).__name__}: {e}')
-            stored[symbol] = []
+            # Do NOT store an empty list — leave the symbol absent so it is re-fetched.
 
         if i % 10 == 0:
             path.write_text(json.dumps(stored), encoding='utf-8')
@@ -290,8 +295,18 @@ def load_smc_history(adapter: FyersAdapter, smc_engine: SMCEngine, today: date,
                 smc_engine.load_historical_candles(symbol, candles)
                 loaded += 1
 
-            print(f'SMC engine ready: {loaded}/{len(symbols)} symbols loaded from cache')
-            return loaded
+            # Only trust the cache if it yielded history for a healthy share of
+            # symbols. A cache written by a failed warmup (broker not yet authed /
+            # rate-limited) can list every symbol with an empty candle array; blindly
+            # returning here would leave the SMC engine with zero context for the whole
+            # session (empty radar). When the cache is insufficient, fall through to the
+            # live broker fetch below, which also overwrites the poisoned cache.
+            min_ok = max(1, len(symbols) // 2)
+            if loaded >= min_ok:
+                print(f'SMC engine ready: {loaded}/{len(symbols)} symbols loaded from cache')
+                return loaded
+            print(f'SMC cache insufficient ({loaded}/{len(symbols)} symbols had candles); '
+                  f'falling back to live fetch...')
 
         except Exception as e:
             print(f'SMC cache load failed: {type(e).__name__}: {e}')
@@ -305,6 +320,7 @@ def load_smc_history(adapter: FyersAdapter, smc_engine: SMCEngine, today: date,
 
     # Store fetched data so we can cache it
     fetched_data = {}
+    loaded = 0  # reset: a partial/insufficient cache load above is superseded by this fetch
 
     for i, symbol in enumerate(symbols, 1):
         try:
@@ -329,9 +345,10 @@ def load_smc_history(adapter: FyersAdapter, smc_engine: SMCEngine, today: date,
             if i % 20 == 0:
                 print(f'  SMC history loaded: {i}/{len(symbols)}')
         except Exception as e:
-            # Non-critical - SMC will work with less data, just less accurate initially
+            # Non-critical - SMC will work with less data, just less accurate initially.
+            # Do NOT cache an empty list — leave the symbol absent so a later restart
+            # re-fetches it instead of loading zero candles from a poisoned cache.
             print(f'  SMC history unavailable for {symbol}: {type(e).__name__}')
-            fetched_data[symbol] = []  # Mark as attempted but failed
             continue
 
     # Save fetched data to cache for future use
