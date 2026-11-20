@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from radar.fyers import ApiAuthError
 from radar.models import Candle
 from radar.service import (cache_smc_history, load_smc_history,
                            smc_cache_path)
@@ -111,6 +112,26 @@ class SmcHistoryCacheTests(unittest.TestCase):
             self.assertNotIn(SYMS[1], stored)
             self.assertTrue(all(v for v in stored.values()))
             self.assertEqual({s for s, ok in result.items() if ok}, good)
+
+    def test_fetch_aborts_early_on_invalid_token(self):
+        """A stale/expired token must stop the fetch after one failure, not grind
+        through every symbol, and must never write a poisoned cache."""
+        with tempfile.TemporaryDirectory() as tmp, patch('radar.service.ROOT', Path(tmp)):
+            engine = FakeSMCEngine(SYMS)  # no cache file -> goes straight to broker fetch
+            calls = []
+
+            def auth_fail(adapter, symbol, resolution, from_dt, to_dt, *a, **k):
+                calls.append(symbol)
+                raise ApiAuthError('FYERS history token expired/invalid (-16)')
+
+            with patch('radar.service.baseline_history', side_effect=auth_fail):
+                loaded = load_smc_history(adapter=None, smc_engine=engine,
+                                          today=DAY, config=self.cfg)
+
+            self.assertEqual(loaded, 0)
+            self.assertEqual(len(calls), 1)          # stopped after the FIRST failure
+            self.assertEqual(engine.loaded, {})
+            self.assertFalse(smc_cache_path(DAY, 5).exists())  # no poisoned cache written
 
 
 if __name__ == '__main__':
