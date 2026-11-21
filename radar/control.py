@@ -66,11 +66,13 @@ EDITABLE_CONFIG = {
     # back to the config.json default. (For 'enum', the 2nd tuple slot is the set of allowed values.)
     'auto_trade_trigger': ('enum', ('RETEST_READY', 'CONFIRMED'), None),
     # Auto PAPER trading on SMC (Smart Money Concepts) opportunities — separate, opt-in strategy
-    # alongside the ORB auto-trade. Enters LONG in a discount zone / SHORT in a premium zone, but
-    # ONLY when price sits inside a fresh (unmitigated) order block and the net R:R clears the 2:1
-    # gate. `auto_trade_smc_min_score` is the minimum confluence score (0-100) required to fire.
+    # alongside the ORB auto-trade. Enters LONG in a discount zone / SHORT in a premium zone once
+    # the score clears `auto_trade_smc_min_score` and the net R:R clears the 2:1 gate. The stop
+    # anchors to a fresh (unmitigated) order block when price is inside one, else falls back to
+    # `auto_trade_smc_atr_stop_mult` x ATR from entry.
     'auto_trade_smc': ('bool', None, None),
     'auto_trade_smc_min_score': ('int', 50, 100),
+    'auto_trade_smc_atr_stop_mult': ('float', 0.5, 5.0),
 }
 
 
