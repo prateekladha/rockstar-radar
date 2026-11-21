@@ -91,3 +91,31 @@ Fetched ~1 month of real NSE 5-minute history for 98 symbols from Yahoo (public 
 As configured, the strategy is **break-even at best after variance control, not yet profitable.** Do
 NOT put real money on it. The path: confluence-gate for consistency → **learn the confluence weights on
 real outcomes (train/test)** → re-backtest. The harness + the month of data make that measurable now.
+
+---
+
+# FULL EXPERIMENT CAMPAIGN (22 days real data) — honest verdict
+
+Every main lever tested on the month of real NSE data:
+
+| experiment | result | verdict |
+|---|---|---|
+| Score threshold 50→90 (static) | win% flat ~30% at **every** threshold; totals are variance (+133k w/ a −132k week) | score is **not** a quality filter |
+| Adaptive exits (velocity/partial/BE) | −125k vs −44k static; 72% win but winners cut | **hurts** — defaulted off |
+| Hand-weighted confluence gate | collapses weekly swing ±130k → ±16k, ~break-even | **risk control only**, no return |
+| Learned weights (logreg, train/test) | only durable signal is `is_long` (regime-fit); SMC score **−0.17** (anti-predictive) | **no learnable edge** in these features |
+| Nearest-level targets (trader's exit) | win% 31→44% but **−164k** (small reward, full stop) | **worse** mechanically |
+
+## The honest conclusion
+**No mechanical configuration of the current SMC feature set has a durable edge over a month of real
+data.** Win rate sits at ~30% regardless of filters; P&L is dominated by **market regime and variance**,
+not signal. The SMC score is slightly anti-predictive. The trader is profitable *manually* because of
+**discretionary skill** these mechanical features don't capture — specific multi-indicator confluence
+read in real time, tight adaptive stops (not wide structure/ATR stops), and level-rejection exits.
+
+**What this rules out:** more parameter tuning on this feature set. **What the data still supports:**
+confluence gating for *consistency* (not profit). **Realistic forks (fundamentally different, need a
+decision):** (1) encode the trader's execution far more faithfully — 1-minute timing + tight stops +
+exact confluence — and re-test; (2) ship this as a **scanner/alert** tool (surface setups, trader
+executes) rather than an auto-trader; (3) richer data/features (order flow, more indicators) for ML.
+The harness + Yahoo fetcher make any of these measurable.

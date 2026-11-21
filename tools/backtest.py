@@ -162,7 +162,28 @@ def _manage(p: Pos, bar: Candle, cfg: dict, use_exit_engine: bool):
 
 
 # ----------------------------------------------------------------------------- backtest
-def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw', conf_min=0) -> list:
+def nearest_target(side, entry, state, candles, day_start, i):
+    """The trader's actual exit: nearest structural level in profit (VP VAH/VAL/POC, swings, day
+    extremes) at least 0.1% away — a smaller, higher-probability target than the mechanical 2:1."""
+    vp = volume_profile.volume_profile(candles[day_start:i + 1], bins=20)
+    levels = []
+    if vp:
+        levels += [vp['vah'], vp['val'], vp['poc']]
+    if getattr(state, 'swing_high', None):
+        levels.append(state.swing_high.level)
+    if getattr(state, 'swing_low', None):
+        levels.append(state.swing_low.level)
+    day = candles[day_start:i + 1]
+    levels += [max(c.high for c in day), min(c.low for c in day)]
+    if side == 'LONG':
+        above = [L for L in levels if L and L > entry * 1.001]
+        return min(above) if above else None
+    below = [L for L in levels if L and L < entry * 0.999]
+    return max(below) if below else None
+
+
+def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw', conf_min=0,
+        target_mode='plan', min_rr=MIN_RR) -> list:
     trades = []
     max_tps = int(cfg.get('max_trades_per_symbol', 4) or 4)
     for sym, candles in history.items():
@@ -190,7 +211,16 @@ def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw
                     pl = opp.trade
                     side, e, s, t, rr = (pl.get('side'), pl.get('entry'), pl.get('stop'),
                                          pl.get('target'), pl.get('rr'))
-                    if side in ('LONG', 'SHORT') and e and s and t and rr is not None and rr >= MIN_RR:
+                    if side in ('LONG', 'SHORT') and e and s and t:
+                        if target_mode == 'nearest':
+                            nt = nearest_target(side, e, state, candles, i - slots[i], i)
+                            if nt is None:
+                                continue
+                            t = nt
+                            risk = abs(e - s)
+                            rr = (abs(t - e) / risk) if risk else 0
+                        if rr is None or rr < min_rr:
+                            continue
                         sig = compute_signals(state, side, candles, i, days, slots, by_day_vol)
                         conf = confluence.confluence_score(sig)['score']
                         if entry_mode == 'confluence' and conf < conf_min:
