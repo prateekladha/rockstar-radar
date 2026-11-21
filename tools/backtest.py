@@ -183,7 +183,7 @@ def nearest_target(side, entry, state, candles, day_start, i):
 
 
 def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw', conf_min=0,
-        target_mode='plan', min_rr=MIN_RR) -> list:
+        target_mode='plan', min_rr=MIN_RR, stop_mode='plan', tight_mult=0.5, regime=False, reg_thr=0.005) -> list:
     trades = []
     max_tps = int(cfg.get('max_trades_per_symbol', 4) or 4)
     for sym, candles in history.items():
@@ -212,6 +212,14 @@ def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw
                     side, e, s, t, rr = (pl.get('side'), pl.get('entry'), pl.get('stop'),
                                          pl.get('target'), pl.get('rr'))
                     if side in ('LONG', 'SHORT') and e and s and t:
+                        if regime:   # trade only WITH a strong intraday move (trend, not chop)
+                            d_open = candles[i - slots[i]].open
+                            dret = (bar.close - d_open) / d_open if d_open else 0
+                            if (side == 'LONG' and dret < reg_thr) or (side == 'SHORT' and dret > -reg_thr):
+                                continue
+                        atr = getattr(state, 'atr', 0) or 0
+                        if stop_mode == 'tight' and atr > 0:
+                            s = e - tight_mult * atr if side == 'LONG' else e + tight_mult * atr
                         if target_mode == 'nearest':
                             nt = nearest_target(side, e, state, candles, i - slots[i], i)
                             if nt is None:
