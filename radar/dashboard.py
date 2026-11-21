@@ -82,6 +82,7 @@ def serve(engine: RadarEngine, port: int = 8765, mode: str = 'LIVE', smc_engine:
                             'bearish_order_blocks': len(opp.bearish_order_blocks),
                             'recent_structure': opp.recent_structure.structure_type if opp.recent_structure else None,
                             'trade': opp.trade,  # derived auto-trade plan (side/entry/stop/target/rr) or None
+                            'confluence': opp.confluence,  # decision-support stack for the trader
                         }
                         for opp in opportunities
                     ]

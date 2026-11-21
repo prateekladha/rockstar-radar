@@ -186,6 +186,9 @@ class SMCOpportunity:
     # entry, stop, target, rr (net reward:risk after costs). The order engine trades it only when
     # in_fresh_ob is True and rr clears the configured minimum.
     trade: Optional[dict] = None
+    # Decision-support confluence stack (RSI, fib pivots, volume profile, cumulative RVOL, structure,
+    # weighted score) computed for the trader to read on the radar. Context only — never an auto gate.
+    confluence: Optional[dict] = None
 
 
 @dataclass
