@@ -119,3 +119,31 @@ decision):** (1) encode the trader's execution far more faithfully — 1-minute 
 exact confluence — and re-test; (2) ship this as a **scanner/alert** tool (surface setups, trader
 executes) rather than an auto-trader; (3) richer data/features (order flow, more indicators) for ML.
 The harness + Yahoo fetcher make any of these measurable.
+
+## Follow-up: tight stops + regime filters (exhaustive) — still beta, not edge
+- **Tight ATR stops** flip per-trade expectancy positive (0.3×ATR + nearest target: +₹345k, avg
+  +₹133/trade) — BUT a train/test split exposes it as pure beta: **1st half −₹73k, 2nd half +₹419k**.
+  All the profit is the bull fortnight (W46–47); choppy/down weeks lose in every config.
+- **Intraday regime filter** (trade only strong-trend days): non-monotonic, overfit; the one "good"
+  threshold (+₹80k) concentrates entirely in W46–47 too.
+- **Market-regime trend-following** (trade with the universe's prior-3-day trend — the principled lever
+  that *should* capture the good beta): **−₹65,921, BOTH halves negative.** It destroyed the beta
+  rather than capturing it — intraday regime does not persist usefully here.
+
+## FINAL VERDICT
+Across entries (score, hand + learned confluence), exits (adaptive, nearest-level), stops (wide, tight),
+and regime filters (intraday, market trend) — **no durable, regime-independent mechanical edge exists in
+this data.** Winning configs are unpredictable long-beta. **A mechanical auto-trader on these features
+should not trade real money.**
+
+### The honest path to the real goal (auto-trade on real money)
+The edge that exists is the **trader's discretionary skill**. The way to eventually automate it is to
+**learn from the trader, not from mechanical labels**:
+1. **Scanner/decision-support** — compute the full confluence stack and show it on the radar so the
+   trader acts faster and better (plays to the real edge). *(Being built.)*
+2. **Log the trader's ACTUAL trades + reasoning + outcomes** (the `Order.features` + feature-logging
+   plumbing already exists) — this is real labelled data of *what actually works*, far richer than the
+   ~30%-win mechanical signals.
+3. **Learn a model on that human-generated data** once enough accumulates (weeks/months), then and only
+   then consider auto-trading what's been proven to work. This reaches the goal *through* the trader's
+   edge instead of pretending a mechanical edge exists where the data says it doesn't.
