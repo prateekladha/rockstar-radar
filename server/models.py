@@ -201,6 +201,9 @@ class Order(Base):
     be_moved = Column(Integer, default=0)    # live stop moved to breakeven?
     booked_qty = Column(Integer, default=0)  # shares booked in the partial (runner = qty - booked_qty)
     booked_pnl = Column(Float, default=0.0)  # realised ₹ from the partial book
+    # Phase 2 learning: the confluence signals/score captured at entry (JSON). Paired with the
+    # realised pnl/result_r at exit, these rows are the training data for re-weighting (NO per-tick ML).
+    features = Column(Text)
 
     def risk_per_share(self):
         if self.entry and self.stop:
