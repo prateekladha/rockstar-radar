@@ -120,6 +120,7 @@ export default function SMCRadar() {
                 <th>Weak High</th>
                 <th>Weak Low</th>
                 <th>Structure</th>
+                <th>Confluence</th>
                 <th>Note</th>
               </tr>
             </thead>
@@ -130,7 +131,7 @@ export default function SMCRadar() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan="10">
+                  <td colSpan="11">
                     <div className="empty">
                       No SMC opportunities matching your filters. Adjust filters or wait for market conditions to develop.
                     </div>
@@ -210,8 +211,30 @@ const OpportunityRow = ({ opp }) => (
     <td style={{ fontSize: 11 }}>
       {opp.recent_structure || '—'}
     </td>
+    <ConfluenceCell c={opp.confluence} />
     <td style={{ fontSize: 11, color: '#93a0b6', maxWidth: 300 }}>
       {opp.note || '—'}
     </td>
   </tr>
 )
+
+// Decision-support confluence stack — the trader's full read at a glance (context, not an auto signal).
+const ConfluenceCell = ({ c }) => {
+  if (!c) return <td style={{ fontSize: 11, color: '#93a0b6' }}>—</td>
+  const n = (x, d = 0) => (x == null ? '—' : Number(x).toFixed(d))
+  const p = c.pivots
+  const title = [
+    `Confluence ${c.score}/100`,
+    p ? `Pivots  P ${p.P}  R1 ${p.R1} R2 ${p.R2} R3 ${p.R3}  S1 ${p.S1} S2 ${p.S2} S3 ${p.S3}` : '',
+    c.vp ? `Vol profile  VAH ${c.vp.vah}  POC ${c.vp.poc}  VAL ${c.vp.val}  shape ${c.vp.shape}` : '',
+    c.components ? 'Weights  ' + Object.entries(c.components).map(([k, v]) => `${k}:${v}`).join('  ') : '',
+  ].filter(Boolean).join('\n')
+  return (
+    <td style={{ fontSize: 11 }} title={title}>
+      <div><strong style={{ color: c.score >= 50 ? '#48d3a4' : '#93a0b6' }}>{n(c.score)}</strong>
+        <span style={{ color: '#93a0b6' }}> conf</span></div>
+      <div style={{ color: '#93a0b6' }}>RSI {n(c.rsi)} · RVOL {c.rvol_cum == null ? '—' : n(c.rvol_cum, 1) + '×'}</div>
+      <div style={{ color: '#93a0b6' }}>VP {c.vp ? c.vp.shape : '—'} · {c.trend || '—'}</div>
+    </td>
+  )
+}

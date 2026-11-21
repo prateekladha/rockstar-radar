@@ -181,6 +181,17 @@ async def place_order(request: Request, user: User = Depends(require_user),
               sim=1 if sim else 0, broker_order_id=broker_oid,
               source=b.get('source', 'manual'), note=b.get('note'))
     db.add(o)
+    # Log the SMC confluence snapshot at entry so the trader's REAL trades become labelled training
+    # data for the honest auto-trade path (edge = the trader). Best-effort; never blocks the order.
+    try:
+        from .. import scanners, trade_features
+        st = scanners.smc_state(db, user)
+        snap = next((op.get('confluence') for op in (st.get('opportunities') or [])
+                     if _bare(op.get('symbol', '')) == _bare(symbol)), None)
+        if snap:
+            trade_features.record_features(o, {'confluence': snap, 'side': side, 'source': o.source})
+    except Exception:
+        pass
     db.commit()
     db.refresh(o)
     # Paper: if the market has already traded through the entry, fill it immediately so it shows as

@@ -359,10 +359,18 @@ def _auto_trade_smc(db: Session) -> int:
             if qty < 1:
                 continue
             stop_src = 'OB stop' if plan.get('in_fresh_ob') else 'ATR stop'
-            db.add(Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
-                         target=target, status='pending', order_type='market', mode='paper',
-                         sim=1 if u.sim_enabled else 0, source='auto_smc',
-                         note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src} ({today}).'))
+            smc_order = Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
+                              target=target, status='pending', order_type='market', mode='paper',
+                              sim=1 if u.sim_enabled else 0, source='auto_smc',
+                              note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src} ({today}).')
+            try:   # log the confluence snapshot at entry (training data for the auto-trade path)
+                from . import trade_features
+                if o.get('confluence'):
+                    trade_features.record_features(smc_order, {'confluence': o.get('confluence'),
+                                                               'side': side, 'score': score})
+            except Exception:
+                pass
+            db.add(smc_order)
             held.add(sym)
             changed += 1
     if changed:
