@@ -59,3 +59,35 @@ Nov 17 **+₹14,745** · Nov 18 **−₹15,819** · Nov 19 **+₹53,021**
 - **Rebuild "smart early exit" around actual structure/level rejection** (the ≥3-rejection + VP/pivot
   levels), not a velocity formula, then re-backtest.
 - Add ORB and confluence-gated entries to the harness to compare entry quality.
+
+---
+
+# UPDATE — 22-day backtest on real NSE data (Oct 21 – Nov 20 2026)
+
+Fetched ~1 month of real NSE 5-minute history for 98 symbols from Yahoo (public tickers, no token;
+`tools/fetch_yahoo.py`). **This overturns the 4-day conclusions — the small sample was luck.**
+
+### Native runs (static let-winners-run; weekly P&L in brackets)
+| config | trades | win% | TOTAL | weekly swings |
+|---|---|---|---|---|
+| score≥60 raw | 2604 | 31% | **+₹133,260** | W45 **−₹132k**, W46 +₹123k — unusable variance |
+| score≥70 raw | 1359 | 31% | **−₹28,314** | −8/−47/−117/+88/+56 k |
+| **score≥70 + confluence≥50** | 120 | 30% | **+₹1,421** | **+2/−16/−9/+16/+8 k** (tame) |
+| score≥60 + confluence≥50 | 140 | 30% | −₹991 | similar tame profile |
+
+### Findings (robust)
+1. **The raw SMC strategy is NOT a reliable edge.** Win% is ~30–31% at *every* score threshold
+   (50→90) — a higher score does **not** mean a better trade. Totals are dominated by **variance**,
+   not edge: score≥60 "+₹133k" comes with a **−₹132k single week**. Not deployable for real money.
+2. **Adaptive exits hurt — confirmed on 22 days** (score≥70: static −₹44k vs adaptive −₹125k; 72% win
+   but big loss = winners cut, losers full). The exit-defaults-OFF decision holds.
+3. **The confluence layer's real value is RISK CONTROL, not higher return.** `confluence≥50` collapses
+   the weekly swings from ±₹130k to ±₹16k and nudges the month to ~break-even (+₹1.4k). On the small
+   4-day sample confluence looked anti-predictive; on a month it clearly tames variance.
+4. So the hand-weighted confluence already helps consistency. **Learning the weights from logged
+   outcomes (Phase 2) is the lever to turn break-even into positive** — with a proper train/test split.
+
+### Bottom line
+As configured, the strategy is **break-even at best after variance control, not yet profitable.** Do
+NOT put real money on it. The path: confluence-gate for consistency → **learn the confluence weights on
+real outcomes (train/test)** → re-backtest. The harness + the month of data make that measurable now.
