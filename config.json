@@ -40,6 +40,7 @@
   "auto_trade_fresh_seconds": 300,
   "auto_trade_smc": false,
   "auto_trade_smc_min_score": 80,
+  "auto_trade_smc_atr_stop_mult": 1.5,
   "exit_breakeven_at_r": 1.0,
   "exit_partial_frac": 0.5,
   "exit_partial_at_r": 1.0,

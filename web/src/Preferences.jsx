@@ -80,9 +80,10 @@ function AutoTradeSettings() {
           <p className="note" style={{ marginTop: 8 }}>
             A separate strategy from the ORB trigger above. When on (and your admin has enabled auto
             paper-trading), the algo also enters <strong>long in a discount zone / short in a premium
-            zone</strong> — but <em>only</em> when price sits inside a fresh order block and the setup's
-            net reward:risk clears 2:1. A higher score demands stronger confluence (default 80; fewer,
-            better setups). One entry per stock per day, shared with the ORB strategy.
+            zone</strong> once an opportunity's SMC score clears the threshold below and its net
+            reward:risk clears 2:1. The stop hugs a fresh order block when price is sitting inside one,
+            otherwise it uses an ATR-based stop. A higher score demands stronger confluence (default
+            80; fewer, better setups). One entry per stock per day, shared with the ORB strategy.
             <strong> Paper only</strong> — real orders always need your tap to confirm.
           </p>
         </div>
