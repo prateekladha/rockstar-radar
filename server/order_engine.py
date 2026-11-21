@@ -17,7 +17,7 @@ from math import floor
 
 from sqlalchemy.orm import Session
 
-from . import scanners, watchpins
+from . import scanners, watchpins, exit_engine
 from .models import Order, User
 
 
@@ -30,12 +30,26 @@ def close_fields(side: str, fill: float, stop: float, exit_price: float, qty: in
     return pnl, result_r
 
 
-def mark_closed(order: Order, exit_price: float, note: str | None = None) -> None:
+def mark_closed(order: Order, exit_price: float, note: str | None = None,
+                reason: str | None = None) -> None:
+    """Close a paper/live order, accounting for any partial book. Realised ₹ = runner P&L + booked
+    P&L; R is measured from the ORIGINAL stop (init_stop) over the full size, so a breakeven move
+    doesn't erase the trade's risk denominator."""
     basis = order.fill_price if order.fill_price is not None else order.entry
+    direction = 1 if order.side == 'LONG' else -1
+    booked_qty = order.booked_qty or 0
+    runner_qty = (order.qty or 0) - booked_qty
+    runner_pnl = ((exit_price - basis) * runner_qty * direction) if basis is not None else 0.0
+    total = round(runner_pnl + (order.booked_pnl or 0.0), 2)
+    init_stop = order.init_stop or order.stop or basis
+    rps = abs(basis - init_stop) if (basis and init_stop) else 0
     order.exit_price = exit_price
     order.status = 'closed'
     order.closed_at = datetime.utcnow()
-    order.pnl, order.result_r = close_fields(order.side, basis, order.stop or basis, exit_price, order.qty)
+    order.pnl = total
+    order.result_r = round(total / (rps * order.qty), 2) if (rps and order.qty) else None
+    if reason:
+        order._exit_reason = reason
     if note:
         order.note = note
 
@@ -63,7 +77,50 @@ def _exit_hit(order: Order, px: float):
     return None
 
 
-def process_paper(order: Order, px: float) -> bool:
+def _manage_open_paper(order: Order, px: float, cfg: dict, now_ist_dt) -> bool:
+    """Adaptive management for an OPEN paper position (Phase 0 exit engine): breakeven@1R, partial
+    book-half, and the velocity time-decay governor. Mutates `order` in place and may CLOSE it (the
+    governor books remaining at market). Returns True if anything changed. Safe no-op for legacy
+    orders with no captured init_stop."""
+    if not order.init_stop or order.fill_price is None:
+        return False
+    side, fill = order.side, order.fill_price
+    changed = False
+    be_r = float(cfg.get('exit_breakeven_at_r', 1.0) or 0)
+    part_frac = float(cfg.get('exit_partial_frac', 0.5) or 0)
+    part_r = float(cfg.get('exit_partial_at_r', 1.0) or 0)
+
+    # 1) Partial book-half at +part_r, and move the runner's stop to breakeven.
+    if (part_frac > 0 and part_r > 0 and not order.booked_qty
+            and exit_engine.reached_r(side, fill, order.init_stop, px, part_r)):
+        bq = int(floor((order.qty or 0) * part_frac))
+        if bq >= 1:
+            direction = 1 if side == 'LONG' else -1
+            order.booked_qty = bq
+            order.booked_pnl = round((px - fill) * bq * direction, 2)
+            order.stop = fill
+            order.be_moved = 1
+            changed = True
+
+    # 2) Breakeven at +be_r (independent of partials, if not already moved).
+    if be_r > 0 and not order.be_moved and exit_engine.reached_r(side, fill, order.init_stop, px, be_r):
+        order.stop = fill
+        order.be_moved = 1
+        changed = True
+
+    # 3) Velocity governor: book the remaining at market when the far target is out of reach in the
+    #    time left before the management cutoff (the APL Apollo rule).
+    if bool(cfg.get('exit_velocity_governor', True)) and now_ist_dt is not None and order.filled_at:
+        elapsed_min = (datetime.utcnow() - order.filled_at).total_seconds() / 60.0
+        if exit_engine.velocity_exit(side, fill, px, order.target, elapsed_min, now_ist_dt,
+                                     str(cfg.get('exit_mgmt_cutoff', '15:00')),
+                                     float(cfg.get('exit_velocity_slack', 1.5) or 1.5)):
+            mark_closed(order, px, reason='velocity')
+            return True
+    return changed
+
+
+def process_paper(order: Order, px: float, cfg: dict | None = None, now_ist_dt=None) -> bool:
     """Advance one paper order against the latest price. Returns True if it changed."""
     if px is None:
         return False
@@ -72,15 +129,20 @@ def process_paper(order: Order, px: float) -> bool:
             order.status = 'open'
             order.fill_price = order.entry
             order.filled_at = datetime.utcnow()
+            if order.init_stop is None:
+                order.init_stop = order.stop   # capture the ORIGINAL stop for 1R math
             return True
         return False
     if order.status == 'open':
-        hit = _exit_hit(order, px)
+        changed = _manage_open_paper(order, px, cfg or {}, now_ist_dt)
+        if order.status == 'closed':   # governor already booked it
+            return True
+        hit = _exit_hit(order, px)     # stop (maybe breakeven now) / target
         if hit:
             exit_price, reason = hit
-            mark_closed(order, exit_price, note=(order.note or '') or None)
-            order._exit_reason = reason  # transient, for logging
+            mark_closed(order, exit_price, reason=reason)
             return True
+        return changed
     return False
 
 
@@ -384,6 +446,9 @@ def tick(db: Session, live_sync: bool = True) -> int:
     """One processing pass: auto-trade, fills/exits, live sync, end-of-day square-off."""
     created = _auto_trade(db)
     created += _auto_trade_smc(db)   # SMC opt-in strategy, entered the same pass
+    from radar.utils import load_config, now_ist
+    _cfg = load_config()             # exit-engine knobs (breakeven/partial/velocity)
+    _now_i = now_ist()               # IST clock for the velocity-governor cutoff
     active = (db.query(Order)
               .filter(Order.status.in_(('pending', 'open')))
               .all())
@@ -404,7 +469,7 @@ def tick(db: Session, live_sync: bool = True) -> int:
             pm = _price_map(db, user)
             if pm:
                 for o in paper:
-                    if process_paper(o, pm.get(watchpins.bare(o.symbol))):
+                    if process_paper(o, pm.get(watchpins.bare(o.symbol)), _cfg, _now_i):
                         changed += 1
         if live and live_sync:
             try:

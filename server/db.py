@@ -47,6 +47,10 @@ _ADDED_COLUMNS = {
         'fill_price': 'FLOAT',
         'filled_at': 'TIMESTAMP',
         'sim': 'INTEGER DEFAULT 0',
+        'init_stop': 'FLOAT',
+        'be_moved': 'INTEGER DEFAULT 0',
+        'booked_qty': 'INTEGER DEFAULT 0',
+        'booked_pnl': 'FLOAT DEFAULT 0',
     },
     'alert_configs': {
         'smc_alerts_enabled': 'INTEGER DEFAULT 0',

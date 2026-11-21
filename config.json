@@ -39,5 +39,11 @@
   "auto_trade_trigger": "RETEST_READY",
   "auto_trade_fresh_seconds": 300,
   "auto_trade_smc": false,
-  "auto_trade_smc_min_score": 80
+  "auto_trade_smc_min_score": 80,
+  "exit_breakeven_at_r": 1.0,
+  "exit_partial_frac": 0.5,
+  "exit_partial_at_r": 1.0,
+  "exit_velocity_governor": true,
+  "exit_velocity_slack": 1.5,
+  "exit_mgmt_cutoff": "15:00"
 }
