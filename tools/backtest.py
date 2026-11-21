@@ -106,13 +106,13 @@ def compute_signals(state, side, candles, i, days, slots, by_day_vol) -> dict:
 # ----------------------------------------------------------------------------- sim position
 class Pos:
     __slots__ = ('side', 'entry', 'stop', 'target', 'init_stop', 'qty', 'opened_at',
-                 'be_moved', 'booked_qty', 'booked_pnl', 'score', 'conf')
+                 'be_moved', 'booked_qty', 'booked_pnl', 'score', 'conf', 'sig')
 
-    def __init__(self, side, entry, stop, target, qty, opened_at, score, conf):
+    def __init__(self, side, entry, stop, target, qty, opened_at, score, conf, sig=None):
         self.side, self.entry, self.stop, self.target = side, entry, stop, target
         self.init_stop, self.qty, self.opened_at = stop, qty, opened_at
         self.be_moved, self.booked_qty, self.booked_pnl = 0, 0, 0.0
-        self.score, self.conf = score, conf
+        self.score, self.conf, self.sig = score, conf, sig
 
 
 def _close_pnl(p: Pos, exit_price: float) -> float:
@@ -180,7 +180,7 @@ def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw
                     ex, reason = res
                     trades.append({'symbol': sym, 'side': pos.side, 'day': day, 'at': bar.at,
                                    'pnl': _close_pnl(pos, ex), 'reason': reason,
-                                   'score': pos.score, 'conf': pos.conf, 'qty': pos.qty})
+                                   'score': pos.score, 'conf': pos.conf, 'sig': pos.sig, 'qty': pos.qty})
                     pos = None
             eng.process_candle(sym, bar)
             eng.process_tick(sym, Tick(symbol=sym, price=bar.close, time=bar.at))
@@ -191,20 +191,20 @@ def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw
                     side, e, s, t, rr = (pl.get('side'), pl.get('entry'), pl.get('stop'),
                                          pl.get('target'), pl.get('rr'))
                     if side in ('LONG', 'SHORT') and e and s and t and rr is not None and rr >= MIN_RR:
-                        conf = confluence.confluence_score(
-                            compute_signals(state, side, candles, i, days, slots, by_day_vol))['score']
+                        sig = compute_signals(state, side, candles, i, days, slots, by_day_vol)
+                        conf = confluence.confluence_score(sig)['score']
                         if entry_mode == 'confluence' and conf < conf_min:
                             continue
                         rps = abs(e - s)
                         qty = int(floor(max_risk / rps)) if rps else 0
                         if qty >= 1:
-                            pos = Pos(side, e, s, t, qty, bar.at, opp.score, conf)
+                            pos = Pos(side, e, s, t, qty, bar.at, opp.score, conf, sig)
                             trades_today[day] += 1
         if pos is not None:
             last = candles[-1]
             trades.append({'symbol': sym, 'side': pos.side, 'day': last.at.date().isoformat(),
                            'at': last.at, 'pnl': _close_pnl(pos, last.close), 'reason': 'eod',
-                           'score': pos.score, 'conf': pos.conf, 'qty': pos.qty})
+                           'score': pos.score, 'conf': pos.conf, 'sig': pos.sig, 'qty': pos.qty})
     return trades
 
 
