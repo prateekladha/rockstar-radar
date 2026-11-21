@@ -201,16 +201,38 @@ def get_current_zone(price: float, zones: list[SMCZone]) -> Optional[SMCZone]:
     return None
 
 
+def zone_range(state) -> tuple[Optional[float], Optional[float]]:
+    """The active premium/discount range — the current 'swing leg'.
+
+    LuxAlgo-style: premium/discount are measured against the dealing range defined by the latest
+    **swing high and swing low** (the strong/weak structure), NOT the absolute trailing extremes —
+    which can freeze on a stale multi-day wick and make our zones disagree with the trader's chart.
+    Falls back to internal (faster) pivots, then to the trailing extremes, and guards against an
+    inverted range (swing low above swing high after a cross).
+    """
+    hi = lo = None
+    if state.swing_high and state.swing_low:
+        hi, lo = state.swing_high.level, state.swing_low.level
+    if (hi is None or lo is None or hi <= lo) and state.internal_high and state.internal_low:
+        hi, lo = state.internal_high.level, state.internal_low.level
+    if hi is None or lo is None or hi <= lo:
+        hi, lo = state.trailing_high, state.trailing_low
+    return hi, lo
+
+
 def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Optional[dict]:
     """Derive a long/short auto-trade plan for an SMC opportunity, or None if untradeable.
 
     Product rules:
       - DISCOUNT zone -> LONG off a fresh BULLISH order block; PREMIUM zone -> SHORT off a fresh
         BEARISH order block. EQUILIBRIUM is never traded.
-      - Price MUST sit inside a fresh (unmitigated) order block of that bias; the stop goes just
-        beyond the block. Target = the next strong swing, else the opposite range extreme.
+      - Entry is score-/zone-driven (the order engine applies the score>=threshold gate). The stop
+        anchors to a fresh (unmitigated) order block of the matching bias when price sits inside one
+        (tighter, structure-based); otherwise it falls back to a configurable ATR multiple from
+        entry. Target = the next strong swing, else the opposite range extreme.
       - Reports net reward:risk (after round-trip costs). The order engine still enforces the 2:1
         gate, so a thin-R:R plan is reported (rr) but won't actually be traded.
+      - `in_fresh_ob` is surfaced for the UI/telemetry; it is no longer required to produce a trade.
     """
     if zone is None or not current_price or current_price <= 0:
         return None
@@ -228,21 +250,23 @@ def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Op
         if cand.bias == want_bias and not cand.mitigated and cand.low <= current_price <= cand.high:
             ob = cand
             break
-    if ob is None:
-        return {'side': side, 'in_fresh_ob': False}
+    in_fresh_ob = ob is not None
 
     atr = state.atr or 0.0
     buf = max(atr * 0.1, current_price * 0.0005)  # small cushion beyond the block
+    # No-OB fallback: stop a configurable ATR multiple from entry (or 1% if ATR is unavailable).
+    atr_mult = float(config.get('auto_trade_smc_atr_stop_mult', 1.5) or 1.5)
+    atr_stop_dist = (atr * atr_mult) if atr > 0 else (current_price * 0.01)
     if side == 'LONG':
-        stop = ob.low - buf
+        stop = (ob.low - buf) if in_fresh_ob else (current_price - atr_stop_dist)
         target = (state.swing_high.level if (state.swing_high and state.swing_high.level > current_price)
                   else state.trailing_high)
     else:  # SHORT
-        stop = ob.high + buf
+        stop = (ob.high + buf) if in_fresh_ob else (current_price + atr_stop_dist)
         target = (state.swing_low.level if (state.swing_low and state.swing_low.level < current_price)
                   else state.trailing_low)
 
-    plan = {'side': side, 'in_fresh_ob': True}
+    plan = {'side': side, 'in_fresh_ob': in_fresh_ob}
     if stop is None or target is None:
         return plan
     risk = abs(current_price - stop)
@@ -320,7 +344,8 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     if not state.trailing_high or not state.trailing_low:
         return 0
 
-    zones = calculate_zones(state.trailing_high, state.trailing_low)
+    _zhi, _zlo = zone_range(state)
+    zones = calculate_zones(_zhi, _zlo)
     current_zone = get_current_zone(current_price, zones)
 
     if not current_zone:
@@ -563,7 +588,8 @@ def calculate_smc_score_with_breakdown(state: SMCSymbolState, current_price: flo
             'details': {'error': 'No trailing high/low available'}
         }
 
-    zones = calculate_zones(state.trailing_high, state.trailing_low)
+    _zhi, _zlo = zone_range(state)
+    zones = calculate_zones(_zhi, _zlo)
     current_zone = get_current_zone(current_price, zones)
 
     if not current_zone:
@@ -1000,7 +1026,8 @@ class SMCEngine:
         if not state.trailing_high or not state.trailing_low:
             return
 
-        zones = calculate_zones(state.trailing_high, state.trailing_low)
+        _zhi, _zlo = zone_range(state)
+        zones = calculate_zones(_zhi, _zlo)
         current_zone = get_current_zone(current_price, zones)
 
         # Track zone changes for recency scoring

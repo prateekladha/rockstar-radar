@@ -195,6 +195,12 @@ class Order(Base):
     pnl = Column(Float)                      # realised ₹ when closed
     result_r = Column(Float)                 # realised R multiple when closed
     note = Column(Text)
+    # Adaptive paper-exit state (Phase 0 exit engine). init_stop preserves the ORIGINAL stop so 1R is
+    # still measurable after the live stop is moved to breakeven. booked_* track the partial book-half.
+    init_stop = Column(Float)                # original stop captured at fill
+    be_moved = Column(Integer, default=0)    # live stop moved to breakeven?
+    booked_qty = Column(Integer, default=0)  # shares booked in the partial (runner = qty - booked_qty)
+    booked_pnl = Column(Float, default=0.0)  # realised ₹ from the partial book
 
     def risk_per_share(self):
         if self.entry and self.stop:
