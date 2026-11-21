@@ -23,6 +23,20 @@ Two pillars the trader called out as the foundation of success:
 2. **Right entry / exit / stop — not a static formula**, but a decision that weighs current confluence
    and market state and adapts.
 
+### 1.1 Operating mandate — the copilot's posture
+The copilot is built to operate the way the trader does: **a trader, not an investor.** No attachment
+to any stock or directional view; the sole objective is **booking profit** from whatever the session
+offers. Markets swing intraday — direction turns with conditions, indicators, and technical/fundamental
+flow — so the system trades **both long and short, re-entrant**, actively exploiting the oscillation
+(see the APL Apollo session, §2.8). It **squares off intraday, always.**
+
+Claude operates in **three roles simultaneously** on this project:
+1. **AI agent** — executes, automates, holds state, drives the loop.
+2. **Principal / distinguished engineer** — builds from first principles: correct, transparent,
+   testable, paper-safe.
+3. **Intraday trader** — every design choice is judged by one question: *does it maximise intraday
+   profit?* Nothing else matters.
+
 The pain points that motivated this:
 
 - **ORB:** the signal logic (RETEST_READY / CONFIRMED) is sound, but it is locked to a **static
@@ -230,6 +244,11 @@ The ambition is an agent that adapts to market conditions. The disciplined way t
 - PDH/PDL/PWH/PWL are **soft**, not primary.
 - Zones anchored to the **swing leg** (LuxAlgo-style).
 - **No drop-in LuxAlgo** — reimplement the methodology in Python (see §7).
+- **Both-direction, re-entrant, profit-maximising** (trader, not investor; §1.1). Both-direction
+  auto-trade is **approved** — SMC auto-trade may short as well as long, and re-enter per §6's caps.
+- **Active-management horizon 15:00**; the 15:15 forced square-off remains only as a safety backstop.
+- The §6 **recommended defaults are approved as starting values** — to be tuned on prod by observation,
+  not re-litigated before the build.
 
 **Recommended defaults (open for the trader's confirmation; all are config knobs):**
 - **Active-leg swing lookback (zone anchor):** anchor premium/discount to the **internal swing**
@@ -237,15 +256,17 @@ The ambition is an agent that adapts to market conditions. The disciplined way t
   track the session like LuxAlgo's *internal structure*. Knob `smc_zone_swing_size` (default 10).
 - **Volume-profile range:** **developing session profile** (09:15 → now, rebuilt each session) for
   VAH/VAL/POC + P/b/B/D shape. (Swing-anchored range deferred.)
-- **Velocity governor:** trailing velocity window **15 min**; horizon = **15:15** square-off; step the
-  runner's target to the nearest level when required pace > **1.5×** recent realised favourable pace.
-  **Plus a hard repeated-rejection exit** at **≥3 touches** of a nearer level without a break.
+- **Velocity governor:** trailing velocity window **15 min**; horizon = **15:00** (the 15:15 forced
+  square-off stays only as a safety backstop); step the runner's target to the nearest level when
+  required pace > **1.5×** recent realised favourable pace. **Plus a hard repeated-rejection exit** at
+  **≥3 touches** of a nearer level without a break.
 - **First-level priority for the half-book (nearest-in-profit within the first tier that exists):**
   (1) a **confluence cluster** (≥2 of FVG / POC / VAH-VAL / fib-pivot within ~0.15%), else
   (2) **POC / VAH / VAL**, (3) **fib pivot**, (4) **unfilled FVG edge**, (5) **opposite swing / OB edge**.
 - **ORB dynamic window:** open when the opening range completes **and** RVOL-at-time ≥ **1.2** with a
   clean first structure break; allow **new entries until 14:45** (volatility-scaled, not a hard 15:00);
-  management/exits until 15:15. Replaces the fixed 09:20–15:00 gate.
+  **active management/exits until 15:00** (the 15:15 forced square-off stays only as a safety backstop).
+  Replaces the fixed 09:20–15:00 gate.
 - **Re-entry model (per §2.8):** allow **both-direction, re-entrant** trades per symbol —
   **max 1 concurrent** position per symbol, **daily trade cap 4** per symbol (`max_trades_per_symbol`),
   all under the account risk limit. Replaces the one-entry-per-symbol/day guard.
