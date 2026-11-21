@@ -51,6 +51,7 @@ _ADDED_COLUMNS = {
         'be_moved': 'INTEGER DEFAULT 0',
         'booked_qty': 'INTEGER DEFAULT 0',
         'booked_pnl': 'FLOAT DEFAULT 0',
+        'features': 'TEXT',
     },
     'alert_configs': {
         'smc_alerts_enabled': 'INTEGER DEFAULT 0',
