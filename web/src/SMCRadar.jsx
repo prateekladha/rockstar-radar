@@ -39,15 +39,31 @@ export default function SMCRadar() {
 
   if (!d) return <div className="empty">Loading SMC Radar…</div>
 
+  if (d.market_closed) {
+    return (
+      <div className="panel">
+        <div className="panel-b">
+          <div className="empty" style={{ padding: '64px 20px' }}>
+            <div style={{ fontSize: 34, marginBottom: 12 }}>🌙</div>
+            <div className="big">{d.holiday ? `Market closed — ${d.holiday}` : 'Market closed'}</div>
+            <div style={{ maxWidth: 460, margin: '6px auto 0' }}>
+              {d.reason || 'Live SMC scanning resumes next trading session.'}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (d.offline) {
     return (
       <div className="panel">
         <div className="panel-b">
           <div className="empty" style={{ padding: '64px 20px' }}>
             <div style={{ fontSize: 34, marginBottom: 12 }}>📊</div>
-            <div className="big">SMC Radar starting...</div>
+            <div className="big">SMC Radar starting…</div>
             <div style={{ maxWidth: 460, margin: '6px auto 0' }}>
-              {d.reason || 'Loading Smart Money Concepts analysis...'}
+              {d.reason || 'Loading Smart Money Concepts analysis…'}
             </div>
           </div>
         </div>

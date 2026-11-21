@@ -272,13 +272,30 @@ def api_radar(user: User = Depends(require_user), db: Session = Depends(get_db))
     return state
 
 
+def _smc_market_closed():
+    """A clean 'market closed' payload when the market is off (weekend/holiday or outside 09:15-15:30),
+    mirroring radar_state so the SMC screen shows the same message as the ORB radar instead of a
+    misleading 'scanner starting / not running'. Returns None while the market is open."""
+    from radar.utils import holiday as _holiday, is_market_day, now_ist
+    if not is_market_day():
+        h = _holiday()
+        return {'offline': True, 'market_closed': True, 'holiday': h or '', 'opportunities': [],
+                'reason': (f'Market closed today — {h}. Live scanning resumes next trading day.' if h
+                           else 'Market closed for the weekend. Live scanning resumes next trading day.')}
+    if not ('09:15' <= now_ist().strftime('%H:%M') <= '15:30'):
+        return {'offline': True, 'market_closed': True, 'holiday': '', 'opportunities': [],
+                'reason': 'Market is closed right now. Live scanning runs 09:15–15:30 on trading days.'}
+    return None
+
+
 @app.get('/api/smc-radar')
 def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_db)):
     from . import scanners
     # Get the effective control center for this user
     cc = scanners.effective_cc(db, user)
+    closed = _smc_market_closed()
     if cc is None:
-        return {'offline': True, 'reason': 'Scanner not running', 'opportunities': []}
+        return closed or {'offline': True, 'reason': 'Scanner not running', 'opportunities': []}
 
     # Proxy the SMC state from the scanner subprocess
     try:
@@ -288,7 +305,7 @@ def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_
                 f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
             return json.loads(resp.read().decode('utf-8'))
     except (urllib.error.URLError, OSError, ValueError):
-        return {'offline': True, 'reason': 'SMC scanner starting...', 'opportunities': []}
+        return closed or {'offline': True, 'reason': 'SMC scanner starting...', 'opportunities': []}
 
 
 @app.post('/api/debug-stock')
