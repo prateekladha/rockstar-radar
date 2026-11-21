@@ -56,8 +56,9 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title='Rockstar Radar', lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site='lax', https_only=False)
 
-from .routers import (alerts, brokers, charts, family, insights,  # noqa: E402
+from .routers import (alerts, brokers, charts, family, health, insights,  # noqa: E402
                       support, symbols, trading, watchlist)
+app.include_router(health.router)   # unauthenticated liveness probe for LB / uptime checks
 app.include_router(brokers.router)
 app.include_router(alerts.router)
 app.include_router(insights.router)
