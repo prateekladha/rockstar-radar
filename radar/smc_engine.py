@@ -1070,6 +1070,13 @@ class SMCEngine:
         # block). None/not-in-OB setups are simply not auto-traded; the order engine reads this.
         state.opportunity.trade = derive_smc_trade_plan(
             state, current_zone, current_price, self.config)
+        # Decision-support confluence stack for the radar (context for the trader; never an auto gate).
+        try:
+            from . import confluence_stack
+            side = (state.opportunity.trade or {}).get('side')
+            state.opportunity.confluence = confluence_stack.compute_confluence_stack(state, side)
+        except Exception:
+            state.opportunity.confluence = None
 
     def _generate_note(self, state: SMCSymbolState, zone: Optional[SMCZone]) -> str:
         """Generate descriptive note for the opportunity"""

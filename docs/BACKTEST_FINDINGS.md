@@ -59,3 +59,91 @@ Nov 17 **+₹14,745** · Nov 18 **−₹15,819** · Nov 19 **+₹53,021**
 - **Rebuild "smart early exit" around actual structure/level rejection** (the ≥3-rejection + VP/pivot
   levels), not a velocity formula, then re-backtest.
 - Add ORB and confluence-gated entries to the harness to compare entry quality.
+
+---
+
+# UPDATE — 22-day backtest on real NSE data (Oct 21 – Nov 20 2026)
+
+Fetched ~1 month of real NSE 5-minute history for 98 symbols from Yahoo (public tickers, no token;
+`tools/fetch_yahoo.py`). **This overturns the 4-day conclusions — the small sample was luck.**
+
+### Native runs (static let-winners-run; weekly P&L in brackets)
+| config | trades | win% | TOTAL | weekly swings |
+|---|---|---|---|---|
+| score≥60 raw | 2604 | 31% | **+₹133,260** | W45 **−₹132k**, W46 +₹123k — unusable variance |
+| score≥70 raw | 1359 | 31% | **−₹28,314** | −8/−47/−117/+88/+56 k |
+| **score≥70 + confluence≥50** | 120 | 30% | **+₹1,421** | **+2/−16/−9/+16/+8 k** (tame) |
+| score≥60 + confluence≥50 | 140 | 30% | −₹991 | similar tame profile |
+
+### Findings (robust)
+1. **The raw SMC strategy is NOT a reliable edge.** Win% is ~30–31% at *every* score threshold
+   (50→90) — a higher score does **not** mean a better trade. Totals are dominated by **variance**,
+   not edge: score≥60 "+₹133k" comes with a **−₹132k single week**. Not deployable for real money.
+2. **Adaptive exits hurt — confirmed on 22 days** (score≥70: static −₹44k vs adaptive −₹125k; 72% win
+   but big loss = winners cut, losers full). The exit-defaults-OFF decision holds.
+3. **The confluence layer's real value is RISK CONTROL, not higher return.** `confluence≥50` collapses
+   the weekly swings from ±₹130k to ±₹16k and nudges the month to ~break-even (+₹1.4k). On the small
+   4-day sample confluence looked anti-predictive; on a month it clearly tames variance.
+4. So the hand-weighted confluence already helps consistency. **Learning the weights from logged
+   outcomes (Phase 2) is the lever to turn break-even into positive** — with a proper train/test split.
+
+### Bottom line
+As configured, the strategy is **break-even at best after variance control, not yet profitable.** Do
+NOT put real money on it. The path: confluence-gate for consistency → **learn the confluence weights on
+real outcomes (train/test)** → re-backtest. The harness + the month of data make that measurable now.
+
+---
+
+# FULL EXPERIMENT CAMPAIGN (22 days real data) — honest verdict
+
+Every main lever tested on the month of real NSE data:
+
+| experiment | result | verdict |
+|---|---|---|
+| Score threshold 50→90 (static) | win% flat ~30% at **every** threshold; totals are variance (+133k w/ a −132k week) | score is **not** a quality filter |
+| Adaptive exits (velocity/partial/BE) | −125k vs −44k static; 72% win but winners cut | **hurts** — defaulted off |
+| Hand-weighted confluence gate | collapses weekly swing ±130k → ±16k, ~break-even | **risk control only**, no return |
+| Learned weights (logreg, train/test) | only durable signal is `is_long` (regime-fit); SMC score **−0.17** (anti-predictive) | **no learnable edge** in these features |
+| Nearest-level targets (trader's exit) | win% 31→44% but **−164k** (small reward, full stop) | **worse** mechanically |
+
+## The honest conclusion
+**No mechanical configuration of the current SMC feature set has a durable edge over a month of real
+data.** Win rate sits at ~30% regardless of filters; P&L is dominated by **market regime and variance**,
+not signal. The SMC score is slightly anti-predictive. The trader is profitable *manually* because of
+**discretionary skill** these mechanical features don't capture — specific multi-indicator confluence
+read in real time, tight adaptive stops (not wide structure/ATR stops), and level-rejection exits.
+
+**What this rules out:** more parameter tuning on this feature set. **What the data still supports:**
+confluence gating for *consistency* (not profit). **Realistic forks (fundamentally different, need a
+decision):** (1) encode the trader's execution far more faithfully — 1-minute timing + tight stops +
+exact confluence — and re-test; (2) ship this as a **scanner/alert** tool (surface setups, trader
+executes) rather than an auto-trader; (3) richer data/features (order flow, more indicators) for ML.
+The harness + Yahoo fetcher make any of these measurable.
+
+## Follow-up: tight stops + regime filters (exhaustive) — still beta, not edge
+- **Tight ATR stops** flip per-trade expectancy positive (0.3×ATR + nearest target: +₹345k, avg
+  +₹133/trade) — BUT a train/test split exposes it as pure beta: **1st half −₹73k, 2nd half +₹419k**.
+  All the profit is the bull fortnight (W46–47); choppy/down weeks lose in every config.
+- **Intraday regime filter** (trade only strong-trend days): non-monotonic, overfit; the one "good"
+  threshold (+₹80k) concentrates entirely in W46–47 too.
+- **Market-regime trend-following** (trade with the universe's prior-3-day trend — the principled lever
+  that *should* capture the good beta): **−₹65,921, BOTH halves negative.** It destroyed the beta
+  rather than capturing it — intraday regime does not persist usefully here.
+
+## FINAL VERDICT
+Across entries (score, hand + learned confluence), exits (adaptive, nearest-level), stops (wide, tight),
+and regime filters (intraday, market trend) — **no durable, regime-independent mechanical edge exists in
+this data.** Winning configs are unpredictable long-beta. **A mechanical auto-trader on these features
+should not trade real money.**
+
+### The honest path to the real goal (auto-trade on real money)
+The edge that exists is the **trader's discretionary skill**. The way to eventually automate it is to
+**learn from the trader, not from mechanical labels**:
+1. **Scanner/decision-support** — compute the full confluence stack and show it on the radar so the
+   trader acts faster and better (plays to the real edge). *(Being built.)*
+2. **Log the trader's ACTUAL trades + reasoning + outcomes** (the `Order.features` + feature-logging
+   plumbing already exists) — this is real labelled data of *what actually works*, far richer than the
+   ~30%-win mechanical signals.
+3. **Learn a model on that human-generated data** once enough accumulates (weeks/months), then and only
+   then consider auto-trading what's been proven to work. This reaches the goal *through* the trader's
+   edge instead of pretending a mechanical edge exists where the data says it doesn't.

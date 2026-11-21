@@ -2,14 +2,15 @@
 """Backtest the SMC auto-trade strategy over cached historical candles.
 
 Replays the REAL strategy bar-by-bar — SMCEngine (zones/OBs/FVG/structure) -> score gate ->
-derive_smc_trade_plan -> the Phase-0 adaptive exit engine (breakeven@1R, partial book-half, velocity
-time-decay to 15:00) — and reports P&L per day and per week. Also runs a STATIC-exit baseline (plain
-stop/target, no exit engine) so the exit engine's impact is visible.
+derive_smc_trade_plan -> exits — and reports P&L per day/week. Supports:
+  - exit style: adaptive (exit engine) vs static (plain stop/target);
+  - entry mode: 'raw' (SMC score gate only) vs 'confluence' (also require the Phase-2 weighted
+    confluence score >= a threshold, computed from RSI + cumulative RVOL + volume profile + zone/OB/
+    structure) — i.e. does the confluence layer improve entry quality?
 
-Stdlib-only; runs with system python3. Data = the SMC history cache
-(data/smc_history_<date>_<bar>m.json): {symbol: [{at,open,high,low,close,volume}, ...]}.
+Stdlib-only. Data = SMC history cache: {symbol: [{at,open,high,low,close,volume}, ...]}.
 
-Usage:  python3 tools/backtest.py <history.json> [--min-score 80] [--capital 196000] [--risk 1.0]
+Usage:  python3 tools/backtest.py <history.json> [--min-score 80] [--capital N] [--risk PCT]
 """
 from __future__ import annotations
 
@@ -24,11 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from radar.models import Candle, Tick, Instrument            # noqa: E402
 from radar.smc_engine import SMCEngine                        # noqa: E402
-from radar import confluence, indicators                      # noqa: E402
+from radar import confluence, indicators, volume_profile, rvol_cum  # noqa: E402
 from server import exit_engine                                # noqa: E402
 
-WARMUP = 101            # candles the SMC engine needs before it emits opportunities
-MIN_RR = 2.0           # net reward:risk gate (mirrors config min_net_reward_risk)
+WARMUP = 101
+MIN_RR = 2.0
+RVOL_MIN_DAYS = 2        # limited history window -> allow rvol with few prior sessions
 
 
 # ----------------------------------------------------------------------------- data
@@ -50,16 +52,67 @@ def load_history(path: str) -> dict:
     return out
 
 
+def _day_slots(candles: list[Candle]):
+    """Per-bar day string + slot-within-day index, plus {day: [volumes...]} for cumulative RVOL."""
+    days, slots = [], []
+    by_day_vol = defaultdict(list)
+    counter = defaultdict(int)
+    for c in candles:
+        d = c.at.date().isoformat()
+        days.append(d)
+        slots.append(counter[d])
+        by_day_vol[d].append(c.volume)
+        counter[d] += 1
+    return days, slots, by_day_vol
+
+
+# ----------------------------------------------------------------------------- signals
+def compute_signals(state, side, candles, i, days, slots, by_day_vol) -> dict:
+    """Confluence inputs for a candidate entry at bar i (from engine state + data)."""
+    opp = state.opportunity
+    closes = [c.close for c in state.candles]
+    rsi = indicators.rsi(closes, 14)
+
+    # cumulative RVOL-at-time: today's cum vs prior days' cum at the same slot
+    d, slot = days[i], slots[i]
+    today_vols = by_day_vol[d][:slot + 1]
+    prior = [v for dd, v in by_day_vol.items() if dd < d]
+    rvol = rvol_cum.rvol_cumulative(today_vols, prior, idx=slot, min_days=RVOL_MIN_DAYS)
+
+    # volume profile over today's candles so far
+    day_start = i - slot
+    vp = volume_profile.volume_profile(candles[day_start:i + 1], bins=20)
+    price = candles[i].close
+    vp_support = 0.5
+    if vp:
+        if side == 'LONG':
+            vp_support = 1.0 if price <= vp['val'] else (0.6 if price <= vp['poc'] else 0.2)
+        else:
+            vp_support = 1.0 if price >= vp['vah'] else (0.6 if price >= vp['poc'] else 0.2)
+
+    trend = getattr(state, 'trend', 'NEUTRAL')
+    return {
+        'side': side,
+        'zone_strength': 0.8 if (opp and opp.zone in ('DISCOUNT', 'PREMIUM')) else 0.3,
+        'ob_strength': 0.8 if (opp and opp.trade and opp.trade.get('in_fresh_ob')) else 0.0,
+        'fvg_strength': 0.0,
+        'structure': 1 if trend == ('BULLISH' if side == 'LONG' else 'BEARISH') else 0,
+        'rvol': rvol,
+        'rsi': rsi,
+        'vp_support': vp_support,
+    }
+
+
 # ----------------------------------------------------------------------------- sim position
 class Pos:
     __slots__ = ('side', 'entry', 'stop', 'target', 'init_stop', 'qty', 'opened_at',
-                 'be_moved', 'booked_qty', 'booked_pnl', 'score', 'conf')
+                 'be_moved', 'booked_qty', 'booked_pnl', 'score', 'conf', 'sig')
 
-    def __init__(self, side, entry, stop, target, qty, opened_at, score, conf):
+    def __init__(self, side, entry, stop, target, qty, opened_at, score, conf, sig=None):
         self.side, self.entry, self.stop, self.target = side, entry, stop, target
         self.init_stop, self.qty, self.opened_at = stop, qty, opened_at
         self.be_moved, self.booked_qty, self.booked_pnl = 0, 0, 0.0
-        self.score, self.conf = score, conf
+        self.score, self.conf, self.sig = score, conf, sig
 
 
 def _close_pnl(p: Pos, exit_price: float) -> float:
@@ -69,18 +122,12 @@ def _close_pnl(p: Pos, exit_price: float) -> float:
 
 
 def _manage(p: Pos, bar: Candle, cfg: dict, use_exit_engine: bool):
-    """Step an open position against one bar. Returns (exit_price, reason) or None.
-    OHLC approximation: breakeven/partial use the bar's favourable excursion, then stop/target are
-    checked against the adverse/favourable extremes (stop assumed first if both hit)."""
-    fav_px = bar.high if p.side == 'LONG' else bar.low        # best-case excursion this bar
-    adv_px = bar.low if p.side == 'LONG' else bar.high        # worst-case excursion this bar
-    hhmm = bar.at.strftime('%H:%M')
-
+    fav_px = bar.high if p.side == 'LONG' else bar.low
+    adv_px = bar.low if p.side == 'LONG' else bar.high
     if use_exit_engine:
-        be_r = float(cfg.get('exit_breakeven_at_r', 1.0) or 0)
-        part_frac = float(cfg.get('exit_partial_frac', 0.5) or 0)
+        be_r = float(cfg.get('exit_breakeven_at_r', 0) or 0)
+        part_frac = float(cfg.get('exit_partial_frac', 0) or 0)
         part_r = float(cfg.get('exit_partial_at_r', 1.0) or 0)
-        # partial book-half at +part_r (book at the +part_r price), move stop to breakeven
         if (part_frac > 0 and part_r > 0 and not p.booked_qty
                 and exit_engine.reached_r(p.side, p.entry, p.init_stop, fav_px, part_r)):
             bq = int(floor(p.qty * part_frac))
@@ -94,14 +141,11 @@ def _manage(p: Pos, bar: Candle, cfg: dict, use_exit_engine: bool):
         if be_r > 0 and not p.be_moved and exit_engine.reached_r(p.side, p.entry, p.init_stop, fav_px, be_r):
             p.stop = p.entry
             p.be_moved = 1
-        # velocity governor (book remaining at close)
         elapsed_min = (bar.at - p.opened_at).total_seconds() / 60.0
-        if bool(cfg.get('exit_velocity_governor', True)) and exit_engine.velocity_exit(
+        if bool(cfg.get('exit_velocity_governor', False)) and exit_engine.velocity_exit(
                 p.side, p.entry, bar.close, p.target, elapsed_min, bar.at,
                 str(cfg.get('exit_mgmt_cutoff', '15:00')), float(cfg.get('exit_velocity_slack', 1.5) or 1.5)):
             return bar.close, 'velocity'
-
-    # stop / target (stop may now be breakeven)
     if p.side == 'LONG':
         if adv_px <= p.stop:
             return p.stop, 'stop'
@@ -112,98 +156,103 @@ def _manage(p: Pos, bar: Candle, cfg: dict, use_exit_engine: bool):
             return p.stop, 'stop'
         if fav_px <= p.target:
             return p.target, 'target'
-    # intraday square-off
-    if hhmm >= '15:15':
+    if bar.at.strftime('%H:%M') >= '15:15':
         return bar.close, 'squareoff'
     return None
 
 
-def _confluence_for(state, side) -> float:
-    """A demonstrative confluence score from readily-available state (RSI + zone/OB/FVG/structure)."""
-    opp = state.opportunity
-    closes = [c.close for c in state.candles]
-    rsi = indicators.rsi(closes, 14)
-    sig = {
-        'side': side,
-        'zone_strength': 0.8 if opp and opp.zone in ('DISCOUNT', 'PREMIUM') else 0.3,
-        'ob_strength': 0.8 if (opp and opp.trade and opp.trade.get('in_fresh_ob')) else 0.0,
-        'fvg_strength': 0.0,
-        'structure': 1 if (state.structures and state.structures[-1].bias ==
-                           ('BULLISH' if side == 'LONG' else 'BEARISH')) else 0,
-        'rvol': None,
-        'rsi': rsi,
-        'vp_support': 0.5,
-    }
-    return confluence.confluence_score(sig)['score']
-
-
 # ----------------------------------------------------------------------------- backtest
-def run(history: dict, cfg: dict, min_score: int, max_risk: float, use_exit_engine: bool) -> list[dict]:
-    """Returns a list of closed-trade dicts."""
+def nearest_target(side, entry, state, candles, day_start, i):
+    """The trader's actual exit: nearest structural level in profit (VP VAH/VAL/POC, swings, day
+    extremes) at least 0.1% away — a smaller, higher-probability target than the mechanical 2:1."""
+    vp = volume_profile.volume_profile(candles[day_start:i + 1], bins=20)
+    levels = []
+    if vp:
+        levels += [vp['vah'], vp['val'], vp['poc']]
+    if getattr(state, 'swing_high', None):
+        levels.append(state.swing_high.level)
+    if getattr(state, 'swing_low', None):
+        levels.append(state.swing_low.level)
+    day = candles[day_start:i + 1]
+    levels += [max(c.high for c in day), min(c.low for c in day)]
+    if side == 'LONG':
+        above = [L for L in levels if L and L > entry * 1.001]
+        return min(above) if above else None
+    below = [L for L in levels if L and L < entry * 0.999]
+    return max(below) if below else None
+
+
+def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw', conf_min=0,
+        target_mode='plan', min_rr=MIN_RR, stop_mode='plan', tight_mult=0.5, regime=False, reg_thr=0.005) -> list:
     trades = []
     max_tps = int(cfg.get('max_trades_per_symbol', 4) or 4)
     for sym, candles in history.items():
+        days, slots, by_day_vol = _day_slots(candles)
         eng = SMCEngine([Instrument(symbol=sym)], cfg)
         eng.load_historical_candles(sym, candles[:WARMUP])
         state = eng.states[sym]
-        pos = None
-        trades_today = defaultdict(int)
-        for bar in candles[WARMUP:]:
-            day = bar.at.date().isoformat()
-            # 1) manage an open position against this bar
+        pos, trades_today = None, defaultdict(int)
+        for i in range(WARMUP, len(candles)):
+            bar = candles[i]
+            day = days[i]
             if pos is not None:
                 res = _manage(pos, bar, cfg, use_exit_engine)
                 if res is not None:
-                    exit_px, reason = res
-                    trades.append({'symbol': sym, 'side': pos.side, 'day': day,
-                                   'at': bar.at, 'pnl': _close_pnl(pos, exit_px), 'reason': reason,
-                                   'score': pos.score, 'conf': pos.conf, 'qty': pos.qty})
+                    ex, reason = res
+                    trades.append({'symbol': sym, 'side': pos.side, 'day': day, 'at': bar.at,
+                                   'pnl': _close_pnl(pos, ex), 'reason': reason,
+                                   'score': pos.score, 'conf': pos.conf, 'sig': pos.sig, 'qty': pos.qty})
                     pos = None
-            # 2) advance the engine with this bar, update the opportunity
             eng.process_candle(sym, bar)
             eng.process_tick(sym, Tick(symbol=sym, price=bar.close, time=bar.at))
-            # 3) consider a new entry (flat, in window, under cap)
             if pos is None and bar.at.strftime('%H:%M') < '15:00' and trades_today[day] < max_tps:
                 opp = state.opportunity
                 if opp and (opp.score or 0) >= min_score and opp.trade:
                     pl = opp.trade
                     side, e, s, t, rr = (pl.get('side'), pl.get('entry'), pl.get('stop'),
                                          pl.get('target'), pl.get('rr'))
-                    if side in ('LONG', 'SHORT') and e and s and t and rr is not None and rr >= MIN_RR:
+                    if side in ('LONG', 'SHORT') and e and s and t:
+                        if regime:   # trade only WITH a strong intraday move (trend, not chop)
+                            d_open = candles[i - slots[i]].open
+                            dret = (bar.close - d_open) / d_open if d_open else 0
+                            if (side == 'LONG' and dret < reg_thr) or (side == 'SHORT' and dret > -reg_thr):
+                                continue
+                        atr = getattr(state, 'atr', 0) or 0
+                        if stop_mode == 'tight' and atr > 0:
+                            s = e - tight_mult * atr if side == 'LONG' else e + tight_mult * atr
+                        if target_mode == 'nearest':
+                            nt = nearest_target(side, e, state, candles, i - slots[i], i)
+                            if nt is None:
+                                continue
+                            t = nt
+                            risk = abs(e - s)
+                            rr = (abs(t - e) / risk) if risk else 0
+                        if rr is None or rr < min_rr:
+                            continue
+                        sig = compute_signals(state, side, candles, i, days, slots, by_day_vol)
+                        conf = confluence.confluence_score(sig)['score']
+                        if entry_mode == 'confluence' and conf < conf_min:
+                            continue
                         rps = abs(e - s)
                         qty = int(floor(max_risk / rps)) if rps else 0
                         if qty >= 1:
-                            pos = Pos(side, e, s, t, qty, bar.at, opp.score,
-                                      _confluence_for(state, side))
+                            pos = Pos(side, e, s, t, qty, bar.at, opp.score, conf, sig)
                             trades_today[day] += 1
-        # square off any position left open at dataset end
         if pos is not None:
             last = candles[-1]
             trades.append({'symbol': sym, 'side': pos.side, 'day': last.at.date().isoformat(),
                            'at': last.at, 'pnl': _close_pnl(pos, last.close), 'reason': 'eod',
-                           'score': pos.score, 'conf': pos.conf, 'qty': pos.qty})
+                           'score': pos.score, 'conf': pos.conf, 'sig': pos.sig, 'qty': pos.qty})
     return trades
 
 
-def report(trades: list[dict], label: str):
-    by_day = defaultdict(float)
-    by_week = defaultdict(float)
+def summary(trades):
     wins = sum(1 for t in trades if t['pnl'] > 0)
-    total = round(sum(t['pnl'] for t in trades), 2)
+    total = round(sum(t['pnl'] for t in trades), 0)
+    by_day = defaultdict(float)
     for t in trades:
         by_day[t['day']] += t['pnl']
-        iso = datetime.fromisoformat(t['day']).isocalendar()
-        by_week[f'{iso[0]}-W{iso[1]:02d}'] += t['pnl']
-    print(f'\n===== {label} =====')
-    print(f'trades={len(trades)}  wins={wins}  win%={(100*wins/len(trades) if trades else 0):.0f}  '
-          f'TOTAL P&L=₹{total:,.0f}')
-    print('-- per day --')
-    for d in sorted(by_day):
-        print(f'  {d}:  ₹{by_day[d]:>12,.0f}')
-    print('-- per week --')
-    for w in sorted(by_week):
-        print(f'  {w}:  ₹{by_week[w]:>12,.0f}')
-    return total
+    return len(trades), wins, total, dict(by_day)
 
 
 def main():
@@ -212,24 +261,25 @@ def main():
         print('usage: backtest.py <history.json> [--min-score N] [--capital N] [--risk PCT]')
         sys.exit(1)
     path = args[0]
-    def opt(name, default):
-        return float(args[args.index(name) + 1]) if name in args else default
+    def opt(n, d):
+        return float(args[args.index(n) + 1]) if n in args else d
     min_score = int(opt('--min-score', 80))
-    capital = opt('--capital', 196000)
-    risk_pct = opt('--risk', 1.0)
-    max_risk = capital * risk_pct / 100.0
+    capital, risk = opt('--capital', 196000), opt('--risk', 1.0)
+    max_risk = capital * risk / 100.0
     cfg = json.loads(open(os.path.join(os.path.dirname(__file__), '..', 'config.json')).read())
-
     history = load_history(path)
-    print(f'Loaded {len(history)} symbols with >{WARMUP} candles from {path}')
-    print(f'min_score={min_score}  capital=₹{capital:,.0f}  risk={risk_pct}%  '
-          f'(₹{max_risk:,.0f}/trade)  MIN_RR={MIN_RR}')
+    print(f'Loaded {len(history)} symbols from {path}  |  score>={min_score}  ₹{max_risk:.0f}/trade\n')
 
-    adaptive = run(history, cfg, min_score, max_risk, use_exit_engine=True)
-    static = run(history, cfg, min_score, max_risk, use_exit_engine=False)
-    a = report(adaptive, 'ADAPTIVE EXITS (breakeven + partial + velocity)')
-    s = report(static, 'STATIC EXITS (plain stop/target) — baseline')
-    print(f'\n>>> exit engine impact: ₹{a - s:,.0f}  (adaptive ₹{a:,.0f} vs static ₹{s:,.0f})')
+    experiments = [
+        ('STATIC raw entry',              dict(use_exit_engine=False, entry_mode='raw')),
+        ('STATIC + confluence>=60 entry', dict(use_exit_engine=False, entry_mode='confluence', conf_min=60)),
+        ('STATIC + confluence>=70 entry', dict(use_exit_engine=False, entry_mode='confluence', conf_min=70)),
+        ('ADAPTIVE raw entry',            dict(use_exit_engine=True, entry_mode='raw')),
+    ]
+    print(f'{"experiment":34} {"trades":>7} {"win%":>5} {"P&L":>12}')
+    for label, kw in experiments:
+        n, w, tot, _ = summary(run(history, cfg, min_score, max_risk, **kw))
+        print(f'{label:34} {n:>7} {(100*w//max(n,1)):>4}% ₹{tot:>11,.0f}')
 
 
 if __name__ == '__main__':
