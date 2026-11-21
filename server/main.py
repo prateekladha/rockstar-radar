@@ -69,6 +69,13 @@ app.include_router(symbols.router)
 app.include_router(support.router)
 
 
+# ----------------------------------------------------------------- health
+@app.get('/api/health')
+def api_health():
+    """Uptime / load-balancer probe — no auth, static 200 payload."""
+    return {'status': 'ok'}
+
+
 # ----------------------------------------------------------------- auth
 @app.get('/auth/config')
 def auth_config():
