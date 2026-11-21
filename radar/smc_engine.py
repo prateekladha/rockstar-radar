@@ -201,6 +201,25 @@ def get_current_zone(price: float, zones: list[SMCZone]) -> Optional[SMCZone]:
     return None
 
 
+def zone_range(state) -> tuple[Optional[float], Optional[float]]:
+    """The active premium/discount range — the current 'swing leg'.
+
+    LuxAlgo-style: premium/discount are measured against the dealing range defined by the latest
+    **swing high and swing low** (the strong/weak structure), NOT the absolute trailing extremes —
+    which can freeze on a stale multi-day wick and make our zones disagree with the trader's chart.
+    Falls back to internal (faster) pivots, then to the trailing extremes, and guards against an
+    inverted range (swing low above swing high after a cross).
+    """
+    hi = lo = None
+    if state.swing_high and state.swing_low:
+        hi, lo = state.swing_high.level, state.swing_low.level
+    if (hi is None or lo is None or hi <= lo) and state.internal_high and state.internal_low:
+        hi, lo = state.internal_high.level, state.internal_low.level
+    if hi is None or lo is None or hi <= lo:
+        hi, lo = state.trailing_high, state.trailing_low
+    return hi, lo
+
+
 def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Optional[dict]:
     """Derive a long/short auto-trade plan for an SMC opportunity, or None if untradeable.
 
@@ -325,7 +344,8 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     if not state.trailing_high or not state.trailing_low:
         return 0
 
-    zones = calculate_zones(state.trailing_high, state.trailing_low)
+    _zhi, _zlo = zone_range(state)
+    zones = calculate_zones(_zhi, _zlo)
     current_zone = get_current_zone(current_price, zones)
 
     if not current_zone:
@@ -568,7 +588,8 @@ def calculate_smc_score_with_breakdown(state: SMCSymbolState, current_price: flo
             'details': {'error': 'No trailing high/low available'}
         }
 
-    zones = calculate_zones(state.trailing_high, state.trailing_low)
+    _zhi, _zlo = zone_range(state)
+    zones = calculate_zones(_zhi, _zlo)
     current_zone = get_current_zone(current_price, zones)
 
     if not current_zone:
@@ -1005,7 +1026,8 @@ class SMCEngine:
         if not state.trailing_high or not state.trailing_low:
             return
 
-        zones = calculate_zones(state.trailing_high, state.trailing_low)
+        _zhi, _zlo = zone_range(state)
+        zones = calculate_zones(_zhi, _zlo)
         current_zone = get_current_zone(current_price, zones)
 
         # Track zone changes for recency scoring
