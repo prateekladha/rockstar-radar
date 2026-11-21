@@ -162,17 +162,20 @@ def _price_map(db: Session, user: User) -> dict:
     return out
 
 
-def _entered_today(db: Session, user_id: int, sym: str, today: str) -> bool:
-    """True if an auto trade for this symbol was already opened today (one entry per symbol/day).
-    Shared across BOTH auto strategies (ORB 'auto' + SMC 'auto_smc') so they can't double-stack
-    the same stock on the same day."""
+def _trades_today(db: Session, user_id: int, sym: str, today: str) -> int:
+    """Count of auto trades for this symbol ENTERED today (any direction, both auto sources).
+
+    Replaces the old one-per-symbol/day guard. The re-entry model allows multiple, BOTH-DIRECTION
+    trades per symbol across the day up to `max_trades_per_symbol` (the trader scalps the swing —
+    see docs §2.8). Concurrency is capped separately to 1 by the live held-position set at each call
+    site, so this only limits total re-entries, not simultaneous stacking."""
     from datetime import timezone as _tz
     from radar.utils import IST
-    prior = (db.query(Order).filter(Order.user_id == user_id, Order.symbol == sym,
-                                     Order.source.in_(('auto', 'auto_smc')))
-             .order_by(Order.created_at.desc()).first())
-    return bool(prior and prior.created_at and
-                prior.created_at.replace(tzinfo=_tz.utc).astimezone(IST).date().isoformat() == today)
+    rows = (db.query(Order).filter(Order.user_id == user_id, Order.symbol == sym,
+                                   Order.source.in_(('auto', 'auto_smc')))
+            .order_by(Order.created_at.desc()).limit(25).all())
+    return sum(1 for o in rows if o.created_at and
+               o.created_at.replace(tzinfo=_tz.utc).astimezone(IST).date().isoformat() == today)
 
 
 def _auto_trade(db: Session) -> int:
@@ -268,7 +271,7 @@ def _auto_trade(db: Session) -> int:
                 continue
             if sym in pending_auto:
                 continue
-            if not u.sim_enabled and _entered_today(db, u.id, sym, today):
+            if not u.sim_enabled and _trades_today(db, u.id, sym, today) >= int(cfg.get('max_trades_per_symbol', 4) or 4):
                 continue
             rps = abs(entry - stop)
             qty = int(floor(max_risk / rps)) if (max_risk and rps) else 0
@@ -351,7 +354,7 @@ def _auto_trade_smc(db: Session) -> int:
             sym = watchpins.bare(o.get('symbol') or '')
             if not sym or sym in held:
                 continue
-            if not u.sim_enabled and _entered_today(db, u.id, sym, today):
+            if not u.sim_enabled and _trades_today(db, u.id, sym, today) >= int(cfg.get('max_trades_per_symbol', 4) or 4):
                 continue
             rps = abs(entry - stop)
             qty = int(floor(max_risk / rps)) if rps else 0

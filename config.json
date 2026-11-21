@@ -45,5 +45,6 @@
   "exit_partial_at_r": 1.0,
   "exit_velocity_governor": true,
   "exit_velocity_slack": 1.5,
-  "exit_mgmt_cutoff": "15:00"
+  "exit_mgmt_cutoff": "15:00",
+  "max_trades_per_symbol": 4
 }
