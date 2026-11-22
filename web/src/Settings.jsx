@@ -11,11 +11,14 @@ const human = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 export default function Settings() {
   const [cfg, setCfg] = useState(null)
   const [uni, setUni] = useState(null)
+  const [prereq, setPrereq] = useState(null)
   const [msg, setMsg] = useState('')
+  const [prereqMsg, setPrereqMsg] = useState('')
 
   useEffect(() => {
     api('/api/settings').then(setCfg).catch(e => setMsg(e.message))
     api('/api/universe').then(setUni).catch(() => {})
+    api('/api/prerequisites').then(setPrereq).catch(e => console.error('Failed to load prerequisites:', e))
   }, [])
   const saveUni = async (idx) => {
     const r = await api('/api/universe', { method: 'PUT', body: { universe_index: idx } })
@@ -88,6 +91,82 @@ export default function Settings() {
         <div style={{ marginTop: 16 }}><button className="btn primary" disabled={anyErr} onClick={save}>Save settings</button></div>
       </div>
     </div>
+
+    {prereq && (
+      <div className="panel" style={{ marginTop: 16 }}>
+        <div className="panel-h">
+          <h2>Pre-requisite Checks</h2>
+          <span className="hint">Mandatory checks before strategy evaluation (applies to both ORB and SMC)</span>
+        </div>
+        <div className="panel-b">
+          {prereqMsg && <div className="banner ok">{prereqMsg}</div>}
+          <p className="note" style={{ marginBottom: 16 }}>
+            All checks are mandatory (AND logic). If any check fails, the stock will not be evaluated by the selected strategy and will not appear in opportunities.
+          </p>
+
+          <div className="settings-grid">
+            {/* RVOL Check */}
+            <div className="field">
+              <label>Enable RVOL Check</label>
+              <button className={'toggle' + (prereq.rvol_enabled ? ' on' : '')} role="switch" aria-checked={!!prereq.rvol_enabled}
+                onClick={() => setPrereq({ ...prereq, rvol_enabled: !prereq.rvol_enabled })}>
+                <span className="knob" />{prereq.rvol_enabled ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            {prereq.rvol_enabled && (
+              <div className="field">
+                <label>Minimum RVOL</label>
+                <input type="number" step="0.1" min="0" value={prereq.min_rvol ?? 1.0}
+                  onChange={ev => setPrereq({ ...prereq, min_rvol: ev.target.value })} />
+                <p className="note" style={{ marginTop: 8 }}>
+                  Stocks with RVOL below this threshold will be rejected. Default: 1.0 (100% of normal volume)
+                </p>
+              </div>
+            )}
+
+            {/* Future: Liquidity Check (disabled for now) */}
+            {false && (
+              <>
+                <div className="field">
+                  <label>Min Liquidity (₹Cr)</label>
+                  <input type="number" step="1" min="0" value={prereq.min_liquidity_cr ?? ''}
+                    placeholder="Optional"
+                    onChange={ev => setPrereq({ ...prereq, min_liquidity_cr: ev.target.value || null })} />
+                </div>
+
+                <div className="field">
+                  <label>Min Price (₹)</label>
+                  <input type="number" step="1" min="0" value={prereq.min_price ?? ''}
+                    placeholder="Optional"
+                    onChange={ev => setPrereq({ ...prereq, min_price: ev.target.value || null })} />
+                </div>
+
+                <div className="field">
+                  <label>Max Price (₹)</label>
+                  <input type="number" step="1" min="0" value={prereq.max_price ?? ''}
+                    placeholder="Optional"
+                    onChange={ev => setPrereq({ ...prereq, max_price: ev.target.value || null })} />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <button className="btn primary" onClick={async () => {
+              try {
+                const result = await api('/api/prerequisites', { method: 'PUT', body: prereq })
+                setPrereq(result)
+                setPrereqMsg('Pre-requisite settings saved')
+                setTimeout(() => setPrereqMsg(''), 3000)
+              } catch (e) {
+                setPrereqMsg('Error: ' + e.message)
+              }
+            }}>Save prerequisite settings</button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   )
 }

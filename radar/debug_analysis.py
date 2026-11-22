@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 from .fyers import FyersAdapter
 from .models import Candle, Instrument, Tick
@@ -10,6 +11,7 @@ from .selecting import normalize_morning_symbol
 from .service import baseline_history, signal_bar_minutes
 from .smc_engine import SMCEngine, calculate_smc_score_with_breakdown
 from .utils import ROOT, market_dt, now_ist
+from .prerequisites import PrerequisiteChecker, PrerequisiteConfig
 
 
 def debug_cache_path(symbol: str, day: date, bar_minutes: int = 5) -> Path:
@@ -22,7 +24,7 @@ def debug_cache_path(symbol: str, day: date, bar_minutes: int = 5) -> Path:
 
 
 def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
-                         force: bool = False) -> dict:
+                         force: bool = False, prereq_config: Optional[PrerequisiteConfig] = None) -> dict:
     """Fetch historical data and run SMC analysis for a single stock.
 
     Args:
@@ -69,7 +71,7 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
                 for c in cached_data['candles']
             ]
 
-            return _run_smc_analysis(symbol, candles, config, from_cache=True)
+            return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=True)
 
         except Exception as e:
             print(f'[Debug] Cache load failed: {type(e).__name__}: {e}')
@@ -112,7 +114,7 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
         cache_path.write_text(json.dumps(cache_data, indent=2), encoding='utf-8')
         print(f'[Debug] Cached data to: {cache_path.name}')
 
-        return _run_smc_analysis(symbol, candles, config, from_cache=False)
+        return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=False)
 
     except Exception as e:
         return {
@@ -123,6 +125,7 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
 
 
 def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
+                     prereq_config: Optional[PrerequisiteConfig] = None,
                      from_cache: bool = False) -> dict:
     """Run SMC engine analysis on historical candles."""
     if len(candles) < 101:
@@ -164,6 +167,45 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
             'error': 'Analysis failed',
             'message': 'Could not analyze symbol'
         }
+
+    # PRE-REQUISITE CHECKS (run before strategy evaluation)
+    prereq_result = None
+    if prereq_config:
+        # Calculate RVOL for prerequisite check
+        # Use same logic as ORB radar: compare current bar volume to historical baseline
+        from .engine import same_time_baseline
+        today = now_ist().date()
+
+        # Build baseline from historical data
+        baseline_dict = same_time_baseline(candles, today, lookback_sessions=20)
+        current_time_key = candles[-1].at.strftime('%H:%M')
+        baseline_volume = baseline_dict.get(current_time_key)
+
+        # Calculate RVOL
+        rvol = None
+        if baseline_volume and baseline_volume > 0:
+            rvol = candles[-1].volume / baseline_volume
+
+        # Run prerequisite check
+        checker = PrerequisiteChecker(prereq_config)
+        prereq_result = checker.check(symbol, {
+            'rvol': rvol,
+            'price': current_price,
+            'liquidity_cr': getattr(state.instrument, 'median_turnover_cr', None) if hasattr(state, 'instrument') else None
+        })
+
+        # If prerequisites fail, return early with error
+        if not prereq_result.passed:
+            return {
+                'success': False,
+                'error': 'Pre-requisite checks failed',
+                'message': prereq_result.error_message,
+                'failed_checks': prereq_result.failed_checks,
+                'prereq_details': prereq_result.details,
+                'symbol': symbol,
+                'current_price': current_price,
+                'rvol': rvol
+            }
 
     # Build response
     opportunity = state.opportunity

@@ -260,6 +260,92 @@ async def api_patch_settings(request: Request, user: User = Depends(require_user
     return api_get_settings(user)
 
 
+@app.get('/api/prerequisites')
+def api_get_prerequisites(user: User = Depends(require_user)):
+    """Get user's prerequisite configuration for strategy evaluation."""
+    import json
+    if not user.settings:
+        # Return defaults
+        return {
+            'min_rvol': 1.0,
+            'rvol_enabled': True,
+            'min_liquidity_cr': None,
+            'min_price': None,
+            'max_price': None,
+            'allowed_sectors': None,
+            'blocked_symbols': None
+        }
+
+    return {
+        'min_rvol': user.settings.prereq_min_rvol or 1.0,
+        'rvol_enabled': bool(user.settings.prereq_rvol_enabled),
+        'min_liquidity_cr': user.settings.prereq_min_liquidity_cr,
+        'min_price': user.settings.prereq_min_price,
+        'max_price': user.settings.prereq_max_price,
+        'allowed_sectors': json.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
+        'blocked_symbols': json.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
+    }
+
+
+@app.put('/api/prerequisites')
+async def api_update_prerequisites(request: Request, user: User = Depends(require_user),
+                                   db: Session = Depends(get_db)):
+    """Update user's prerequisite configuration."""
+    import json
+    data = await request.json()
+
+    # Validation
+    if 'min_rvol' in data:
+        try:
+            min_rvol = float(data['min_rvol'])
+            if min_rvol < 0:
+                return JSONResponse({'error': 'min_rvol must be >= 0'}, status_code=400)
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'min_rvol must be a number'}, status_code=400)
+
+    if 'min_liquidity_cr' in data and data['min_liquidity_cr'] is not None:
+        try:
+            float(data['min_liquidity_cr'])
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'min_liquidity_cr must be a number'}, status_code=400)
+
+    if 'min_price' in data and data['min_price'] is not None:
+        try:
+            float(data['min_price'])
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'min_price must be a number'}, status_code=400)
+
+    if 'max_price' in data and data['max_price'] is not None:
+        try:
+            float(data['max_price'])
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'max_price must be a number'}, status_code=400)
+
+    # Get or create settings
+    st = user.settings or Settings(user_id=user.id, data={})
+
+    # Update fields
+    if 'min_rvol' in data:
+        st.prereq_min_rvol = float(data['min_rvol'])
+    if 'rvol_enabled' in data:
+        st.prereq_rvol_enabled = 1 if data['rvol_enabled'] else 0
+    if 'min_liquidity_cr' in data:
+        st.prereq_min_liquidity_cr = float(data['min_liquidity_cr']) if data['min_liquidity_cr'] is not None else None
+    if 'min_price' in data:
+        st.prereq_min_price = float(data['min_price']) if data['min_price'] is not None else None
+    if 'max_price' in data:
+        st.prereq_max_price = float(data['max_price']) if data['max_price'] is not None else None
+    if 'allowed_sectors' in data:
+        st.prereq_allowed_sectors = json.dumps(data['allowed_sectors']) if data['allowed_sectors'] else None
+    if 'blocked_symbols' in data:
+        st.prereq_blocked_symbols = json.dumps(data['blocked_symbols']) if data['blocked_symbols'] else None
+
+    db.add(st)
+    db.commit()
+
+    return api_get_prerequisites(user)
+
+
 @app.get('/api/radar')
 def api_radar(user: User = Depends(require_user), db: Session = Depends(get_db)):
     from . import journaling, scanners
@@ -347,9 +433,25 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
             # Create adapter with user's credentials (reads from env vars we just set)
             adapter = FyersAdapter(load_config())
 
+            # Load user's prerequisite configuration
+            from radar.prerequisites import PrerequisiteConfig
+            import json as json_lib
+
+            prereq_config = None
+            if user.settings:
+                prereq_config = PrerequisiteConfig(
+                    min_rvol=user.settings.prereq_min_rvol or 1.0,
+                    rvol_enabled=bool(user.settings.prereq_rvol_enabled),
+                    min_liquidity_cr=user.settings.prereq_min_liquidity_cr,
+                    min_price=user.settings.prereq_min_price,
+                    max_price=user.settings.prereq_max_price,
+                    allowed_sectors=json_lib.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
+                    blocked_symbols=json_lib.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
+                )
+
             # Run analysis
             force = body.get('force', False)
-            result = analyze_single_stock(adapter, symbol_input, load_config(), force=force)
+            result = analyze_single_stock(adapter, symbol_input, load_config(), force=force, prereq_config=prereq_config)
 
             return result
         finally:
