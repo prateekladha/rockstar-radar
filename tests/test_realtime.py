@@ -10,7 +10,7 @@ from radar.utils import load_config, market_dt
 DAY = date(2026, 11, 5)
 SYM = 'NSE:BHARTIARTL-EQ'
 # Written against 5-minute bars; see test_one_minute_candles.py for the 1-minute path.
-CFG = dict(load_config(), use_one_minute_candles=False)
+CFG = dict(load_config(), use_one_minute_candles=False, rvol_mode='per_bar')
 
 
 def c(hhmm, o, h, l, cl, v):

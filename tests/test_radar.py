@@ -15,7 +15,7 @@ from radar.demo import demo_engine
 # These cases are written against 5-minute bars, so they pin that setting explicitly and stand as
 # the regression guard that `use_one_minute_candles: false` behaves exactly as it always has.
 # The 1-minute path has its own suite in test_one_minute_candles.py.
-CFG = dict(load_config(), use_one_minute_candles=False)
+CFG = dict(load_config(), use_one_minute_candles=False, rvol_mode='per_bar')
 DAY = date(2026, 11, 4)
 SYM = 'NSE:TEST-EQ'
 

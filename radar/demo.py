@@ -25,9 +25,10 @@ def demo_engine(config: dict) -> RadarEngine:
     # people actually rehearse against, does follow the flag.
     engine = RadarEngine(instruments, dict(config, use_one_minute_candles=False),
                          day, mode='SIMULATION')
+    from .rvol import synthetic_baseline
     for s in symbols:
-        engine.set_baseline(s, {'09:15': 50000, '09:20': 50000,
-                                '09:25': 50000, '09:30': 50000})
+        engine.set_baseline(s, synthetic_baseline({'09:15': 50000, '09:20': 50000,
+                                                    '09:25': 50000, '09:30': 50000}))
     engine.update_health('SIMULATED: fabricated candles, NO LIVE FYERS CONNECTION')
     t15 = market_dt(day, '09:15')
     t20 = market_dt(day, '09:20')

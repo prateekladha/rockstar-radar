@@ -9,7 +9,8 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from .aggregator import LiveCandleBuilder
-from .engine import RadarEngine, same_time_baseline
+from .engine import RadarEngine
+from .rvol import RvolConfig, baseline_has_data, build_baseline, is_current_baseline
 from .smc_engine import SMCEngine
 from .health import write_health
 from .fyers import (ApiAuthError, ApiError, ApiInputError, ApiPermissionError,
@@ -384,9 +385,10 @@ def load_existing_baselines(engine: RadarEngine, today: date) -> int:
     except (ValueError, OSError):
         return 0
     for symbol in engine.states:
-        if isinstance(cached.get(symbol), dict) and cached[symbol]:
+        if is_current_baseline(cached.get(symbol)):
             engine.set_baseline(symbol, cached[symbol])
-    return sum(bool(engine.baselines.get(s)) for s in engine.states)
+    return sum(baseline_has_data(engine.baselines.get(s), engine.rvol_cfg.mode)
+               for s in engine.states)
 
 
 def baseline_history(adapter: FyersAdapter, symbol: str, resolution: str,
@@ -423,6 +425,7 @@ def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
     'X/N symbols ready' before its dashboard is up."""
     bar_minutes = signal_bar_minutes(config)
     resolution = str(bar_minutes)
+    rcfg = RvolConfig.from_config(config)
     path = cache_path(day, bar_minutes)
     stored = json.loads(path.read_text(encoding='utf-8')) if path.exists() and not force else {}
     from_dt = market_dt(day - timedelta(days=40), '00:00')
@@ -433,15 +436,17 @@ def build_baselines(adapter: FyersAdapter, symbols: list[str], day: date,
     for i, symbol in enumerate(symbols, 1):
         if on_progress and (i % 5 == 0 or i == total):
             on_progress(i, total)
-        if symbol in stored and stored[symbol]:
+        # Reuse only current-schema cache entries; an older format is rebuilt (RVOL now needs the
+        # richer {'bar','cum'} baseline, not the old flat per-slot dict).
+        if symbol in stored and is_current_baseline(stored.get(symbol)):
             continue
         try:
             candles = baseline_history(adapter, symbol, resolution, from_dt, to_dt)
-            baseline = same_time_baseline(candles, day, config['baseline_sessions'])
+            baseline = build_baseline(candles, day, rcfg.length)
             stored[symbol] = baseline
-            if not baseline:
-                print(f'  Warning: {symbol} lacks >=10 prior sessions of '
-                      f'{bar_minutes}m volume history')
+            if not baseline_has_data(baseline, rcfg.mode):
+                print(f'  Warning: {symbol} lacks enough prior {bar_minutes}m sessions '
+                      f'for {rcfg.mode} RVOL (have {baseline.get("sessions", 0)})')
         except (ApiRateLimitError, ApiAuthError, ApiPermissionError, ApiProviderError):
             # A provider block must end ALL history preparation, not become
             # 100 more identical requests and 100 empty baselines.
@@ -515,13 +520,13 @@ def start_live(config: dict, selection_path: Path, port: int):
     baselines = build_baselines(adapter, list(engine.states), today, config, on_progress=_warm)
     good = 0
     for symbol, values in baselines.items():
-        if values:
+        if baseline_has_data(values, engine.rvol_cfg.mode):
             engine.set_baseline(symbol, values)
             good += 1
     if good < len(info) * 0.8:
-        raise ValueError(f'Only {good}/{len(info)} same-time baselines ready. '
+        raise ValueError(f'Only {good}/{len(info)} RVOL baselines ready. '
                          'Insufficient history; refusing unreliable scans.')
-    print(f'{good}/{len(info)} same-time volume baselines ready.')
+    print(f'{good}/{len(info)} {engine.rvol_cfg.mode} RVOL baselines ready.')
 
     # Load historical candles for SMC analysis (swing detection needs 100+ historical bars)
     print('Loading SMC historical context...')

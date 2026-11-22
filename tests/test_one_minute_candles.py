@@ -23,8 +23,8 @@ from radar.utils import IST, bar_start, load_config, market_dt, signal_bar_minut
 DAY = date(2026, 11, 4)
 SYM = 'NSE:TEST-EQ'
 
-ONE_MIN = dict(load_config(), use_one_minute_candles=True)
-FIVE_MIN = dict(load_config(), use_one_minute_candles=False)
+ONE_MIN = dict(load_config(), use_one_minute_candles=True, rvol_mode='per_bar')
+FIVE_MIN = dict(load_config(), use_one_minute_candles=False, rvol_mode='per_bar')
 
 # 09:15-09:19 inclusive: five 1-minute bars spanning the 5-minute opening range. The high (1004)
 # and low (998) sit on different bars, so a merged range can only be right if all five are used.

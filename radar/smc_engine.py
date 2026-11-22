@@ -1073,8 +1073,10 @@ class SMCEngine:
         # Decision-support confluence stack for the radar (context for the trader; never an auto gate).
         try:
             from . import confluence_stack
+            from .rvol import RvolConfig
             side = (state.opportunity.trade or {}).get('side')
-            state.opportunity.confluence = confluence_stack.compute_confluence_stack(state, side)
+            state.opportunity.confluence = confluence_stack.compute_confluence_stack(
+                state, side, rvol_cfg=RvolConfig.from_config(self.config))
         except Exception:
             state.opportunity.confluence = None
 

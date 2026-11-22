@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 from .models import Candle, Instrument, Signal, SymbolState, Tick
 from .risk import position_size
+from .rvol import RvolConfig, rvol_runtime, rvol_thresholds
 from .utils import IST, bar_start, market_dt, now_ist, signal_bar_minutes
 
 
@@ -55,7 +56,13 @@ class RadarEngine:
         self.or_bar_count = max(1, self.or_minutes // self.bar_minutes)
         self.lock = threading.RLock()
         self.states = {info.symbol: SymbolState(info) for info in instruments}
-        self.baselines: dict[str, dict[str, float]] = {}
+        # ONE RVOL metric for the whole product, driven by the user's settings (radar.rvol).
+        # `baselines` now holds the richer {'bar':…, 'cum':…} dict build_baseline() produces, so
+        # either mode can be evaluated per bar. Gate thresholds are per-mode so switching the metric
+        # keeps the WATCH/READY/confirm gates calibrated to whatever scale is active.
+        self.rvol_cfg = RvolConfig.from_config(config)
+        self.rvol_th = rvol_thresholds(config, self.rvol_cfg.mode)
+        self.baselines: dict[str, dict] = {}
         self.events: list[Signal] = []
         self.on_signal = on_signal
         self.feed_health = 'DISCONNECTED' if mode == 'LIVE' else 'SIMULATED'
@@ -163,7 +170,7 @@ class RadarEngine:
                     'RECOVERING',
                     f'Waiting for recent completed {self.bar_minutes}-minute candle after restart', 0)
                 return
-            st.rvol = self._rvol(t.symbol, last)
+            st.rvol = self._rvol(st, last)
             st.vwap = t.avg_trade_price or self._candle_vwap(st)
             if st.rvol is None or st.vwap is None:
                 st.state, st.reason = 'WAIT_VOLUME', 'Insufficient baseline / VWAP data'
@@ -175,7 +182,7 @@ class RadarEngine:
             # Only candidates approaching/outside OR boundary by a controlled amount.
             options = [x for x in options if -self.config['max_extension_pct'] <= x[1] <=
                        self.config['near_boundary_pct'] and x[3]]
-            if not options or st.rvol < self.config['min_watch_rvol']:
+            if not options or st.rvol < self.rvol_th['watch']:
                 st.state, st.reason, st.score = 'NONE', 'No active qualifying approach', 0
                 return
             side, distance, level, _ = min(options, key=lambda x: abs(x[1]))
@@ -184,7 +191,7 @@ class RadarEngine:
             if distance < 0:
                 next_state = 'BREAKOUT_PENDING'
                 st.reason = f'Intrabar breach; wait for complete {self.bar_minutes}-minute close'
-            elif distance <= self.config['ready_boundary_pct'] and st.rvol >= 1.25:
+            elif distance <= self.config['ready_boundary_pct'] and st.rvol >= self.rvol_th['ready']:
                 next_state = 'READY'
                 st.reason = 'Near OR boundary; VWAP aligned and volume improving'
             else:
@@ -194,11 +201,23 @@ class RadarEngine:
                 st.state = next_state
                 self._event(st, next_state, t.time, st.reason, level)
 
-    def _rvol(self, symbol: str, candle: Candle):
-        baseline = self.baselines.get(symbol, {}).get(candle.at.strftime('%H:%M'))
-        if not baseline or baseline <= 0:
+    def _rvol(self, st: SymbolState, candle: Candle):
+        """RVOL for this bar in the user's configured mode (radar.rvol — one metric product-wide).
+
+        per_bar uses this bar's volume vs the same-slot prior-session median; cumulative uses
+        today's cumulative in-session volume up to this bar vs the prior-session cumulative mean at
+        the same slot. today_cum is summed from today's completed bars (plus this candle).
+        """
+        baseline = self.baselines.get(st.info.symbol)
+        if not baseline:
             return None
-        return candle.volume / baseline
+        today = {c.at: c for c in st.completed.values()
+                 if c.at.date() == candle.at.date() and c.at.hour in range(9, 16)
+                 and c.at <= candle.at}
+        today[candle.at] = candle
+        today_cum = sum((c.volume or 0.0) for c in today.values())
+        return rvol_runtime(self.rvol_cfg, baseline, slot=candle.at.strftime('%H:%M'),
+                            bar_volume=(candle.volume or 0.0), today_cum=today_cum)
 
     @staticmethod
     def _candle_vwap(st: SymbolState):
@@ -277,8 +296,8 @@ class RadarEngine:
                 continue
             if extension > self.config['max_extension_pct']:
                 return side, level, extension, False, 'Breakout closed too far beyond OR boundary (extended)'
-            if not st.rvol or st.rvol < self.config['min_confirm_rvol']:
-                return side, level, extension, False, 'Breakout closed with insufficient same-time historical RVOL'
+            if not st.rvol or st.rvol < self.rvol_th['confirm']:
+                return side, level, extension, False, 'Breakout closed with insufficient historical RVOL'
             if candle.close * candle.volume / 1e7 < self._min_bar_turnover_cr():
                 return (side, level, extension, False,
                         f'Insufficient {self.bar_minutes}-minute traded value')
@@ -327,7 +346,7 @@ class RadarEngine:
 
     def _reconcile(self, st: SymbolState, candle: Candle, ts: int, prev, wall: datetime):
         """Authoritative candle replacing a provisional bar: validate or retract."""
-        st.rvol = self._rvol(st.info.symbol, candle)
+        st.rvol = self._rvol(st, candle)
         st.vwap = self._candle_vwap(st)
         if ts == st.confirm_bar_ts and st.confirm_provisional:
             side, level, extension, ok, reason = self._confirm_test(st, prev, candle)
@@ -423,7 +442,7 @@ class RadarEngine:
                         candle.at < market_dt(self.session, self.config['new_signals_stop']) +
                         timedelta(minutes=self.config['retest_expiry_minutes'])):
                     return
-            st.rvol = self._rvol(symbol, candle)
+            st.rvol = self._rvol(st, candle)
             st.vwap = self._candle_vwap(st)
             if st.confirmed_at:
                 if self.mode == 'LIVE' and (st.last_tick is None or
