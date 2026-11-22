@@ -245,11 +245,12 @@ def sweep(db: Session) -> int:
     total = 0
     for user in users:
         try:
-            cc = scanners.effective_cc(db, user)
-            if cc is None:
-                continue
-            state = cc.live_state()
-            if state.get('offline'):
+            # Health-aware feed selection (mirrors the radar display): the user's OWN scanner if its
+            # websocket is actually live, else the household's shared feed. This is the fix for a
+            # degraded own-feed (stuck-reconnecting WS with an ok=true health file) silently killing
+            # the user's alerts — alerts now ride the household's healthy feed, just like the display.
+            cc, state = scanners.effective_feed(db, user)
+            if cc is None or state is None or state.get('offline'):
                 continue
 
             # Fetch SMC opportunities if SMC alerts are enabled
