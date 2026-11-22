@@ -122,7 +122,7 @@ export default function DebugRadar() {
             </div>
           )}
 
-          {result?.orb && <OrbSection orb={result.orb} />}
+          {result?.orb && <OrbSection orb={result.orb} onRefetch={handleRefetch} loading={loading} />}
 
           {result?.ema && <EmaSection ema={result.ema} />}
 
@@ -133,16 +133,14 @@ export default function DebugRadar() {
                   ✅ <strong>Analysis Complete</strong> — {result.candles_count} candles loaded
                   {result.from_cache && ' (from cache)'}
                 </span>
-                {result.from_cache && (
-                  <button
-                    className="btn"
-                    onClick={handleRefetch}
-                    disabled={loading}
-                    style={{ fontSize: 12, padding: '6px 12px' }}
-                  >
-                    🔄 Refetch
-                  </button>
-                )}
+                <button
+                  className="btn"
+                  onClick={handleRefetch}
+                  disabled={loading}
+                  style={{ fontSize: 12, padding: '6px 12px', whiteSpace: 'nowrap' }}
+                >
+                  🔄 Refetch fresh data
+                </button>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 24 }}>
@@ -358,14 +356,20 @@ const orbColor = (s) => (
         : ['RISK_FAIL', 'FAILED', 'EXPIRED', 'RETRACTED'].includes(s) ? '#ff8797'
           : '#93a0b6')
 
-const OrbSection = ({ orb }) => {
+const OrbSection = ({ orb, onRefetch, loading }) => {
   if (!orb) return null
   if (!orb.available) {
     return (
       <div className="panel" style={{ marginBottom: 24, background: '#131b2e' }}>
         <div className="panel-h"><h2>ORB Status</h2></div>
-        <div className="panel-b" style={{ padding: 20 }}>
+        <div className="panel-b" style={{ padding: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <p className="note" style={{ margin: 0 }}>ORB status unavailable — {orb.reason || 'not enough history.'}</p>
+          {onRefetch && (
+            <button className="btn" onClick={onRefetch} disabled={loading}
+              style={{ fontSize: 12, padding: '6px 12px', whiteSpace: 'nowrap' }}>
+              🔄 Refetch fresh data
+            </button>
+          )}
         </div>
       </div>
     )
