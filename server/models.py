@@ -109,6 +109,11 @@ class Settings(Base):
     rvol_anchor_timeframe = Column(String(16), default='day')
     rvol_length = Column(Integer, default=10)
     rvol_calculation_mode = Column(String(16), default='cumulative')
+    # EMA crossover strategy settings (EMA fast/slow — defaults 5/20, close, no offset)
+    ema_fast_length = Column(Integer, default=5)
+    ema_slow_length = Column(Integer, default=20)
+    ema_source = Column(String(8), default='close')
+    ema_offset = Column(Integer, default=0)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
     user = relationship('User', back_populates='settings')
 

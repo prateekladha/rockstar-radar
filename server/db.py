@@ -70,6 +70,11 @@ _ADDED_COLUMNS = {
         "rvol_anchor_timeframe": "VARCHAR(16) DEFAULT 'day'",
         'rvol_length': 'INTEGER DEFAULT 10',
         "rvol_calculation_mode": "VARCHAR(16) DEFAULT 'cumulative'",
+        # EMA crossover strategy settings
+        'ema_fast_length': 'INTEGER DEFAULT 5',
+        'ema_slow_length': 'INTEGER DEFAULT 20',
+        "ema_source": "VARCHAR(8) DEFAULT 'close'",
+        'ema_offset': 'INTEGER DEFAULT 0',
     },
 }
 

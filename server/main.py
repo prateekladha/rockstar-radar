@@ -346,6 +346,61 @@ async def api_update_prerequisites(request: Request, user: User = Depends(requir
     return api_get_prerequisites(user)
 
 
+EMA_SOURCES = ['close', 'open', 'high', 'low', 'hl2', 'hlc3', 'ohlc4']
+
+
+def _ema_settings_payload(s) -> dict:
+    return {
+        'fast_length': (getattr(s, 'ema_fast_length', None) if s else None) or 5,
+        'slow_length': (getattr(s, 'ema_slow_length', None) if s else None) or 20,
+        'source': (getattr(s, 'ema_source', None) if s else None) or 'close',
+        'offset': int((getattr(s, 'ema_offset', None) if s else 0) or 0),
+    }
+
+
+@app.get('/api/ema-settings')
+def api_get_ema_settings(user: User = Depends(require_user)):
+    """Get the user's EMA crossover strategy settings (fast/slow length, source, offset)."""
+    return _ema_settings_payload(user.settings)
+
+
+@app.put('/api/ema-settings')
+async def api_update_ema_settings(request: Request, user: User = Depends(require_user),
+                                  db: Session = Depends(get_db)):
+    """Update the user's EMA crossover settings. Lengths 1-200, offset 0-100, source whitelisted."""
+    data = await request.json()
+    if 'source' in data and data['source'] not in EMA_SOURCES:
+        return JSONResponse({'error': f'source must be one of: {", ".join(EMA_SOURCES)}'}, status_code=400)
+    for key in ('fast_length', 'slow_length'):
+        if key in data:
+            try:
+                v = int(data[key])
+            except (TypeError, ValueError):
+                return JSONResponse({'error': f'{key} must be a number'}, status_code=400)
+            if v < 1 or v > 200:
+                return JSONResponse({'error': f'{key} must be between 1 and 200'}, status_code=400)
+    if 'offset' in data:
+        try:
+            off = int(data['offset'])
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'offset must be a number'}, status_code=400)
+        if off < 0 or off > 100:
+            return JSONResponse({'error': 'offset must be between 0 and 100'}, status_code=400)
+
+    st = user.settings or Settings(user_id=user.id, data={})
+    if 'fast_length' in data:
+        st.ema_fast_length = int(data['fast_length'])
+    if 'slow_length' in data:
+        st.ema_slow_length = int(data['slow_length'])
+    if 'source' in data:
+        st.ema_source = data['source']
+    if 'offset' in data:
+        st.ema_offset = int(data['offset'])
+    db.add(st)
+    db.commit()
+    return _ema_settings_payload(st)
+
+
 @app.get('/api/rvol-settings')
 def api_get_rvol_settings(user: User = Depends(require_user)):
     """Get user's RVOL calculation settings."""
@@ -633,10 +688,14 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
                 length=(user.settings.rvol_length if user.settings else None) or 10,
             )
 
+            # The user's EMA crossover settings (fast/slow length, source, offset).
+            ema_cfg = _ema_settings_payload(user.settings)
+
             # Run analysis
             force = body.get('force', False)
             result = analyze_single_stock(adapter, symbol_input, load_config(), force=force,
-                                          prereq_config=prereq_config, rvol_cfg=rvol_cfg)
+                                          prereq_config=prereq_config, rvol_cfg=rvol_cfg,
+                                          ema_cfg=ema_cfg)
 
             return result
         finally:

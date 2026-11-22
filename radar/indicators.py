@@ -82,27 +82,33 @@ def ema(values: list[float], period: int) -> Optional[float]:
     return s[-1] if s and s[-1] is not None else None
 
 
-def ema_cross(closes: list[float], fast: int = 5, slow: int = 20) -> dict:
-    """EMA(fast)/EMA(slow) crossover trend. Default EMA 5 vs EMA 20.
+def ema_cross(values: list[float], fast: int = 5, slow: int = 20, offset: int = 0) -> dict:
+    """EMA(fast)/EMA(slow) crossover trend over a price series. Default EMA 5 vs EMA 20.
+
+    `values` is the chosen source series (close/open/hl2/… — the caller selects it). `offset` shifts
+    the read point back by N bars (TradingView EMA offset; 0 = latest, clamped to >= 0).
 
     trend: 'BULLISH' when the fast EMA is above the slow (fast crossed UP and stays above),
     'BEARISH' when below, 'NEUTRAL' when equal, None when there isn't enough data for both.
     cross: the MOST RECENT crossover as {'direction': 'UP'|'DOWN', 'index', 'bars_ago'}, or None if
-    the two EMAs have not crossed within the supplied series. Pure function of `closes`.
+    the two EMAs have not crossed within the supplied series. Pure function of `values`.
     """
-    fs = ema_series(closes, fast)
-    ss = ema_series(closes, slow)
+    offset = max(0, int(offset or 0))
+    series = values[:len(values) - offset] if (offset and values) else values
+    fs = ema_series(series, fast)
+    ss = ema_series(series, slow)
     ef = fs[-1] if fs else None
     es = ss[-1] if ss else None
     base = {'ema_fast': round(ef, 2) if ef is not None else None,
             'ema_slow': round(es, 2) if es is not None else None,
-            'fast_period': fast, 'slow_period': slow, 'trend': None, 'cross': None}
+            'fast_period': fast, 'slow_period': slow, 'offset': offset,
+            'trend': None, 'cross': None}
     if ef is None or es is None:
         return base
     base['trend'] = 'BULLISH' if ef > es else ('BEARISH' if ef < es else 'NEUTRAL')
     # Walk the aligned series to find the last sign change of (fast - slow).
     prev_sign = None
-    n = len(closes)
+    n = len(series)
     for i in range(n):
         if fs[i] is None or ss[i] is None:
             continue

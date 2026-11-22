@@ -32,6 +32,15 @@ class EmaTests(unittest.TestCase):
         self.assertIsNotNone(c['cross'])
         self.assertEqual(c['cross']['direction'], 'UP')
 
+    def test_offset_reads_back_n_bars(self):
+        vals = list(range(1, 61))
+        at0 = ema_cross(vals, 5, 20, 0)['ema_fast']
+        at5 = ema_cross(vals, 5, 20, 5)['ema_fast']
+        # offset 5 reports the EMA 5 bars earlier on a rising series -> a smaller value
+        self.assertLess(at5, at0)
+        self.assertEqual(ema_cross(vals, 5, 20, 5)['ema_fast'], ema_cross(vals[:-5], 5, 20, 0)['ema_fast'])
+        self.assertEqual(ema_cross(vals, 5, 20, 3)['offset'], 3)
+
 
 class RsiTests(unittest.TestCase):
     def test_all_up_is_100(self):
