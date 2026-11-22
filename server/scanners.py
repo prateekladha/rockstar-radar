@@ -245,24 +245,48 @@ def effective_broker(db: Session, user: User):
     return _household_broker(db, user.household_id), 'shared'
 
 
-def effective_cc(db: Session, user: User) -> ControlCenter | None:
-    """The scanner backing this user's current radar — simulation, their own broker, else the
-    household's shared one. Only returns one that is ALREADY running: this serves read-only
-    drill-downs (replay), which must never spin up a scanner or spend broker quota of its own."""
+def _usable_feed(cc: ControlCenter | None) -> tuple[ControlCenter | None, dict | None]:
+    """(cc, live_state) if this already-running scanner's feed is actually usable, else (None, None).
+
+    Applies the SAME gate as the radar display: skip a scanner that is offline, halted, or whose
+    websocket has gone stale (health file says ok but no fresh ticks). Read-only."""
+    if cc is None:
+        return None, None
+    st = cc.live_state()
+    if st.get('offline') or st.get('halted') or _feed_stalled(st):
+        return None, None
+    return cc, st
+
+
+def effective_feed(db: Session, user: User) -> tuple[ControlCenter | None, dict | None]:
+    """The scanner + live state backing this user's radar/alerts: simulation, their OWN broker if its
+    feed is actually live, else the household's shared broker if its feed is live. Health-aware
+    (mirrors radar_state, incl. the stalled-websocket gate) and read-only — never starts a scanner or
+    spends quota. Returns (None, None) when nothing usable is running."""
     if user.sim_enabled:
         with _lock:
-            return _sim_ccs.get(user.id)
+            cc = _sim_ccs.get(user.id)
+        return (cc, cc.live_state()) if cc is not None else (None, None)
     own = _own_broker(db, user)
-    if own is not None:
-        cc = _scanners.get(f'u{own.user_id}')
+    if own is not None and not (_auth_failed_health(own) or _rate_limited_health(own)):
+        cc, st = _usable_feed(_scanners.get(f'u{own.user_id}'))
         if cc is not None:
-            return cc
+            return cc, st
     shared = _household_broker(db, user.household_id, exclude_user_id=user.id)
-    if shared is not None:
-        cc = _scanners.get(f'u{shared.user_id}')
+    if shared is not None and not (_auth_failed_health(shared) or _rate_limited_health(shared)):
+        cc, st = _usable_feed(_scanners.get(f'u{shared.user_id}'))
         if cc is not None:
-            return cc
-    return _demo if os.environ.get('RADAR_DEMO') == '1' else None
+            return cc, st
+    if os.environ.get('RADAR_DEMO') == '1' and _demo is not None:
+        return _demo, _demo.live_state()
+    return None, None
+
+
+def effective_cc(db: Session, user: User) -> ControlCenter | None:
+    """The scanner backing this user's current radar — simulation, their own broker (if its feed is
+    live), else the household's shared one. Health-aware via effective_feed: a dead-websocket own
+    scanner is skipped so drill-downs/alerts read the household's healthy feed. Read-only."""
+    return effective_feed(db, user)[0]
 
 
 def smc_state(db: Session, user: User) -> dict:
@@ -346,6 +370,22 @@ def _need_login_state(conn, source, label, reason=None) -> dict:
             'shared': source == 'shared', 'universe': label, 'broker': conn.broker, 'reason': reason}
 
 
+def _feed_stalled(st: dict) -> bool:
+    """A running, non-closed scanner whose LIVE feed has gone dark — ~all symbols have no fresh tick.
+
+    This is the failure mode the health file misses: the websocket dropped and is stuck reconnecting,
+    so `scanner_health` still says ok=true / need_login=false / rate_limited=false, yet no bars
+    complete and nothing confirms (the Friday MARUTI case). Detected by data staleness rather than the
+    `feed_health` string, which the history/reconcile paths overwrite and so can't be trusted alone.
+    Each snapshot row carries `stale` (last tick older than market_feed_stale_seconds)."""
+    if st.get('session_closed'):
+        return False
+    rows = st.get('all') or []
+    if not rows:
+        return False
+    return sum(1 for r in rows if r.get('stale')) / len(rows) >= 0.9
+
+
 def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
     """Try one broker's feed. Returns (status, state) where status is:
        'live'/'starting' → usable (return as-is); 'need_login' → prompt reconnect; 'down' → feed
@@ -406,6 +446,15 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
                         'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
                         'rate_limited': _is_rl(fh),
                         'reason': clean or 'Live feed temporarily unavailable.'}
+
+    # Running + token-valid + not halted, but the websocket may have gone dark (stuck reconnecting)
+    # while the health file still reads ok=true. If the data is stale across the board, treat the
+    # feed as down so the caller falls back to the household's healthy feed (display AND alerts).
+    if _feed_stalled(st):
+        return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
+                        'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
+                        'stalled': True,
+                        'reason': 'Live market feed stalled (websocket not delivering fresh ticks).'}
 
     st.update({'data_mode': 'live', 'source': source, 'shared': source == 'shared',
                'universe': label, 'broker': conn.broker})
