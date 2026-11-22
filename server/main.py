@@ -346,10 +346,108 @@ async def api_update_prerequisites(request: Request, user: User = Depends(requir
     return api_get_prerequisites(user)
 
 
+def _apply_prerequisite_filters(opportunities: list, user: User, strategy: str = 'ORB') -> tuple[list, int]:
+    """Apply user's prerequisite filters to opportunities.
+
+    Args:
+        opportunities: List of opportunity dicts
+        user: User with settings
+        strategy: 'ORB' or 'SMC' (determines where to find RVOL)
+
+    Returns:
+        (filtered_opportunities, rejected_count)
+    """
+    if not opportunities:
+        return opportunities, 0
+
+    # Load user's prerequisite configuration
+    if not user.settings:
+        return opportunities, 0  # No settings = no filtering
+
+    from radar.prerequisites import PrerequisiteConfig, PrerequisiteChecker
+    import json as json_lib
+
+    prereq_config = PrerequisiteConfig(
+        min_rvol=user.settings.prereq_min_rvol or 1.0,
+        rvol_enabled=bool(user.settings.prereq_rvol_enabled),
+        min_liquidity_cr=user.settings.prereq_min_liquidity_cr,
+        min_price=user.settings.prereq_min_price,
+        max_price=user.settings.prereq_max_price,
+        allowed_sectors=json_lib.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
+        blocked_symbols=json_lib.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
+    )
+
+    # If RVOL check is disabled, skip filtering
+    if not prereq_config.rvol_enabled:
+        return opportunities, 0
+
+    checker = PrerequisiteChecker(prereq_config)
+    filtered = []
+    rejected = 0
+
+    for opp in opportunities:
+        # Extract data from opportunity
+        symbol = opp.get('symbol', '')
+        price = opp.get('price')
+
+        # Extract RVOL based on strategy
+        if strategy == 'ORB':
+            # ORB: RVOL is directly in opportunity
+            rvol = opp.get('rvol')
+        elif strategy == 'SMC':
+            # SMC: RVOL is in confluence.rvol_cum
+            confluence = opp.get('confluence') or {}
+            rvol = confluence.get('rvol_cum')
+        else:
+            rvol = None
+
+        # For ORB, liquidity might be available from instrument info
+        # For SMC, we might not have liquidity data readily available
+        liquidity_cr = None
+
+        # Run prerequisite check
+        result = checker.check(symbol, {
+            'rvol': rvol,
+            'price': price,
+            'liquidity_cr': liquidity_cr
+        })
+
+        if result.passed:
+            filtered.append(opp)
+        else:
+            rejected += 1
+            # Log rejection for debugging
+            print(f'[Prereq] {strategy} - Rejected {symbol}: {result.error_message} (RVOL={rvol})')
+
+    return filtered, rejected
+
+
 @app.get('/api/radar')
 def api_radar(user: User = Depends(require_user), db: Session = Depends(get_db)):
     from . import journaling, scanners
     state = scanners.radar_state(db, user)
+
+    # Apply prerequisite filters to ORB opportunities
+    # ORB uses 'all' field, not 'opportunities'
+    if state.get('all'):
+        filtered_opps, rejected_count = _apply_prerequisite_filters(
+            state['all'], user, strategy='ORB'
+        )
+        state['all'] = filtered_opps
+
+        # Also filter 'top5' if present
+        if state.get('top5'):
+            # top5 is a subset of 'all', so filter it separately
+            filtered_top5, _ = _apply_prerequisite_filters(
+                state['top5'], user, strategy='ORB'
+            )
+            state['top5'] = filtered_top5
+
+        # Add metadata about filtering
+        if rejected_count > 0:
+            state['prereq_filtered'] = rejected_count
+            print(f'[Prereq] ORB - Filtered {rejected_count} opportunities for user {user.email}')
+
     if state.get('data_mode') == 'live':
         try:
             journaling.record_opportunities(db, user.id, state)
@@ -389,7 +487,21 @@ def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_
         import json
         with urllib.request.urlopen(
                 f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+            state = json.loads(resp.read().decode('utf-8'))
+
+            # Apply prerequisite filters to SMC opportunities
+            if state.get('opportunities'):
+                filtered_opps, rejected_count = _apply_prerequisite_filters(
+                    state['opportunities'], user, strategy='SMC'
+                )
+                state['opportunities'] = filtered_opps
+
+                # Add metadata about filtering
+                if rejected_count > 0:
+                    state['prereq_filtered'] = rejected_count
+                    print(f'[Prereq] SMC - Filtered {rejected_count} opportunities for user {user.email}')
+
+            return state
     except (urllib.error.URLError, OSError, ValueError):
         return closed or {'offline': True, 'reason': 'SMC scanner starting...', 'opportunities': []}
 
