@@ -191,8 +191,11 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
             'liquidity_cr': getattr(state.instrument, 'median_turnover_cr', None) if hasattr(state, 'instrument') else None
         })
 
-        # If prerequisites fail, return early with error
+        # If prerequisites fail, return early with error. Include from_cache + the RVOL mode so the
+        # UI can still offer Refetch (force a fresh pull) and show WHY it failed — otherwise a stale
+        # cache that fails the gate traps the user with no way to refresh.
         if not prereq_result.passed:
+            cfg = rvol_cfg or RvolConfig.from_config(config)
             return {
                 'success': False,
                 'error': 'Pre-requisite checks failed',
@@ -201,7 +204,10 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
                 'prereq_details': prereq_result.details,
                 'symbol': symbol,
                 'current_price': current_price,
-                'rvol': rvol
+                'rvol': rvol,
+                'rvol_mode': cfg.mode,
+                'candles_count': len(candles),
+                'from_cache': from_cache,
             }
 
     # Build response
