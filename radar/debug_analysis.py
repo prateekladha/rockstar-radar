@@ -25,7 +25,7 @@ def debug_cache_path(symbol: str, day: date, bar_minutes: int = 5) -> Path:
 
 def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
                          force: bool = False, prereq_config: Optional[PrerequisiteConfig] = None,
-                         rvol_cfg=None) -> dict:
+                         rvol_cfg=None, ema_cfg=None) -> dict:
     """Fetch historical data and run SMC analysis for a single stock.
 
     Args:
@@ -73,7 +73,7 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
             ]
 
             return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=True,
-                                     rvol_cfg=rvol_cfg)
+                                     rvol_cfg=rvol_cfg, ema_cfg=ema_cfg)
 
         except Exception as e:
             print(f'[Debug] Cache load failed: {type(e).__name__}: {e}')
@@ -121,7 +121,7 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
         print(f'[Debug] Cached data to: {cache_path.name}')
 
         return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=False,
-                                 rvol_cfg=rvol_cfg)
+                                 rvol_cfg=rvol_cfg, ema_cfg=ema_cfg)
 
     except Exception as e:
         return {
@@ -133,7 +133,7 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
 
 def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
                      prereq_config: Optional[PrerequisiteConfig] = None,
-                     from_cache: bool = False, rvol_cfg=None) -> dict:
+                     from_cache: bool = False, rvol_cfg=None, ema_cfg=None) -> dict:
     """Run SMC engine analysis on historical candles."""
     if len(candles) < 101:
         return {
@@ -216,10 +216,24 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
     # Calculate score breakdown for detailed analysis
     score, breakdown = calculate_smc_score_with_breakdown(state, current_price)
 
-    # EMA 5 / EMA 20 crossover trend. Gated behind the prerequisite checks (RVOL) like the rest of
-    # strategy evaluation — we only reach here when the prereq passed (a failure returns early above).
+    # EMA crossover trend, per the user's EMA settings (fast/slow length, source, offset). Gated
+    # behind the prerequisite checks (RVOL) like the rest of strategy evaluation — we only reach here
+    # when the prereq passed (a failure returns early above).
     from .indicators import ema_cross
-    ema_info = ema_cross([c.close for c in candles], 5, 20)
+    ec = ema_cfg or {}
+    fast = int(ec.get('fast_length', 5) or 5)
+    slow = int(ec.get('slow_length', 20) or 20)
+    source = (ec.get('source') or 'close').lower()
+    offset = int(ec.get('offset', 0) or 0)
+    _src = {
+        'close': lambda c: c.close, 'open': lambda c: c.open,
+        'high': lambda c: c.high, 'low': lambda c: c.low,
+        'hl2': lambda c: (c.high + c.low) / 2,
+        'hlc3': lambda c: (c.high + c.low + c.close) / 3,
+        'ohlc4': lambda c: (c.open + c.high + c.low + c.close) / 4,
+    }.get(source, lambda c: c.close)
+    ema_info = ema_cross([_src(c) for c in candles], fast, slow, offset)
+    ema_info['source'] = source
 
     result = {
         'success': True,

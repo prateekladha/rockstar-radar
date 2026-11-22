@@ -13,15 +13,18 @@ export default function Settings() {
   const [uni, setUni] = useState(null)
   const [prereq, setPrereq] = useState(null)
   const [rvolSettings, setRvolSettings] = useState(null)
+  const [emaSettings, setEmaSettings] = useState(null)
   const [msg, setMsg] = useState('')
   const [prereqMsg, setPrereqMsg] = useState('')
   const [rvolMsg, setRvolMsg] = useState('')
+  const [emaMsg, setEmaMsg] = useState('')
 
   useEffect(() => {
     api('/api/settings').then(setCfg).catch(e => setMsg(e.message))
     api('/api/universe').then(setUni).catch(() => {})
     api('/api/prerequisites').then(setPrereq).catch(e => console.error('Failed to load prerequisites:', e))
     api('/api/rvol-settings').then(setRvolSettings).catch(e => console.error('Failed to load RVOL settings:', e))
+    api('/api/ema-settings').then(setEmaSettings).catch(e => console.error('Failed to load EMA settings:', e))
   }, [])
   const saveUni = async (idx) => {
     const r = await api('/api/universe', { method: 'PUT', body: { universe_index: idx } })
@@ -252,6 +255,66 @@ export default function Settings() {
             <span style={{ marginLeft: 12, color: '#888', fontSize: 13 }}>
               Scanner restart required for changes to take effect
             </span>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {emaSettings && (
+      <div className="panel" style={{ marginTop: 20 }}>
+        <div className="panel-h"><h2>EMA Crossover Settings</h2></div>
+        <div className="panel-b" style={{ padding: 20 }}>
+          {emaMsg && <div className="banner ok">{emaMsg}</div>}
+          <p className="note" style={{ marginBottom: 16 }}>
+            Two EMAs on the Debug tab (and EMA trend). EMA fast crossing above the slow is bullish;
+            below is bearish. Defaults: 5 / 20, Close, offset 0.
+          </p>
+          <div className="settings-grid">
+            <div className="field">
+              <label>Fast EMA Length</label>
+              <input type="number" min="1" max="200" value={emaSettings.fast_length ?? 5}
+                onChange={ev => setEmaSettings({ ...emaSettings, fast_length: parseInt(ev.target.value) || 5 })} />
+              <p className="note" style={{ marginTop: 8 }}>Shorter EMA (default 5).</p>
+            </div>
+            <div className="field">
+              <label>Slow EMA Length</label>
+              <input type="number" min="1" max="200" value={emaSettings.slow_length ?? 20}
+                onChange={ev => setEmaSettings({ ...emaSettings, slow_length: parseInt(ev.target.value) || 20 })} />
+              <p className="note" style={{ marginTop: 8 }}>Longer EMA (default 20).</p>
+            </div>
+            <div className="field">
+              <label>Source</label>
+              <Select value={emaSettings.source || 'close'} width={'100%'}
+                onChange={(val) => setEmaSettings({ ...emaSettings, source: val })}
+                options={[
+                  { value: 'close', label: 'Close (Default)' },
+                  { value: 'open', label: 'Open' },
+                  { value: 'high', label: 'High' },
+                  { value: 'low', label: 'Low' },
+                  { value: 'hl2', label: 'HL2 (median)' },
+                  { value: 'hlc3', label: 'HLC3 (typical)' },
+                  { value: 'ohlc4', label: 'OHLC4 (average)' },
+                ]} />
+              <p className="note" style={{ marginTop: 8 }}>Price the EMA is computed on.</p>
+            </div>
+            <div className="field">
+              <label>Offset</label>
+              <input type="number" min="0" max="100" value={emaSettings.offset ?? 0}
+                onChange={ev => setEmaSettings({ ...emaSettings, offset: parseInt(ev.target.value) || 0 })} />
+              <p className="note" style={{ marginTop: 8 }}>Shift the EMA back by N bars (default 0).</p>
+            </div>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <button className="btn primary" onClick={async () => {
+              try {
+                const result = await api('/api/ema-settings', { method: 'PUT', body: emaSettings })
+                setEmaSettings(result)
+                setEmaMsg('EMA settings saved.')
+                setTimeout(() => setEmaMsg(''), 5000)
+              } catch (e) {
+                setEmaMsg('Error: ' + e.message)
+              }
+            }}>Save EMA settings</button>
           </div>
         </div>
       </div>
