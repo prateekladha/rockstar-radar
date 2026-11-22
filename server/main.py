@@ -260,10 +260,257 @@ async def api_patch_settings(request: Request, user: User = Depends(require_user
     return api_get_settings(user)
 
 
+@app.get('/api/prerequisites')
+def api_get_prerequisites(user: User = Depends(require_user)):
+    """Get user's prerequisite configuration for strategy evaluation."""
+    import json
+    if not user.settings:
+        # Return defaults
+        return {
+            'min_rvol': 1.0,
+            'rvol_enabled': True,
+            'min_liquidity_cr': None,
+            'min_price': None,
+            'max_price': None,
+            'allowed_sectors': None,
+            'blocked_symbols': None
+        }
+
+    return {
+        'min_rvol': user.settings.prereq_min_rvol or 1.0,
+        'rvol_enabled': bool(user.settings.prereq_rvol_enabled),
+        'min_liquidity_cr': user.settings.prereq_min_liquidity_cr,
+        'min_price': user.settings.prereq_min_price,
+        'max_price': user.settings.prereq_max_price,
+        'allowed_sectors': json.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
+        'blocked_symbols': json.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
+    }
+
+
+@app.put('/api/prerequisites')
+async def api_update_prerequisites(request: Request, user: User = Depends(require_user),
+                                   db: Session = Depends(get_db)):
+    """Update user's prerequisite configuration."""
+    import json
+    data = await request.json()
+
+    # Validation
+    if 'min_rvol' in data:
+        try:
+            min_rvol = float(data['min_rvol'])
+            if min_rvol < 0:
+                return JSONResponse({'error': 'min_rvol must be >= 0'}, status_code=400)
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'min_rvol must be a number'}, status_code=400)
+
+    if 'min_liquidity_cr' in data and data['min_liquidity_cr'] is not None:
+        try:
+            float(data['min_liquidity_cr'])
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'min_liquidity_cr must be a number'}, status_code=400)
+
+    if 'min_price' in data and data['min_price'] is not None:
+        try:
+            float(data['min_price'])
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'min_price must be a number'}, status_code=400)
+
+    if 'max_price' in data and data['max_price'] is not None:
+        try:
+            float(data['max_price'])
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'max_price must be a number'}, status_code=400)
+
+    # Get or create settings
+    st = user.settings or Settings(user_id=user.id, data={})
+
+    # Update fields
+    if 'min_rvol' in data:
+        st.prereq_min_rvol = float(data['min_rvol'])
+    if 'rvol_enabled' in data:
+        st.prereq_rvol_enabled = 1 if data['rvol_enabled'] else 0
+    if 'min_liquidity_cr' in data:
+        st.prereq_min_liquidity_cr = float(data['min_liquidity_cr']) if data['min_liquidity_cr'] is not None else None
+    if 'min_price' in data:
+        st.prereq_min_price = float(data['min_price']) if data['min_price'] is not None else None
+    if 'max_price' in data:
+        st.prereq_max_price = float(data['max_price']) if data['max_price'] is not None else None
+    if 'allowed_sectors' in data:
+        st.prereq_allowed_sectors = json.dumps(data['allowed_sectors']) if data['allowed_sectors'] else None
+    if 'blocked_symbols' in data:
+        st.prereq_blocked_symbols = json.dumps(data['blocked_symbols']) if data['blocked_symbols'] else None
+
+    db.add(st)
+    db.commit()
+
+    return api_get_prerequisites(user)
+
+
+@app.get('/api/rvol-settings')
+def api_get_rvol_settings(user: User = Depends(require_user)):
+    """Get user's RVOL calculation settings."""
+    if not user.settings:
+        # Return defaults
+        return {
+            'anchor_timeframe': 'day',
+            'length': 10,
+            'calculation_mode': 'cumulative'
+        }
+
+    return {
+        'anchor_timeframe': user.settings.rvol_anchor_timeframe or 'day',
+        'length': user.settings.rvol_length or 10,
+        'calculation_mode': user.settings.rvol_calculation_mode or 'cumulative'
+    }
+
+
+@app.put('/api/rvol-settings')
+async def api_update_rvol_settings(request: Request, user: User = Depends(require_user),
+                                   db: Session = Depends(get_db)):
+    """Update user's RVOL calculation settings."""
+    data = await request.json()
+
+    # Validation
+    valid_timeframes = ['day', 'session', 'week', 'month']
+    valid_modes = ['cumulative', 'per_bar', 'mean', 'median']
+
+    if 'anchor_timeframe' in data and data['anchor_timeframe'] not in valid_timeframes:
+        return JSONResponse({
+            'error': f'anchor_timeframe must be one of: {", ".join(valid_timeframes)}'
+        }, status_code=400)
+
+    if 'calculation_mode' in data and data['calculation_mode'] not in valid_modes:
+        return JSONResponse({
+            'error': f'calculation_mode must be one of: {", ".join(valid_modes)}'
+        }, status_code=400)
+
+    if 'length' in data:
+        try:
+            length = int(data['length'])
+            if length < 1 or length > 100:
+                return JSONResponse({'error': 'length must be between 1 and 100'}, status_code=400)
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'length must be a number'}, status_code=400)
+
+    # Get or create settings
+    st = user.settings or Settings(user_id=user.id, data={})
+
+    # Update fields
+    if 'anchor_timeframe' in data:
+        st.rvol_anchor_timeframe = data['anchor_timeframe']
+    if 'length' in data:
+        st.rvol_length = int(data['length'])
+    if 'calculation_mode' in data:
+        st.rvol_calculation_mode = data['calculation_mode']
+
+    db.add(st)
+    db.commit()
+
+    return api_get_rvol_settings(user)
+
+
+def _apply_prerequisite_filters(opportunities: list, user: User, strategy: str = 'ORB') -> tuple[list, int]:
+    """Apply user's prerequisite filters to opportunities.
+
+    Args:
+        opportunities: List of opportunity dicts
+        user: User with settings
+        strategy: 'ORB' or 'SMC' (determines where to find RVOL)
+
+    Returns:
+        (filtered_opportunities, rejected_count)
+    """
+    if not opportunities:
+        return opportunities, 0
+
+    # Load user's prerequisite configuration
+    if not user.settings:
+        return opportunities, 0  # No settings = no filtering
+
+    from radar.prerequisites import PrerequisiteConfig, PrerequisiteChecker
+    import json as json_lib
+
+    prereq_config = PrerequisiteConfig(
+        min_rvol=user.settings.prereq_min_rvol or 1.0,
+        rvol_enabled=bool(user.settings.prereq_rvol_enabled),
+        min_liquidity_cr=user.settings.prereq_min_liquidity_cr,
+        min_price=user.settings.prereq_min_price,
+        max_price=user.settings.prereq_max_price,
+        allowed_sectors=json_lib.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
+        blocked_symbols=json_lib.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
+    )
+
+    # If RVOL check is disabled, skip filtering
+    if not prereq_config.rvol_enabled:
+        return opportunities, 0
+
+    checker = PrerequisiteChecker(prereq_config)
+    filtered = []
+    rejected = 0
+
+    for opp in opportunities:
+        # Extract data from opportunity
+        symbol = opp.get('symbol', '')
+        price = opp.get('price')
+
+        # Extract RVOL based on strategy
+        if strategy == 'ORB':
+            # ORB: RVOL is directly in opportunity
+            rvol = opp.get('rvol')
+        elif strategy == 'SMC':
+            # SMC: RVOL is in confluence.rvol_cum
+            confluence = opp.get('confluence') or {}
+            rvol = confluence.get('rvol_cum')
+        else:
+            rvol = None
+
+        # For ORB, liquidity might be available from instrument info
+        # For SMC, we might not have liquidity data readily available
+        liquidity_cr = None
+
+        # Run prerequisite check
+        result = checker.check(symbol, {
+            'rvol': rvol,
+            'price': price,
+            'liquidity_cr': liquidity_cr
+        })
+
+        if result.passed:
+            filtered.append(opp)
+        else:
+            rejected += 1
+            # Log rejection for debugging
+            print(f'[Prereq] {strategy} - Rejected {symbol}: {result.error_message} (RVOL={rvol})')
+
+    return filtered, rejected
+
+
 @app.get('/api/radar')
 def api_radar(user: User = Depends(require_user), db: Session = Depends(get_db)):
     from . import journaling, scanners
     state = scanners.radar_state(db, user)
+
+    # Apply prerequisite filters to ORB opportunities
+    # ORB uses 'all' field, not 'opportunities'
+    if state.get('all'):
+        filtered_opps, rejected_count = _apply_prerequisite_filters(
+            state['all'], user, strategy='ORB'
+        )
+        state['all'] = filtered_opps
+
+        # Also filter 'top5' if present
+        if state.get('top5'):
+            # top5 is a subset of 'all', so filter it separately
+            filtered_top5, _ = _apply_prerequisite_filters(
+                state['top5'], user, strategy='ORB'
+            )
+            state['top5'] = filtered_top5
+
+        # Add metadata about filtering
+        if rejected_count > 0:
+            state['prereq_filtered'] = rejected_count
+            print(f'[Prereq] ORB - Filtered {rejected_count} opportunities for user {user.email}')
+
     if state.get('data_mode') == 'live':
         try:
             journaling.record_opportunities(db, user.id, state)
@@ -303,7 +550,21 @@ def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_
         import json
         with urllib.request.urlopen(
                 f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+            state = json.loads(resp.read().decode('utf-8'))
+
+            # Apply prerequisite filters to SMC opportunities
+            if state.get('opportunities'):
+                filtered_opps, rejected_count = _apply_prerequisite_filters(
+                    state['opportunities'], user, strategy='SMC'
+                )
+                state['opportunities'] = filtered_opps
+
+                # Add metadata about filtering
+                if rejected_count > 0:
+                    state['prereq_filtered'] = rejected_count
+                    print(f'[Prereq] SMC - Filtered {rejected_count} opportunities for user {user.email}')
+
+            return state
     except (urllib.error.URLError, OSError, ValueError):
         return closed or {'offline': True, 'reason': 'SMC scanner starting...', 'opportunities': []}
 
@@ -347,9 +608,25 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
             # Create adapter with user's credentials (reads from env vars we just set)
             adapter = FyersAdapter(load_config())
 
+            # Load user's prerequisite configuration
+            from radar.prerequisites import PrerequisiteConfig
+            import json as json_lib
+
+            prereq_config = None
+            if user.settings:
+                prereq_config = PrerequisiteConfig(
+                    min_rvol=user.settings.prereq_min_rvol or 1.0,
+                    rvol_enabled=bool(user.settings.prereq_rvol_enabled),
+                    min_liquidity_cr=user.settings.prereq_min_liquidity_cr,
+                    min_price=user.settings.prereq_min_price,
+                    max_price=user.settings.prereq_max_price,
+                    allowed_sectors=json_lib.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
+                    blocked_symbols=json_lib.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
+                )
+
             # Run analysis
             force = body.get('force', False)
-            result = analyze_single_stock(adapter, symbol_input, load_config(), force=force)
+            result = analyze_single_stock(adapter, symbol_input, load_config(), force=force, prereq_config=prereq_config)
 
             return result
         finally:

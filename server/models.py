@@ -97,6 +97,18 @@ class Settings(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), unique=True, nullable=False)
     data = Column(JSON, default=dict)          # strategy/risk config overrides
+    # Prerequisite checks (mandatory before strategy evaluation)
+    prereq_min_rvol = Column(Float, default=1.0)
+    prereq_rvol_enabled = Column(Integer, default=1)
+    prereq_min_liquidity_cr = Column(Float)
+    prereq_min_price = Column(Float)
+    prereq_max_price = Column(Float)
+    prereq_allowed_sectors = Column(Text)      # JSON array
+    prereq_blocked_symbols = Column(Text)      # JSON array
+    # RVOL calculation settings
+    rvol_anchor_timeframe = Column(String(16), default='day')
+    rvol_length = Column(Integer, default=10)
+    rvol_calculation_mode = Column(String(16), default='cumulative')
     updated_at = Column(DateTime, default=_now, onupdate=_now)
     user = relationship('User', back_populates='settings')
 
