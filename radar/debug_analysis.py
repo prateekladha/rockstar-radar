@@ -77,9 +77,13 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
             print(f'[Debug] Cache load failed: {type(e).__name__}: {e}')
             # Fall through to fetch
 
-    # Fetch from FYERS API
+    # Fetch from FYERS API.
+    # RVOL's same_time_baseline needs >=10 prior sessions (ideally ~20, matching its
+    # lookback_sessions default) before it returns ANY baseline — otherwise baseline_volume is
+    # None, RVOL is None, and the prerequisite check fails for every symbol. A 5-day window only
+    # covers ~3 trading sessions, so fetch ~40 calendar days (~20 sessions after weekends/holidays).
     print(f'[Debug] Fetching historical data for {symbol}...')
-    from_dt = market_dt(today - timedelta(days=5), '09:15')
+    from_dt = market_dt(today - timedelta(days=40), '09:15')
     to_dt = market_dt(today, '15:30')
 
     try:
@@ -171,20 +175,26 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
     # PRE-REQUISITE CHECKS (run before strategy evaluation)
     prereq_result = None
     if prereq_config:
-        # Calculate RVOL for prerequisite check
-        # Use same logic as ORB radar: compare current bar volume to historical baseline
-        from .engine import same_time_baseline
-        today = now_ist().date()
+        # Calculate RVOL for the prerequisite check using the SAME metric the live SMC radar gates
+        # on: cumulative RVOL-at-time (the trader's "Relative Vol 1D cumulative"). The live SMC path
+        # (server.main._apply_prerequisite_filters) reads confluence['rvol_cum']; this reproduces it
+        # so debug and the radar agree. It compares the latest session's cumulative volume to the
+        # mean cumulative volume of recent prior sessions at the same point in the day — so a heavy
+        # day reads >1 (what the user sees as "good RVOL"), unlike a single end-of-day bar.
+        #
+        # Computed from the FULL fetched history, not state.candles (the engine caps that buffer at
+        # ~150 bars / ~2 sessions — too few prior days for a stable baseline).
+        from collections import defaultdict
+        from .rvol_cum import rvol_cumulative
 
-        # Build baseline from historical data
-        baseline_dict = same_time_baseline(candles, today, lookback_sessions=20)
-        current_time_key = candles[-1].at.strftime('%H:%M')
-        baseline_volume = baseline_dict.get(current_time_key)
-
-        # Calculate RVOL
-        rvol = None
-        if baseline_volume and baseline_volume > 0:
-            rvol = candles[-1].volume / baseline_volume
+        by_day: dict = defaultdict(list)
+        for c in candles:
+            by_day[c.at.date()].append(c)
+        day_keys = sorted(by_day)
+        today_vols = [c.volume for c in by_day[day_keys[-1]]]
+        # Baseline = up to 20 most-recent prior sessions (matches the live scanner's lookback).
+        prior_vols = [[c.volume for c in by_day[d]] for d in day_keys[-21:-1]]
+        rvol = rvol_cumulative(today_vols, prior_vols, min_days=2)
 
         # Run prerequisite check
         checker = PrerequisiteChecker(prereq_config)
