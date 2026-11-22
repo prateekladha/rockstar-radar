@@ -55,6 +55,69 @@ def rsi(closes: list[float], period: int = 14) -> Optional[float]:
 
 
 # --------------------------------------------------------------------------------------------------
+# EMA + EMA crossover (the EMA 5 / EMA 20 trend strategy)
+# --------------------------------------------------------------------------------------------------
+def ema_series(values: list[float], period: int) -> list[Optional[float]]:
+    """Exponential moving average at each index, aligned to `values` (None until it's defined).
+
+    SMA-seeded at index `period-1` (TradingView's EMA default), then the standard recursion with
+    smoothing k = 2/(period+1). Positions before the seed are None so callers can align fast vs slow.
+    """
+    n = len(values) if values else 0
+    out: list[Optional[float]] = [None] * n
+    if period < 1 or n < period:
+        return out
+    k = 2.0 / (period + 1)
+    prev = sum(values[:period]) / period     # SMA seed
+    out[period - 1] = prev
+    for i in range(period, n):
+        prev = values[i] * k + prev * (1 - k)
+        out[i] = prev
+    return out
+
+
+def ema(values: list[float], period: int) -> Optional[float]:
+    """Latest EMA over `values`, or None if there isn't enough data (< `period` points)."""
+    s = ema_series(values, period)
+    return s[-1] if s and s[-1] is not None else None
+
+
+def ema_cross(closes: list[float], fast: int = 5, slow: int = 20) -> dict:
+    """EMA(fast)/EMA(slow) crossover trend. Default EMA 5 vs EMA 20.
+
+    trend: 'BULLISH' when the fast EMA is above the slow (fast crossed UP and stays above),
+    'BEARISH' when below, 'NEUTRAL' when equal, None when there isn't enough data for both.
+    cross: the MOST RECENT crossover as {'direction': 'UP'|'DOWN', 'index', 'bars_ago'}, or None if
+    the two EMAs have not crossed within the supplied series. Pure function of `closes`.
+    """
+    fs = ema_series(closes, fast)
+    ss = ema_series(closes, slow)
+    ef = fs[-1] if fs else None
+    es = ss[-1] if ss else None
+    base = {'ema_fast': round(ef, 2) if ef is not None else None,
+            'ema_slow': round(es, 2) if es is not None else None,
+            'fast_period': fast, 'slow_period': slow, 'trend': None, 'cross': None}
+    if ef is None or es is None:
+        return base
+    base['trend'] = 'BULLISH' if ef > es else ('BEARISH' if ef < es else 'NEUTRAL')
+    # Walk the aligned series to find the last sign change of (fast - slow).
+    prev_sign = None
+    n = len(closes)
+    for i in range(n):
+        if fs[i] is None or ss[i] is None:
+            continue
+        d = fs[i] - ss[i]
+        sign = 1 if d > 0 else (-1 if d < 0 else 0)
+        if sign == 0:
+            continue
+        if prev_sign is not None and sign != prev_sign:
+            base['cross'] = {'direction': 'UP' if sign > 0 else 'DOWN',
+                             'index': i, 'bars_ago': n - 1 - i}
+        prev_sign = sign
+    return base
+
+
+# --------------------------------------------------------------------------------------------------
 # Fibonacci pivot points
 # --------------------------------------------------------------------------------------------------
 # TradingView "Pivots Fibonacci" multipliers for R1-R3 / S1-S3.
