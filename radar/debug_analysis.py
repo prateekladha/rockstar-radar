@@ -151,7 +151,9 @@ def _orb_status(symbol: str, candles: list[Candle], config: dict) -> dict:
                 by_day[c.at.date()].append(c)
         days = sorted(by_day)
         if len(days) < 11:
-            return {'available': False, 'reason': 'Needs ≥10 prior sessions for ORB context.'}
+            return {'available': False,
+                    'reason': f'Needs ≥10 prior sessions for ORB context; this data has only '
+                              f'{len(days)}. Click Refetch to pull the full history.'}
         day = days[-1]
         prior = days[:-1]
         daily = {}
