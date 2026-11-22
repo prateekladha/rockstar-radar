@@ -13,10 +13,10 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Optional
 
-from . import indicators, volume_profile, rvol_cum, confluence
+from . import indicators, volume_profile, confluence
 
 
-def compute_confluence_stack(state, side: Optional[str] = None) -> Optional[dict]:
+def compute_confluence_stack(state, side: Optional[str] = None, rvol_cfg=None) -> Optional[dict]:
     candles = getattr(state, 'candles', None)
     if not candles:
         return None
@@ -47,9 +47,11 @@ def compute_confluence_stack(state, side: Optional[str] = None) -> Optional[dict
     vp_full = volume_profile.volume_profile(today_candles, bins=20) if len(today_candles) >= 5 else None
     vp = {k: vp_full[k] for k in ('vah', 'val', 'poc', 'shape')} if vp_full else None
 
-    # Cumulative RVOL-at-time
-    rvolc = rvol_cum.rvol_cumulative([c.volume for c in today_candles],
-                                     [[c.volume for c in by_day[d]] for d in prior_days], min_days=2)
+    # RVOL — the ONE product-wide metric in the user's configured mode (radar.rvol), computed over
+    # the full candle buffer so debug and radar agree. (state.candles is capped ~150 bars upstream;
+    # a short buffer may yield None, same as before — widening that buffer is a separate change.)
+    from . import rvol as _rvol
+    rvolc = _rvol.rvol_from_candles(rvol_cfg or _rvol.RvolConfig(), candles)
 
     # Structure
     trend = getattr(state, 'trend', 'NEUTRAL')

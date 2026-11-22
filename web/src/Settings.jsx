@@ -193,14 +193,12 @@ export default function Settings() {
                 onChange={(val) => setRvolSettings({ ...rvolSettings, anchor_timeframe: val })}
                 width={'100%'}
                 options={[
-                  { value: 'session', label: 'Session (Intraday only)' },
-                  { value: 'day', label: 'Day (Default)' },
-                  { value: 'week', label: 'Week' },
-                  { value: 'month', label: 'Month' }
+                  { value: 'day', label: 'Day (Default)' }
                 ]}
               />
               <p className="note" style={{ marginTop: 8 }}>
-                Time period for volume comparison. "Day" compares to same time on previous days.
+                Time period for volume comparison. "Day" compares to the same time on previous days.
+                (Session/Week/Month anchors are coming soon.)
               </p>
             </div>
 
@@ -228,13 +226,14 @@ export default function Settings() {
                 width={'100%'}
                 options={[
                   { value: 'cumulative', label: 'Cumulative (Default)' },
-                  { value: 'per_bar', label: 'Per Bar (Spot)' },
-                  { value: 'mean', label: 'Mean Average' },
-                  { value: 'median', label: 'Median (Robust)' }
+                  { value: 'per_bar', label: 'Per Bar (Spot)' }
                 ]}
               />
               <p className="note" style={{ marginTop: 8 }}>
-                How to aggregate volume data. "Cumulative" compares total volume from session start.
+                How to aggregate volume. "Cumulative" compares total volume from the session open
+                (smooth); "Per Bar" compares each bar to its same-time median (spiky). This one metric
+                now drives every strategy — the radar, SMC and the Debug tab all read it.
+                (Mean/Median modes are coming soon.)
               </p>
             </div>
           </div>

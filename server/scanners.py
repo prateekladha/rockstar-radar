@@ -78,15 +78,30 @@ def _one_minute(user: User) -> str:
     return '1' if data.get('use_one_minute_candles', False) else '0'
 
 
+def _rvol_env(user: User) -> tuple[str, str]:
+    """The owner's RVOL calculation choice (mode, length) as env strings for the subprocess.
+
+    Scanners are per-owner, so the whole feed uses the OWNER's RVOL mode/length (like the other
+    engine-level settings). Defaults match config.json (cumulative / 10). utils.load_config reads
+    RADAR_RVOL_MODE / RADAR_RVOL_LENGTH back into config inside the subprocess.
+    """
+    s = user.settings
+    mode = (getattr(s, 'rvol_calculation_mode', None) if s else None) or 'cumulative'
+    length = (getattr(s, 'rvol_length', None) if s else None) or 10
+    return str(mode), str(int(length))
+
+
 def _sim_cc_for(user: User) -> ControlCenter:
     """The user's accelerated simulation scanner (no FYERS, no login)."""
     key = f'sim{user.id}'
     start, end = (user.sim_start or '09:15'), (user.sim_end or '15:30')
     with _lock:
         cc = _sim_ccs.get(user.id)
+        _rmode, _rlen = _rvol_env(user)
         env = {'RADAR_SIM_START': start, 'RADAR_SIM_END': end,
                'RADAR_SIM_SPEED': _sim_speed(user), 'RADAR_SCANNER_ID': key,
-               'RADAR_ONE_MINUTE': _one_minute(user)}
+               'RADAR_ONE_MINUTE': _one_minute(user),
+               'RADAR_RVOL_MODE': _rmode, 'RADAR_RVOL_LENGTH': _rlen}
         if cc is None:
             cc = ControlCenter(demo=False, sim=True, env_extra=env)
             cc.pid_path = cc.root / 'data' / f'.sim_{key}.pid'
@@ -164,7 +179,7 @@ def _token_is_fresh_today(conn: BrokerConnection) -> bool:
 
 
 def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '',
-            one_min: str = '1') -> ControlCenter:
+            one_min: str = '1', rvol_mode: str = 'cumulative', rvol_length: str = '10') -> ControlCenter:
     """One scanner per broker owner (keyed by their user id). ``pins`` are the owner's manual
     watchlist tickers (comma-joined, canonical) — priority-scanned and force-included even if
     outside the chosen universe. They take effect on the owner's next scanner (re)start."""
@@ -175,7 +190,8 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '',
             cc = ControlCenter(demo=False, env_extra={
                 'FYERS_APP_ID': app_id, 'FYERS_ACCESS_TOKEN': token, 'RADAR_UNIVERSE_INDEX': idx,
                 'RADAR_MORNING_PINS': pins, 'RADAR_SCANNER_ID': key,
-                'RADAR_ONE_MINUTE': one_min})
+                'RADAR_ONE_MINUTE': one_min,
+                'RADAR_RVOL_MODE': rvol_mode, 'RADAR_RVOL_LENGTH': rvol_length})
             # Per-owner working files so concurrent brokers never collide (separate FYERS API lock —
             # each account has its own REST quota — plus separate selection, pid and log).
             cc.pid_path = cc.root / 'data' / f'.scanner_live_{key}.pid'
@@ -195,12 +211,16 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '',
             changed = (cur.get('FYERS_ACCESS_TOKEN') != token
                        or cur.get('FYERS_APP_ID') != app_id
                        or cur.get('RADAR_UNIVERSE_INDEX') != idx
-                       or cur.get('RADAR_ONE_MINUTE') != one_min)
+                       or cur.get('RADAR_ONE_MINUTE') != one_min
+                       or cur.get('RADAR_RVOL_MODE') != rvol_mode
+                       or cur.get('RADAR_RVOL_LENGTH') != rvol_length)
             cur['FYERS_ACCESS_TOKEN'] = token
             cur['FYERS_APP_ID'] = app_id
             cur['RADAR_UNIVERSE_INDEX'] = idx
             cur['RADAR_MORNING_PINS'] = pins
             cur['RADAR_ONE_MINUTE'] = one_min
+            cur['RADAR_RVOL_MODE'] = rvol_mode
+            cur['RADAR_RVOL_LENGTH'] = rvol_length
             if changed:
                 health.clear_health(key)   # fresh creds get a clean slate; re-reports on (re)start
                 try:
@@ -307,8 +327,9 @@ def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
     # broker's daily API quota and re-triggers the same error.
     if _auth_failed_health(conn) or _rate_limited_health(conn):
         return False
+    _rmode, _rlen = _rvol_env(conn.user)
     _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), _universe_index(conn.user),
-            watchpins.pins_env(db, conn.user_id), _one_minute(conn.user))
+            watchpins.pins_env(db, conn.user_id), _one_minute(conn.user), _rmode, _rlen)
     return True
 
 
@@ -341,8 +362,9 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
                         'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
                         'rate_limited': True, 'reason': rl.get('reason')}
 
+    _rmode, _rlen = _rvol_env(conn.user)
     cc = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), idx,
-                 watchpins.pins_env(db, conn.user_id), _one_minute(conn.user))
+                 watchpins.pins_env(db, conn.user_id), _one_minute(conn.user), _rmode, _rlen)
     st = cc.live_state()
 
     def _is_rl(text):

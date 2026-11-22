@@ -370,9 +370,11 @@ async def api_update_rvol_settings(request: Request, user: User = Depends(requir
     """Update user's RVOL calculation settings."""
     data = await request.json()
 
-    # Validation
-    valid_timeframes = ['day', 'session', 'week', 'month']
-    valid_modes = ['cumulative', 'per_bar', 'mean', 'median']
+    # Validation — only the anchors/modes actually implemented in radar.rvol are accepted, so the
+    # settings can never save a value that silently no-ops. (session/week/month and mean/median are
+    # not wired yet; add them here as they land.)
+    valid_timeframes = ['day']
+    valid_modes = ['cumulative', 'per_bar']
 
     if 'anchor_timeframe' in data and data['anchor_timeframe'] not in valid_timeframes:
         return JSONResponse({
@@ -624,9 +626,17 @@ async def api_debug_stock(request: Request, user: User = Depends(require_user), 
                     blocked_symbols=json_lib.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
                 )
 
+            # The user's RVOL calculation choice (mode/length) so the Debug tab matches the radar.
+            from radar.rvol import RvolConfig
+            rvol_cfg = RvolConfig(
+                mode=(user.settings.rvol_calculation_mode if user.settings else None) or 'cumulative',
+                length=(user.settings.rvol_length if user.settings else None) or 10,
+            )
+
             # Run analysis
             force = body.get('force', False)
-            result = analyze_single_stock(adapter, symbol_input, load_config(), force=force, prereq_config=prereq_config)
+            result = analyze_single_stock(adapter, symbol_input, load_config(), force=force,
+                                          prereq_config=prereq_config, rvol_cfg=rvol_cfg)
 
             return result
         finally:

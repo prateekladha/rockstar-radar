@@ -18,6 +18,12 @@
   "reconcile_signals_only": true,
   "min_confirm_rvol": 1.5,
   "min_watch_rvol": 1.0,
+  "rvol_mode": "cumulative",
+  "rvol_length": 10,
+  "rvol_thresholds": {
+    "per_bar": {"watch": 1.0, "ready": 1.25, "confirm": 1.5},
+    "cumulative": {"watch": 1.0, "ready": 1.1, "confirm": 1.2}
+  },
   "min_bar_turnover_cr": 0.3,
   "min_open_range_width_pct": 0.12,
   "max_open_range_width_pct": 2.5,

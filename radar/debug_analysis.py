@@ -24,7 +24,8 @@ def debug_cache_path(symbol: str, day: date, bar_minutes: int = 5) -> Path:
 
 
 def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
-                         force: bool = False, prereq_config: Optional[PrerequisiteConfig] = None) -> dict:
+                         force: bool = False, prereq_config: Optional[PrerequisiteConfig] = None,
+                         rvol_cfg=None) -> dict:
     """Fetch historical data and run SMC analysis for a single stock.
 
     Args:
@@ -71,7 +72,8 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
                 for c in cached_data['candles']
             ]
 
-            return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=True)
+            return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=True,
+                                     rvol_cfg=rvol_cfg)
 
         except Exception as e:
             print(f'[Debug] Cache load failed: {type(e).__name__}: {e}')
@@ -118,7 +120,8 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
         cache_path.write_text(json.dumps(cache_data, indent=2), encoding='utf-8')
         print(f'[Debug] Cached data to: {cache_path.name}')
 
-        return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=False)
+        return _run_smc_analysis(symbol, candles, config, prereq_config, from_cache=False,
+                                 rvol_cfg=rvol_cfg)
 
     except Exception as e:
         return {
@@ -130,7 +133,7 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
 
 def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
                      prereq_config: Optional[PrerequisiteConfig] = None,
-                     from_cache: bool = False) -> dict:
+                     from_cache: bool = False, rvol_cfg=None) -> dict:
     """Run SMC engine analysis on historical candles."""
     if len(candles) < 101:
         return {
@@ -175,26 +178,10 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
     # PRE-REQUISITE CHECKS (run before strategy evaluation)
     prereq_result = None
     if prereq_config:
-        # Calculate RVOL for the prerequisite check using the SAME metric the live SMC radar gates
-        # on: cumulative RVOL-at-time (the trader's "Relative Vol 1D cumulative"). The live SMC path
-        # (server.main._apply_prerequisite_filters) reads confluence['rvol_cum']; this reproduces it
-        # so debug and the radar agree. It compares the latest session's cumulative volume to the
-        # mean cumulative volume of recent prior sessions at the same point in the day — so a heavy
-        # day reads >1 (what the user sees as "good RVOL"), unlike a single end-of-day bar.
-        #
-        # Computed from the FULL fetched history, not state.candles (the engine caps that buffer at
-        # ~150 bars / ~2 sessions — too few prior days for a stable baseline).
-        from collections import defaultdict
-        from .rvol_cum import rvol_cumulative
-
-        by_day: dict = defaultdict(list)
-        for c in candles:
-            by_day[c.at.date()].append(c)
-        day_keys = sorted(by_day)
-        today_vols = [c.volume for c in by_day[day_keys[-1]]]
-        # Baseline = up to 20 most-recent prior sessions (matches the live scanner's lookback).
-        prior_vols = [[c.volume for c in by_day[d]] for d in day_keys[-21:-1]]
-        rvol = rvol_cumulative(today_vols, prior_vols, min_days=2)
+        # RVOL via the ONE product-wide metric (radar.rvol), in the user's configured mode/length,
+        # over the FULL fetched history — so the Debug tab and the live radar report the same number.
+        from .rvol import RvolConfig, rvol_from_candles
+        rvol = rvol_from_candles(rvol_cfg or RvolConfig.from_config(config), candles)
 
         # Run prerequisite check
         checker = PrerequisiteChecker(prereq_config)

@@ -132,6 +132,16 @@ def load_config(path: str | Path | None = None) -> dict:
     one_min = os.environ.get('RADAR_ONE_MINUTE', '').strip().lower()
     if one_min:
         cfg['use_one_minute_candles'] = one_min in ('1', 'true', 'yes', 'on')
+    # Per-user RVOL calculation choice reaches the scanner subprocess the same way: by environment.
+    rvol_mode = os.environ.get('RADAR_RVOL_MODE', '').strip().lower()
+    if rvol_mode:
+        cfg['rvol_mode'] = rvol_mode
+    rvol_length = os.environ.get('RADAR_RVOL_LENGTH', '').strip()
+    if rvol_length:
+        try:
+            cfg['rvol_length'] = int(rvol_length)
+        except ValueError:
+            pass
     return cfg
 
 

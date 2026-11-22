@@ -171,7 +171,8 @@ def run_sim(config: dict, port: int):
     engine = RadarEngine(instruments, config, day, mode='SIMULATION', on_signal=on_signal)
     # Baseline scales with the bar, exactly as the synthetic volumes do, so RVOL — and therefore
     # which setups confirm — is identical whichever interval the practice session runs at.
-    bl = {b.strftime('%H:%M'): int(50000 * engine.bar_minutes / 5) for b in bars}
+    from .rvol import synthetic_baseline
+    bl = synthetic_baseline({b.strftime('%H:%M'): int(50000 * engine.bar_minutes / 5) for b in bars})
     for ins in instruments:
         engine.set_baseline(ins.symbol, bl)
     engine.update_health('SIMULATION — synthetic accelerated feed, not a live market')
