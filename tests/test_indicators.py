@@ -1,7 +1,36 @@
 """Unit tests for radar.indicators (RSI, Fibonacci pivots, nearest_level)."""
 import unittest
 
-from radar.indicators import rsi, fib_pivots, nearest_level
+from radar.indicators import rsi, fib_pivots, nearest_level, ema, ema_series, ema_cross
+
+
+class EmaTests(unittest.TestCase):
+    def test_constant_series_equals_constant(self):
+        self.assertEqual(ema([10.0] * 30, 5), 10.0)
+
+    def test_insufficient_data_is_none(self):
+        self.assertIsNone(ema([1, 2, 3], 5))
+        self.assertEqual(ema_cross([1, 2, 3], 5, 20)['trend'], None)
+
+    def test_series_alignment(self):
+        s = ema_series([1, 2, 3, 4, 5], 3)
+        self.assertEqual(s[:2], [None, None])     # undefined before the seed
+        self.assertAlmostEqual(s[2], 2.0)          # SMA seed of first 3
+
+    def test_rising_is_bullish(self):
+        c = ema_cross(list(range(1, 61)), 5, 20)
+        self.assertEqual(c['trend'], 'BULLISH')
+        self.assertGreater(c['ema_fast'], c['ema_slow'])
+
+    def test_falling_is_bearish(self):
+        self.assertEqual(ema_cross(list(range(60, 0, -1)), 5, 20)['trend'], 'BEARISH')
+
+    def test_detects_last_upward_cross(self):
+        series = [100 - i for i in range(30)] + [70 + i * 2 for i in range(30)]
+        c = ema_cross(series, 5, 20)
+        self.assertEqual(c['trend'], 'BULLISH')
+        self.assertIsNotNone(c['cross'])
+        self.assertEqual(c['cross']['direction'], 'UP')
 
 
 class RsiTests(unittest.TestCase):

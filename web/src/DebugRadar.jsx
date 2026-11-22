@@ -122,6 +122,8 @@ export default function DebugRadar() {
             </div>
           )}
 
+          {result?.ema && <EmaSection ema={result.ema} />}
+
           {result && (
             <>
               <div className="banner ok" style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -302,6 +304,43 @@ const StatCard = ({ label, value, color }) => (
     </div>
   </div>
 )
+
+const EmaSection = ({ ema }) => {
+  if (!ema) return null
+  const trend = ema.trend
+  const tcolor = trend === 'BULLISH' ? '#48d3a4' : trend === 'BEARISH' ? '#ff8797' : '#93a0b6'
+  const tbg = trend === 'BULLISH' ? '#12301f' : trend === 'BEARISH' ? '#301216' : '#1b263a'
+  const cross = ema.cross
+  return (
+    <div className="panel" style={{ marginBottom: 24, background: '#131b2e' }}>
+      <div className="panel-h" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2>EMA 5 / EMA 20 Trend</h2>
+        <span style={{ padding: '4px 12px', borderRadius: 20, background: tbg, color: tcolor, fontWeight: 700, fontSize: 13 }}>
+          {trend || '—'}
+        </span>
+      </div>
+      <div className="panel-b" style={{ padding: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+          <StatCard label={`EMA ${ema.fast_period}`} value={ema.ema_fast != null ? ema.ema_fast.toFixed(2) : '—'} color="#8fb6ff" />
+          <StatCard label={`EMA ${ema.slow_period}`} value={ema.ema_slow != null ? ema.ema_slow.toFixed(2) : '—'} color="#c58fff" />
+          <StatCard label="Trend" value={trend || '—'} color={tcolor} />
+        </div>
+        <p className="note" style={{ marginTop: 12 }}>
+          {ema.ema_fast == null
+            ? `Not enough candles to compute EMA ${ema.slow_period}.`
+            : cross
+              ? <>Last crossover: EMA {ema.fast_period} crossed{' '}
+                  <strong style={{ color: cross.direction === 'UP' ? '#48d3a4' : '#ff8797' }}>
+                    {cross.direction === 'UP' ? 'above (bullish)' : 'below (bearish)'}
+                  </strong>{' '}
+                  EMA {ema.slow_period}, {cross.bars_ago} bar{cross.bars_ago === 1 ? '' : 's'} ago.</>
+              : `No EMA ${ema.fast_period}/${ema.slow_period} crossover in the loaded window — EMA ${ema.fast_period} has stayed ${trend === 'BULLISH' ? 'above' : 'below'} EMA ${ema.slow_period}.`}
+          {' '}(5-minute candles.)
+        </p>
+      </div>
+    </div>
+  )
+}
 
 const OpportunityCard = ({ opp, swingHigh, swingLow }) => {
   // Use opportunity data if available, otherwise fallback to swing pivot data
