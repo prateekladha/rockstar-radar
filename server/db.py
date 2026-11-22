@@ -57,6 +57,20 @@ _ADDED_COLUMNS = {
         'smc_alerts_enabled': 'INTEGER DEFAULT 0',
         'smc_min_score': 'INTEGER DEFAULT 70',
     },
+    'settings': {
+        # Prerequisite checks (mandatory before strategy evaluation) — PR #36
+        'prereq_min_rvol': 'FLOAT DEFAULT 1.0',
+        'prereq_rvol_enabled': 'INTEGER DEFAULT 1',
+        'prereq_min_liquidity_cr': 'FLOAT',
+        'prereq_min_price': 'FLOAT',
+        'prereq_max_price': 'FLOAT',
+        'prereq_allowed_sectors': 'TEXT',
+        'prereq_blocked_symbols': 'TEXT',
+        # RVOL calculation settings — PR #36
+        "rvol_anchor_timeframe": "VARCHAR(16) DEFAULT 'day'",
+        'rvol_length': 'INTEGER DEFAULT 10',
+        "rvol_calculation_mode": "VARCHAR(16) DEFAULT 'cumulative'",
+    },
 }
 
 
