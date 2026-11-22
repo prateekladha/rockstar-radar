@@ -122,7 +122,7 @@ export default function DebugRadar() {
             </div>
           )}
 
-          {(result?.ema || failInfo?.ema) && <EmaSection ema={result?.ema || failInfo?.ema} />}
+          {result?.ema && <EmaSection ema={result.ema} />}
 
           {result && (
             <>

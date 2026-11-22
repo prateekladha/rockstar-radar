@@ -175,11 +175,6 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
             'message': 'Could not analyze symbol'
         }
 
-    # EMA 5 / EMA 20 crossover trend — an independent strategy, computed on the signal-bar closes and
-    # NOT gated by the RVOL prerequisite, so the Debug tab shows it even when the prereq fails.
-    from .indicators import ema_cross
-    ema_info = ema_cross([c.close for c in candles], 5, 20)
-
     # PRE-REQUISITE CHECKS (run before strategy evaluation)
     prereq_result = None
     if prereq_config:
@@ -213,7 +208,6 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
                 'rvol_mode': cfg.mode,
                 'candles_count': len(candles),
                 'from_cache': from_cache,
-                'ema': ema_info,
             }
 
     # Build response
@@ -221,6 +215,11 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
 
     # Calculate score breakdown for detailed analysis
     score, breakdown = calculate_smc_score_with_breakdown(state, current_price)
+
+    # EMA 5 / EMA 20 crossover trend. Gated behind the prerequisite checks (RVOL) like the rest of
+    # strategy evaluation — we only reach here when the prereq passed (a failure returns early above).
+    from .indicators import ema_cross
+    ema_info = ema_cross([c.close for c in candles], 5, 20)
 
     result = {
         'success': True,
@@ -233,7 +232,7 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
         'atr': state.atr,
         'trend': state.trend,
         'score_breakdown': breakdown,  # Add detailed score breakdown
-        'ema': ema_info,               # EMA 5 / EMA 20 crossover trend (independent strategy)
+        'ema': ema_info,               # EMA 5 / EMA 20 crossover trend (only when prereqs pass)
     }
 
     if opportunity:
