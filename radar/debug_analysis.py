@@ -131,6 +131,78 @@ def analyze_single_stock(adapter: FyersAdapter, symbol_input: str, config: dict,
         }
 
 
+def _orb_status(symbol: str, candles: list[Candle], config: dict) -> dict:
+    """Replay the latest session's bars through the REAL ORB RadarEngine and report its final state.
+
+    Builds the instrument context (prior-session support/resistance + daily ATR%) and the RVOL
+    baseline from the fetched history, then feeds the latest session's 5m bars (the same bar-driven
+    path the backtest uses to reach CONFIRMED/RETEST_READY). Returns the engine's resulting ORB stage
+    and levels. Best-effort: any failure yields {'available': False, 'reason': ...} so the rest of the
+    Debug analysis is unaffected.
+    """
+    from collections import defaultdict
+    try:
+        from .engine import RadarEngine
+        from .rvol import build_baseline, RvolConfig
+
+        by_day: dict = defaultdict(list)
+        for c in candles:
+            if c.at.hour in range(9, 16):
+                by_day[c.at.date()].append(c)
+        days = sorted(by_day)
+        if len(days) < 11:
+            return {'available': False, 'reason': 'Needs ≥10 prior sessions for ORB context.'}
+        day = days[-1]
+        prior = days[:-1]
+        daily = {}
+        for d in days:
+            cs = sorted(by_day[d], key=lambda x: x.at)
+            daily[d] = (cs[0].open, max(x.high for x in cs), min(x.low for x in cs), cs[-1].close)
+        dl = [daily[d] for d in prior]
+        trs = [max(dl[i][1] - dl[i][2], abs(dl[i][1] - dl[i - 1][3]), abs(dl[i][2] - dl[i - 1][3]))
+               for i in range(1, len(dl))]
+        atr = (sum(trs[-14:]) / min(14, len(trs))) if trs else 0.0
+        last_close = dl[-1][3]
+        atr_pct = (atr / last_close * 100) if last_close else 0.0
+        pd20 = [daily[d] for d in prior[-20:]]
+        turns = sorted(sum(x.close * x.volume for x in by_day[d]) / 1e7 for d in prior[-20:])
+        med_turn = turns[len(turns) // 2] if turns else 0.0
+
+        inst = Instrument(symbol=symbol, daily_atr_pct=atr_pct, previous_close=daily[prior[-1]][3],
+                          resistance=sorted(x[1] for x in pd20), support=sorted(x[2] for x in pd20),
+                          median_turnover_cr=med_turn)
+        eng = RadarEngine([inst], config, session=day, mode='SIM')
+        eng.set_baseline(symbol, build_baseline(candles, day, RvolConfig.from_config(config).length))
+        session_bars = sorted(by_day[day], key=lambda x: x.at)
+        for bar in session_bars:
+            eng.ingest_closed_bar(symbol, bar)
+
+        st = eng.states[symbol]
+        op = st.opening
+        # A bar-only replay that never breaks out leaves the initial WAIT_OR; label it clearly.
+        no_breakout = st.state in ('WAIT_OR', 'NONE')
+        return {
+            'available': True,
+            'session': day.isoformat(),
+            'state': 'NO_BREAKOUT' if (no_breakout and op) else st.state,
+            'or_formed': bool(op),
+            'or_high': round(op.high, 2) if op else None,
+            'or_low': round(op.low, 2) if op else None,
+            'side': st.side or None,
+            'score': st.score,
+            'rvol': round(st.rvol, 2) if st.rvol is not None else None,
+            'vwap': round(st.vwap, 2) if st.vwap else None,
+            'entry': round(st.entry, 2) if st.entry else None,
+            'stop': round(st.stop, 2) if st.stop else None,
+            'target': round(st.target, 2) if st.target else None,
+            'net_rr': round(st.net_rr, 2) if st.net_rr else None,
+            'reason': st.reason or ('Opening range formed; no 5-minute close beyond it.'
+                                    if (no_breakout and op) else ''),
+        }
+    except Exception as e:
+        return {'available': False, 'reason': f'{type(e).__name__}: {e}'}
+
+
 def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
                      prereq_config: Optional[PrerequisiteConfig] = None,
                      from_cache: bool = False, rvol_cfg=None, ema_cfg=None) -> dict:
@@ -235,6 +307,14 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
     ema_info = ema_cross([_src(c) for c in candles], fast, slow, offset)
     ema_info['source'] = source
 
+    # ORB status — replay the latest session through the real ORB engine (gated behind prereqs too).
+    # Use the user's RVOL mode/length so the ORB RVOL + gates match their live radar.
+    orb_cfg = dict(config)
+    if rvol_cfg is not None:
+        orb_cfg['rvol_mode'] = rvol_cfg.mode
+        orb_cfg['rvol_length'] = rvol_cfg.length
+    orb_info = _orb_status(symbol, candles, orb_cfg)
+
     result = {
         'success': True,
         'symbol': symbol,
@@ -247,6 +327,7 @@ def _run_smc_analysis(symbol: str, candles: list[Candle], config: dict,
         'trend': state.trend,
         'score_breakdown': breakdown,  # Add detailed score breakdown
         'ema': ema_info,               # EMA 5 / EMA 20 crossover trend (only when prereqs pass)
+        'orb': orb_info,               # ORB engine status for the latest session (only when prereqs pass)
     }
 
     if opportunity:
