@@ -105,6 +105,10 @@ class Settings(Base):
     prereq_max_price = Column(Float)
     prereq_allowed_sectors = Column(Text)      # JSON array
     prereq_blocked_symbols = Column(Text)      # JSON array
+    # RVOL calculation settings
+    rvol_anchor_timeframe = Column(String(16), default='day')
+    rvol_length = Column(Integer, default=10)
+    rvol_calculation_mode = Column(String(16), default='cumulative')
     updated_at = Column(DateTime, default=_now, onupdate=_now)
     user = relationship('User', back_populates='settings')
 

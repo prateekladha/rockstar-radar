@@ -12,13 +12,16 @@ export default function Settings() {
   const [cfg, setCfg] = useState(null)
   const [uni, setUni] = useState(null)
   const [prereq, setPrereq] = useState(null)
+  const [rvolSettings, setRvolSettings] = useState(null)
   const [msg, setMsg] = useState('')
   const [prereqMsg, setPrereqMsg] = useState('')
+  const [rvolMsg, setRvolMsg] = useState('')
 
   useEffect(() => {
     api('/api/settings').then(setCfg).catch(e => setMsg(e.message))
     api('/api/universe').then(setUni).catch(() => {})
     api('/api/prerequisites').then(setPrereq).catch(e => console.error('Failed to load prerequisites:', e))
+    api('/api/rvol-settings').then(setRvolSettings).catch(e => console.error('Failed to load RVOL settings:', e))
   }, [])
   const saveUni = async (idx) => {
     const r = await api('/api/universe', { method: 'PUT', body: { universe_index: idx } })
@@ -163,6 +166,93 @@ export default function Settings() {
                 setPrereqMsg('Error: ' + e.message)
               }
             }}>Save prerequisite settings</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {rvolSettings && (
+      <div className="panel" style={{ marginTop: 16 }}>
+        <div className="panel-h">
+          <h2>RVOL Calculation Settings</h2>
+          <span className="hint">Configure how Relative Volume is calculated</span>
+        </div>
+        <div className="panel-b">
+          {rvolMsg && <div className="banner ok">{rvolMsg}</div>}
+          <p className="note" style={{ marginBottom: 16 }}>
+            These settings control how RVOL (Relative Volume) is calculated for opportunities.
+            Changes apply to both ORB and SMC scanners on next restart.
+          </p>
+
+          <div className="settings-grid">
+            {/* Anchor Timeframe */}
+            <div className="field">
+              <label>Anchor Timeframe</label>
+              <Select
+                value={rvolSettings.anchor_timeframe || 'day'}
+                onChange={(val) => setRvolSettings({ ...rvolSettings, anchor_timeframe: val })}
+                width={'100%'}
+                options={[
+                  { value: 'session', label: 'Session (Intraday only)' },
+                  { value: 'day', label: 'Day (Default)' },
+                  { value: 'week', label: 'Week' },
+                  { value: 'month', label: 'Month' }
+                ]}
+              />
+              <p className="note" style={{ marginTop: 8 }}>
+                Time period for volume comparison. "Day" compares to same time on previous days.
+              </p>
+            </div>
+
+            {/* Length */}
+            <div className="field">
+              <label>Length (Lookback Period)</label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={rvolSettings.length ?? 10}
+                onChange={ev => setRvolSettings({ ...rvolSettings, length: parseInt(ev.target.value) || 10 })}
+              />
+              <p className="note" style={{ marginTop: 8 }}>
+                Number of previous periods to compare against. Default: 10 days.
+              </p>
+            </div>
+
+            {/* Calculation Mode */}
+            <div className="field">
+              <label>Calculation Mode</label>
+              <Select
+                value={rvolSettings.calculation_mode || 'cumulative'}
+                onChange={(val) => setRvolSettings({ ...rvolSettings, calculation_mode: val })}
+                width={'100%'}
+                options={[
+                  { value: 'cumulative', label: 'Cumulative (Default)' },
+                  { value: 'per_bar', label: 'Per Bar (Spot)' },
+                  { value: 'mean', label: 'Mean Average' },
+                  { value: 'median', label: 'Median (Robust)' }
+                ]}
+              />
+              <p className="note" style={{ marginTop: 8 }}>
+                How to aggregate volume data. "Cumulative" compares total volume from session start.
+              </p>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <button className="btn primary" onClick={async () => {
+              try {
+                const result = await api('/api/rvol-settings', { method: 'PUT', body: rvolSettings })
+                setRvolSettings(result)
+                setRvolMsg('RVOL settings saved. Restart scanner to apply changes.')
+                setTimeout(() => setRvolMsg(''), 5000)
+              } catch (e) {
+                setRvolMsg('Error: ' + e.message)
+              }
+            }}>Save RVOL settings</button>
+            <span style={{ marginLeft: 12, color: '#888', fontSize: 13 }}>
+              Scanner restart required for changes to take effect
+            </span>
           </div>
         </div>
       </div>

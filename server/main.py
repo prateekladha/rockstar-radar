@@ -346,6 +346,69 @@ async def api_update_prerequisites(request: Request, user: User = Depends(requir
     return api_get_prerequisites(user)
 
 
+@app.get('/api/rvol-settings')
+def api_get_rvol_settings(user: User = Depends(require_user)):
+    """Get user's RVOL calculation settings."""
+    if not user.settings:
+        # Return defaults
+        return {
+            'anchor_timeframe': 'day',
+            'length': 10,
+            'calculation_mode': 'cumulative'
+        }
+
+    return {
+        'anchor_timeframe': user.settings.rvol_anchor_timeframe or 'day',
+        'length': user.settings.rvol_length or 10,
+        'calculation_mode': user.settings.rvol_calculation_mode or 'cumulative'
+    }
+
+
+@app.put('/api/rvol-settings')
+async def api_update_rvol_settings(request: Request, user: User = Depends(require_user),
+                                   db: Session = Depends(get_db)):
+    """Update user's RVOL calculation settings."""
+    data = await request.json()
+
+    # Validation
+    valid_timeframes = ['day', 'session', 'week', 'month']
+    valid_modes = ['cumulative', 'per_bar', 'mean', 'median']
+
+    if 'anchor_timeframe' in data and data['anchor_timeframe'] not in valid_timeframes:
+        return JSONResponse({
+            'error': f'anchor_timeframe must be one of: {", ".join(valid_timeframes)}'
+        }, status_code=400)
+
+    if 'calculation_mode' in data and data['calculation_mode'] not in valid_modes:
+        return JSONResponse({
+            'error': f'calculation_mode must be one of: {", ".join(valid_modes)}'
+        }, status_code=400)
+
+    if 'length' in data:
+        try:
+            length = int(data['length'])
+            if length < 1 or length > 100:
+                return JSONResponse({'error': 'length must be between 1 and 100'}, status_code=400)
+        except (TypeError, ValueError):
+            return JSONResponse({'error': 'length must be a number'}, status_code=400)
+
+    # Get or create settings
+    st = user.settings or Settings(user_id=user.id, data={})
+
+    # Update fields
+    if 'anchor_timeframe' in data:
+        st.rvol_anchor_timeframe = data['anchor_timeframe']
+    if 'length' in data:
+        st.rvol_length = int(data['length'])
+    if 'calculation_mode' in data:
+        st.rvol_calculation_mode = data['calculation_mode']
+
+    db.add(st)
+    db.commit()
+
+    return api_get_rvol_settings(user)
+
+
 def _apply_prerequisite_filters(opportunities: list, user: User, strategy: str = 'ORB') -> tuple[list, int]:
     """Apply user's prerequisite filters to opportunities.
 
