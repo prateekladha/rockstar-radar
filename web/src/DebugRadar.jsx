@@ -122,6 +122,8 @@ export default function DebugRadar() {
             </div>
           )}
 
+          {result?.orb && <OrbSection orb={result.orb} />}
+
           {result?.ema && <EmaSection ema={result.ema} />}
 
           {result && (
@@ -336,6 +338,69 @@ const EmaSection = ({ ema }) => {
                   EMA {ema.slow_period}, {cross.bars_ago} bar{cross.bars_ago === 1 ? '' : 's'} ago.</>
               : `No EMA ${ema.fast_period}/${ema.slow_period} crossover in the loaded window — EMA ${ema.fast_period} has stayed ${trend === 'BULLISH' ? 'above' : 'below'} EMA ${ema.slow_period}.`}
           {' '}(5-minute candles{ema.source ? ` · ${ema.source}` : ''}{ema.offset ? ` · offset ${ema.offset}` : ''}.)
+        </p>
+      </div>
+    </div>
+  )
+}
+
+const ORB_LABELS = {
+  RETEST_READY: 'Retest Ready (actionable)', CONFIRMED: 'Breakout Confirmed',
+  BREAKOUT_PENDING: 'Breakout Pending', READY: 'Ready', WATCH: 'Watching',
+  RISK_FAIL: 'Retest — Risk Fail', FAILED: 'Retest Failed', EXPIRED: 'Retest Expired',
+  RETRACTED: 'Retracted', NO_BREAKOUT: 'No Breakout', NO_SETUP: 'No Setup',
+  FILTERED: 'Filtered (OR width)', WAIT_OR: 'Awaiting Opening Range',
+}
+const orbColor = (s) => (
+  s === 'RETEST_READY' ? '#48d3a4'
+    : s === 'CONFIRMED' ? '#8fb6ff'
+      : ['BREAKOUT_PENDING', 'READY', 'WATCH'].includes(s) ? '#ffcf70'
+        : ['RISK_FAIL', 'FAILED', 'EXPIRED', 'RETRACTED'].includes(s) ? '#ff8797'
+          : '#93a0b6')
+
+const OrbSection = ({ orb }) => {
+  if (!orb) return null
+  if (!orb.available) {
+    return (
+      <div className="panel" style={{ marginBottom: 24, background: '#131b2e' }}>
+        <div className="panel-h"><h2>ORB Status</h2></div>
+        <div className="panel-b" style={{ padding: 20 }}>
+          <p className="note" style={{ margin: 0 }}>ORB status unavailable — {orb.reason || 'not enough history.'}</p>
+        </div>
+      </div>
+    )
+  }
+  const col = orbColor(orb.state)
+  const hasPlan = orb.entry && orb.stop && orb.target
+  return (
+    <div className="panel" style={{ marginBottom: 24, background: '#131b2e' }}>
+      <div className="panel-h" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2>ORB Status</h2>
+        <span style={{ padding: '4px 12px', borderRadius: 20, background: '#1b263a', color: col, fontWeight: 700, fontSize: 13 }}>
+          {ORB_LABELS[orb.state] || orb.state}
+        </span>
+      </div>
+      <div className="panel-b" style={{ padding: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+          <StatCard label="Session" value={orb.session || '—'} />
+          <StatCard label="Side" value={orb.side || '—'} color={orb.side === 'LONG' ? '#48d3a4' : orb.side === 'SHORT' ? '#ff8797' : '#f2f6ff'} />
+          <StatCard label="OR High" value={orb.or_high != null ? orb.or_high : '—'} color="#ff8797" />
+          <StatCard label="OR Low" value={orb.or_low != null ? orb.or_low : '—'} color="#48d3a4" />
+          <StatCard label="RVOL" value={orb.rvol != null ? orb.rvol : '—'} />
+          <StatCard label="Score" value={orb.score ?? '—'} />
+        </div>
+        {hasPlan && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginTop: 12 }}>
+            <StatCard label="Entry" value={orb.entry} color="#8fb6ff" />
+            <StatCard label="Stop" value={orb.stop} color="#ff8797" />
+            <StatCard label="Target" value={orb.target} color="#48d3a4" />
+            <StatCard label="Net R:R" value={orb.net_rr != null ? `${orb.net_rr}:1` : '—'} />
+          </div>
+        )}
+        {orb.reason && <p className="note" style={{ marginTop: 12 }}>{orb.reason}</p>}
+        <p className="note" style={{ marginTop: 8, color: '#6b7a93' }}>
+          Replayed from the latest session's 5-minute candles. CONFIRMED is a breakout, not an entry —
+          only RETEST_READY is actionable.
         </p>
       </div>
     </div>
