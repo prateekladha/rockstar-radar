@@ -16,28 +16,27 @@ export default function DebugRadar() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [failInfo, setFailInfo] = useState(null)   // full non-success response (e.g. prereq fail)
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+  const run = async (force) => {
     if (!symbol.trim()) {
       setError('Please enter a stock symbol')
       return
     }
-
     setLoading(true)
     setError(null)
     setResult(null)
-
+    setFailInfo(null)
     try {
       const data = await api('/api/debug-stock', {
         method: 'POST',
-        body: { symbol: symbol.trim() }
+        body: { symbol: symbol.trim(), ...(force ? { force: true } : {}) }
       })
-
       if (data.success) {
         setResult(data)
       } else {
         setError(data.message || data.error || 'Analysis failed')
+        setFailInfo(data)   // keep the full payload so we can show details + a Refetch button
       }
     } catch (e) {
       setError(e.message || 'Request failed')
@@ -46,29 +45,8 @@ export default function DebugRadar() {
     }
   }
 
-  const handleRefetch = async () => {
-    if (!symbol.trim()) return
-
-    setLoading(true)
-    setError(null)
-
-    try {
-      const data = await api('/api/debug-stock', {
-        method: 'POST',
-        body: { symbol: symbol.trim(), force: true }
-      })
-
-      if (data.success) {
-        setResult(data)
-      } else {
-        setError(data.message || data.error || 'Analysis failed')
-      }
-    } catch (e) {
-      setError(e.message || 'Request failed')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const handleSubmit = (e) => { e.preventDefault(); run(false) }
+  const handleRefetch = () => run(true)
 
   return (
     <>
@@ -118,8 +96,29 @@ export default function DebugRadar() {
           </form>
 
           {error && (
-            <div className="banner err" style={{ marginBottom: 20 }}>
-              ❌ <strong>Error:</strong> {error}
+            <div className="banner err" style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <span>
+                ❌ <strong>{failInfo?.error || 'Error'}:</strong> {error}
+                {failInfo && (failInfo.rvol !== undefined) && (
+                  <> — RVOL {failInfo.rvol === null ? 'unavailable' : Number(failInfo.rvol).toFixed(2)}
+                    {failInfo.prereq_details?.rvol?.threshold !== undefined &&
+                      ` (need ≥ ${failInfo.prereq_details.rvol.threshold})`}
+                    {failInfo.rvol_mode && `, ${failInfo.rvol_mode} mode`}
+                    {failInfo.candles_count !== undefined && `, ${failInfo.candles_count} candles`}
+                    {failInfo.from_cache && ' — loaded from cache'}
+                  </>
+                )}
+              </span>
+              {failInfo && (
+                <button
+                  className="btn"
+                  onClick={handleRefetch}
+                  disabled={loading}
+                  style={{ fontSize: 12, padding: '6px 12px', whiteSpace: 'nowrap' }}
+                >
+                  🔄 Refetch fresh data
+                </button>
+              )}
             </div>
           )}
 
