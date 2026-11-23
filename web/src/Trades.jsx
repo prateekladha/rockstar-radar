@@ -51,11 +51,12 @@ export default function Trades() {
             <span className="hint">Not filled yet — waiting for your entry. Cancel any time.</span></div>
           <div className="tbl-wrap" style={{ maxHeight: 'none' }}>
             <table>
-              <thead><tr><th>Symbol</th><th>Side</th><th className="num">Qty</th><th className="num">Entry</th>
+              <thead><tr><th>Symbol</th><th>Via</th><th>Side</th><th className="num">Qty</th><th className="num">Entry</th>
                 <th className="num">Stop</th><th className="num">Target</th><th>Mode</th><th></th></tr></thead>
               <tbody>
                 {working.map(o => (
                   <tr key={o.id}><td className="sym-cell">{bare(o.symbol)}</td>
+                    <td><SourceTag src={o.source} /></td>
                     <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
                     <td className="num">{o.qty}</td><td className="num">{fmt(o.entry)}</td>
                     <td className="num">{fmt(o.stop)}</td><td className="num">{fmt(o.target)}</td>
@@ -74,17 +75,18 @@ export default function Trades() {
           <button className="btn primary" onClick={() => setPlace(true)}>+ New order</button></div>
         <div className="tbl-wrap" style={{ maxHeight: 'none' }}>
           <table>
-            <thead><tr><th>Symbol</th><th>Side</th><th className="num">Qty</th><th className="num">Fill</th>
+            <thead><tr><th>Symbol</th><th>Via</th><th>Side</th><th className="num">Qty</th><th className="num">Fill</th>
               <th className="num">Stop</th><th className="num">Target</th><th className="num">Running P&L</th><th></th></tr></thead>
             <tbody>
               {positions.length ? positions.map(o => (
                 <tr key={o.id}><td className="sym-cell">{bare(o.symbol)}</td>
+                  <td><SourceTag src={o.source} /></td>
                   <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
                   <td className="num">{o.qty}</td><td className="num">{fmt(o.fill_price != null ? o.fill_price : o.entry)}</td>
                   <td className="num">{fmt(o.stop)}</td><td className="num">{fmt(o.target)}</td>
                   <td className={'num ' + (o.unrealized != null ? (o.unrealized >= 0 ? 'up' : 'down') : '')}>{o.unrealized != null ? money(o.unrealized) : '—'}</td>
                   <td className="num"><button className="btn danger" onClick={() => close(o.id)}>Close</button></td></tr>
-              )) : <tr><td colSpan="8"><div className="empty">No open positions. Place an order or act on a radar signal.</div></td></tr>}
+              )) : <tr><td colSpan="9"><div className="empty">No open positions. Place an order or act on a radar signal.</div></td></tr>}
             </tbody>
           </table>
         </div>
@@ -105,12 +107,13 @@ export default function Trades() {
         </div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Placed</th><th>Symbol</th><th>Side</th><th className="num">Qty</th>
+            <thead><tr><th>Placed</th><th>Symbol</th><th>Via</th><th>Side</th><th className="num">Qty</th>
               <th className="num">Entry → Exit</th><th>Status</th><th className="num">P&L</th><th className="num">R</th></tr></thead>
             <tbody>
               {orders.items.map(o => (
                 <tr key={o.id}><td className="dim">{fmtDateTime(o.created_at)}</td>
                   <td className="sym-cell">{bare(o.symbol)}</td>
+                  <td><SourceTag src={o.source} /></td>
                   <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
                   <td className="num">{o.qty}</td>
                   <td className="num">{fmt(o.fill_price != null ? o.fill_price : o.entry)} → {o.exit_price != null ? fmt(o.exit_price) : '—'}</td>
@@ -131,6 +134,19 @@ export default function Trades() {
 
 const statusLabel = (s) => ({ pending: 'Working', open: 'Open', closed: 'Closed',
   cancelled: 'Cancelled', rejected: 'Rejected' }[s] || s)
+
+// Which strategy placed this order (Order.source). Lets you tell SMC vs ORB vs your own trades apart.
+const SOURCE_META = {
+  auto_smc: { lbl: 'SMC', color: '#8fb6ff', tip: 'Auto-traded by the SMC strategy' },
+  auto: { lbl: 'ORB', color: '#e9c46a', tip: 'Auto-traded by the ORB radar' },
+  signal: { lbl: 'Signal', color: '#48d3a4', tip: 'You placed this from a radar signal' },
+  manual: { lbl: 'Manual', color: '#93a0b6', tip: 'You placed this manually' },
+}
+const SourceTag = ({ src }) => {
+  const m = SOURCE_META[src] || SOURCE_META.manual
+  return <span title={m.tip} style={{ padding: '2px 7px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+    color: m.color, background: m.color + '22', border: `1px solid ${m.color}44`, whiteSpace: 'nowrap' }}>{m.lbl}</span>
+}
 function statusChip(o) {
   if (o.status === 'closed') return (o.pnl >= 0 ? 'CONFIRMED' : 'FAILED')
   if (o.status === 'open') return 'READY'

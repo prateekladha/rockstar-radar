@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 from .models import Candle, Instrument, Signal, SymbolState, Tick
 from .risk import position_size
-from .rvol import RvolConfig, rvol_runtime, rvol_thresholds
+from .rvol import RvolConfig, baseline_has_data, rvol_runtime, rvol_thresholds
 from .utils import IST, bar_start, market_dt, now_ist, signal_bar_minutes
 
 
@@ -703,7 +703,8 @@ class RadarEngine:
                     'morning_monitored': sum(r['source'] == 'MORNING' for r in rows),
                     'received_ticks': sum(bool(st.last_tick) for st in self.states.values()),
                     'anchors_ready': sum(bool(st.opening) for st in self.states.values()),
-                    'baselines_ready': sum(bool(self.baselines.get(s)) for s in self.states),
+                    'baselines_ready': sum(baseline_has_data(self.baselines.get(s), self.rvol_cfg.mode)
+                                           for s in self.states),
                     'active_candidates': len(actionable),
                     'counts': dict(counts), 'top5': actionable[:5],
                     'all': sorted(rows, key=lambda r: (-r['score'], r['symbol'])),
