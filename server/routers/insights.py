@@ -2,6 +2,7 @@
 from __future__ import annotations
 import csv
 import io
+import json
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -144,9 +145,53 @@ def audit_csv(user: User = Depends(require_user), db: Session = Depends(get_db))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(['placed', 'closed', 'symbol', 'side', 'qty', 'entry', 'stop', 'target',
-                'exit', 'status', 'mode', 'pnl', 'result_r'])
+                'exit', 'status', 'mode', 'source', 'exit_reason', 'gross_pnl', 'charges',
+                'pnl_net', 'result_r', 'margin_used'])
     for o in rows:
         w.writerow([o.created_at, o.closed_at, o.symbol, o.side, o.qty, o.entry, o.stop,
-                    o.target, o.exit_price, o.status, o.mode, o.pnl, o.result_r])
+                    o.target, o.exit_price, o.status, o.mode, o.source, o.exit_reason,
+                    o.gross_pnl, o.charges, o.pnl, o.result_r, o.margin_used])
     return StreamingResponse(iter([buf.getvalue()]), media_type='text/csv',
                              headers={'Content-Disposition': 'attachment; filename=rockstar_trades.csv'})
+
+
+@router.get('/api/insights/strategy-review')
+def strategy_review(user: User = Depends(require_user), db: Session = Depends(get_db),
+                    mode: str = 'paper'):
+    """End-of-session strategy review (docs/PAPER_LIVE_PARITY.md): SMC realised R by entry-score
+    bucket (to validate/kill the auto-trade score gate), a cost summary (gross vs charges vs net),
+    and a breakdown of how trades exited. Computed from the user's own closed trades."""
+    from radar.smc_engine import score_bucket_report
+    q = db.query(Order).filter_by(user_id=user.id, status='closed')
+    q = q.filter(Order.sim == (1 if user.sim_enabled else 0))
+    if not user.sim_enabled and mode in ('paper', 'live'):
+        q = q.filter(Order.mode == mode)
+    closed = q.all()
+
+    # SMC score buckets — pull the entry score from the features snapshot captured at entry.
+    samples = []
+    for o in closed:
+        if o.source != 'auto_smc':
+            continue
+        score = None
+        if o.features:
+            try:
+                score = (json.loads(o.features) or {}).get('score')
+            except (ValueError, TypeError):
+                score = None
+        samples.append({'score': score, 'result_r': o.result_r, 'pnl': o.pnl})
+
+    gross = round(sum(o.gross_pnl or 0.0 for o in closed), 2)
+    charges = round(sum(o.charges or 0.0 for o in closed), 2)
+    net = round(sum(o.pnl or 0.0 for o in closed), 2)
+    exits: dict[str, int] = {}
+    for o in closed:
+        exits[o.exit_reason or 'other'] = exits.get(o.exit_reason or 'other', 0) + 1
+    return {
+        'mode': 'sim' if user.sim_enabled else mode,
+        'trades': len(closed),
+        'costs': {'gross_pnl': gross, 'charges': charges, 'net_pnl': net,
+                  'charges_pct_of_gross': round(100 * charges / abs(gross), 1) if gross else None},
+        'exit_reasons': exits,
+        'smc_score_buckets': score_bucket_report(samples),
+    }
