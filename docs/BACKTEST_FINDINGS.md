@@ -174,3 +174,29 @@ a fixed swing-level + hold-to-square-off approximation does not reproduce. **Dec
 default-OFF** (so the trader can still experiment live in paper/sim, where their timing differs from a
 mechanical replay), do **not** flip defaults, and keep the real path = learn from the trader's own logged
 discretionary trades.
+
+---
+
+## Addendum (2026-11-23): the ORB radar was hiding ~92% of retests (ATR-floor stop + 2:1 gate)
+
+Running pytest in CI for the first time surfaced two long-failing `test_radar` cases. Root cause: the
+ORB retest stop was `max(structure, intraday_atr_stop_mult × daily-ATR)` — the ATR "floor" (default
+0.5 × ~1.8% ≈ 0.9% risk) over-widens risk on a nearby target, so the hard 2:1 net-R:R gate marks the
+setup `RISK_FAIL` and **hides it from the radar**. Backtest on the 22-day set (98 symbols, RETEST_READY
+trigger, per-bar RVOL), 1st-half/2nd-half split:
+
+| orb_stop_mode / gate | trades | win% | total | 1st | 2nd |
+|---|---:|---:|---:|---:|---:|
+| atr_floor m0.5, gate 2.0 (OLD default) | **10** | 20% | −7,796 | −8,369 | 573 |
+| atr_floor m0.35, gate 2.0 | 22 | 40% | −6,793 | −11,968 | 5,175 |
+| atr_floor m0.25, gate 2.0 | 42 | 33% | −14,558 | −13,255 | −1,303 |
+| **structure, gate 2.0 (NEW default)** | **128** | 25% | +94,043 | −33,901 | +127,945 |
+| structure, gate 1.5 | 152 | 30% | +139,879 | −9,071 | +148,950 |
+
+**Robust finding (regime-independent): ATR-floor at any multiple yields ~10–74 signals/month and loses;
+`structure` yields 128+ — the thin ORB radar was this.** **Honest caveat:** the positive P&L is
+regime-dependent (2nd half, a trend, dominates; win% only ~25–30%) — NOT a mechanical edge, same as the
+main campaign. So the value is **decision-support visibility** (the trader sees the retests and applies
+their own entries/exits/stops, which the displayed stop explicitly flags as "ESTIMATE ONLY"), not
+auto-trading this. **Change: `orb_stop_mode` config flag; default flipped `atr_floor` → `structure`**
+(reversible). Do NOT read this as a signal to auto-trade ORB.

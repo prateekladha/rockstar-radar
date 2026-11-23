@@ -53,14 +53,7 @@ jobs:
           RADAR_ORDER_ENGINE: '0'
         run: |
           pip install pytest
-          # Two PRE-EXISTING failures in test_radar (fail on main and before the RVOL work): they expect
-          # a tight STRUCTURAL stop, but the ORB engine's ATR stop (intraday_atr_stop_mult=0.5 × ~1.8%
-          # ATR) widens risk past the hard 2:1 gate → RISK_FAIL. This is the static-R:R over-widening
-          # issue tracked separately (see docs/BACKTEST_FINDINGS.md R:R addendum), NOT a migration change.
-          # Deselected so the gate is green on everything else; remove once the ORB stop/R:R is retuned.
-          python -m pytest -q \
-            --deselect 'tests/test_radar.py::RadarTests::test_retest_requires_real_target_and_room' \
-            --deselect 'tests/test_radar.py::RadarTests::test_demo_100_no_broker_needed'
+          python -m pytest -q
 
       # ---- Infra validation (OKE migration): Terraform + Helm must stay valid ----
       - uses: hashicorp/setup-terraform@v3

@@ -511,18 +511,30 @@ class RadarEngine:
         if not retest_ok:
             return
         entry = c.close
-        # Stop beyond the OR level and the retest wick, but WIDENED to at least a fraction of the
-        # stock's daily ATR so it isn't a sub-0.2% hair-trigger that noise takes out. Risk distance =
-        # max(structure distance, atr_mult × daily ATR). atr_mult is configurable (default 0.5).
+        # Stop placement (orb_stop_mode):
+        #   'atr_floor' (default): stop beyond the OR level and the retest wick, but WIDENED to at least
+        #       atr_mult × daily ATR so it isn't a sub-0.2% hair-trigger noise takes out. Risk distance =
+        #       max(structure distance, atr_mult × ATR). Protects against noise, but on a nearby target
+        #       the wide risk can drop net R:R under the gate (→ RISK_FAIL, setup hidden).
+        #   'structure': stop at the structural level only (just beyond the OR level / retest wick), no
+        #       ATR widening — the way a discretionary trader places it. Tighter risk, better R:R, but
+        #       more exposed to noise. ATR is still the fallback when there's no structural level.
         atr_mult = self.config.get('intraday_atr_stop_mult', 0.5)
+        stop_mode = self.config.get('orb_stop_mode', 'atr_floor')
         atr_dist = entry * (st.info.daily_atr_pct or 0) / 100 * atr_mult
         if st.confirmed_side == 'LONG':
             struct_stop = min(op.high * (1 - 0.001), c.low * (1 - 0.0005))
-            stop = min(struct_stop, entry - atr_dist) if atr_dist else struct_stop
+            if stop_mode == 'structure':
+                stop = struct_stop
+            else:
+                stop = min(struct_stop, entry - atr_dist) if atr_dist else struct_stop
             targets = sorted(x for x in st.info.resistance if x > entry * 1.001)
         else:
             struct_stop = max(op.low * (1 + 0.001), c.high * (1 + 0.0005))
-            stop = max(struct_stop, entry + atr_dist) if atr_dist else struct_stop
+            if stop_mode == 'structure':
+                stop = struct_stop
+            else:
+                stop = max(struct_stop, entry + atr_dist) if atr_dist else struct_stop
             targets = sorted((x for x in st.info.support if x < entry * 0.999), reverse=True)
         target = targets[0] if targets else None
         rr = None
