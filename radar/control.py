@@ -73,6 +73,22 @@ EDITABLE_CONFIG = {
     'auto_trade_smc': ('bool', None, None),
     'auto_trade_smc_min_score': ('int', 50, 100),
     'auto_trade_smc_atr_stop_mult': ('float', 0.5, 5.0),
+    # SMC exit/entry shaping (data-driven from the 2026-11-23 live run — see docs/BACKTEST_FINDINGS.md).
+    # 'smc_runner_target' lets winners ride to the stop/square-off instead of a fixed target (the
+    # profit engine); 'smc_enforce_min_rr' keeps/drops the hard 2:1 reward:risk reject;
+    # 'smc_block_reentry_after_stop' skips a symbol for the rest of the day once it took a stop
+    # (kills the re-entry churn). All three are per-user overridable; config.json holds the default.
+    'smc_runner_target': ('bool', None, None),
+    'smc_enforce_min_rr': ('bool', None, None),
+    'smc_block_reentry_after_stop': ('bool', None, None),
+    # Stop placement. 'choice' is a case-sensitive enum (unlike 'enum', which upper-cases) because
+    # the engines compare these against lowercase literals. SMC: order-block edge, then either a flat
+    # ATR distance ('ob_atr') or the nearest swing ('structure'). ORB retest: structural level
+    # widened to >= ATR floor ('atr_floor') or the bare structural level ('structure').
+    'smc_stop_mode': ('choice', ('ob_atr', 'structure'), None),
+    'orb_stop_mode': ('choice', ('atr_floor', 'structure'), None),
+    # Max auto entries per symbol per day (both auto strategies share the count); re-entry churn guard.
+    'max_trades_per_symbol': ('int', 1, 20),
 }
 
 
@@ -95,6 +111,14 @@ def validate_config_patch(patch: dict) -> dict:
         elif kind == 'enum':
             allowed = lo  # for enum, the 2nd slot holds the tuple of allowed values
             sval = str(value).upper()
+            if sval not in allowed:
+                raise ControlError(f'{key} must be one of {", ".join(allowed)}, got {value!r}')
+            value = sval
+        elif kind == 'choice':
+            # Case-sensitive enum: the engines compare against lowercase literals, so (unlike 'enum')
+            # the value is matched as-is rather than upper-cased.
+            allowed = lo  # 2nd slot holds the tuple of allowed values
+            sval = str(value)
             if sval not in allowed:
                 raise ControlError(f'{key} must be one of {", ".join(allowed)}, got {value!r}')
             value = sval

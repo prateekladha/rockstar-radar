@@ -113,9 +113,11 @@ function Shell({ user, onLogout }) {
     document.addEventListener('click', close); return () => document.removeEventListener('click', close)
   }, [])
   const onAccount = ACCOUNT_PATHS.includes(loc.pathname)
+  // Strategy settings are per-user (each member edits their own), so every role gets the page.
+  // Only Team (household membership) stays admin-only.
   const menuItems = user.is_admin
-    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/family', 'Team', '👥'], ['/settings', 'Strategy settings', '⚙️']]
-    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓']]
+    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/settings', 'Strategy settings', '⚙️'], ['/family', 'Team', '👥']]
+    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/settings', 'Strategy settings', '⚙️']]
   const go = (p) => { setMenu(false); nav(p) }
 
   return (
@@ -172,7 +174,7 @@ function Shell({ user, onLogout }) {
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/preferences" element={<Preferences />} />
           <Route path="/family" element={user.is_admin ? <Family /> : <Navigate to="/radar" />} />
-          <Route path="/settings" element={user.is_admin ? <Settings /> : <Navigate to="/radar" />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/radar" />} />
         </Routes>
       </div>

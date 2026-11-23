@@ -77,6 +77,26 @@ def _exit_hit(order: Order, px: float):
     return None
 
 
+def _exit_capped_at_stop(order: Order, px):
+    """Clamp a close price so a paper position carrying a stop can never realise WORSE than that stop.
+
+    A resting stop-loss fills at the stop (±slippage), not at a far-away later print. But the intraday
+    stop pass only runs when the symbol has a live price in `_price_map`, and `_price_map` is EMPTY
+    for any stretch the feed isn't `live` (own-broker token expiry / rate-limit / restart gap). During
+    such a gap the stop is never evaluated, so without this clamp the session-end square-off would
+    book the position at the 15:15 price — multiple R away (the MARUTI −₹9,950 / ~5R, exit≠stop, on
+    2026-11-23). Clamping to the stop makes a skipped stop cost ~1R, the honest outcome of a resting
+    SL. Only ever improves the fill (never worse), so it's safe on every close path.
+    Returns (exit_price, clamped?)."""
+    if order.stop is None or px is None:
+        return px, False
+    if order.side == 'LONG' and px < order.stop:
+        return order.stop, True
+    if order.side == 'SHORT' and px > order.stop:
+        return order.stop, True
+    return px, False
+
+
 def _manage_open_paper(order: Order, px: float, cfg: dict, now_ist_dt) -> bool:
     """Adaptive management for an OPEN paper position (Phase 0 exit engine): breakeven@1R, partial
     book-half, and the velocity time-decay governor. Mutates `order` in place and may CLOSE it (the
@@ -260,6 +280,7 @@ def _auto_trade(db: Session) -> int:
                 # opportunity -> exit now at the live price. Same side = already in, nothing to do.
                 if pos.side != side:
                     px = price_map.get(sym) or entry
+                    px, _ = _exit_capped_at_stop(pos, px)   # never realise worse than the protective stop
                     mark_closed(pos, px, note='Auto exit — opposite (reversal) signal on the stock.')
                     del open_auto[sym]
                     changed += 1
@@ -435,7 +456,10 @@ def _square_off_paper(db: Session) -> int:
                 o.note = 'Auto-cancelled: working order unfilled at session end (intraday rule).'
             else:
                 exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
-                mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
+                exit_px, capped = _exit_capped_at_stop(o, exit_px)
+                note = ('Auto square-off — stop enforced (feed gap; SL would have filled at the stop).'
+                        if capped else 'Auto square-off at session end (intraday rule).')
+                mark_closed(o, exit_px, note=note)
             changed += 1
     if changed:
         db.commit()
@@ -474,6 +498,7 @@ def _square_off_sim(db: Session) -> int:
                 o.note = 'Sim — unfilled at session end, cancelled.'
             else:
                 exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
+                exit_px, _ = _exit_capped_at_stop(o, exit_px)
                 mark_closed(o, exit_px, note='Sim square-off at session end.')
             changed += 1
     if changed:
