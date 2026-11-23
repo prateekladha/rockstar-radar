@@ -230,7 +230,13 @@ class RadarEngine:
     def _score(self, st: SymbolState, distance: float) -> int:
         cfg = self.config
         proximity = max(0, 30 * (1 - max(0.0, distance) / cfg['near_boundary_pct']))
-        volume = min(30, 14 * min(st.rvol or 0, 3.0) / 1.5)
+        # Volume term, normalised to the ACTIVE RVOL metric's confirm threshold so the 0-30 points mean
+        # the same thing in either mode. (The old hardcoded /1.5 + cap 3.0 was the per-bar confirm scale;
+        # on the now-default cumulative metric — which sits ~1.0-1.3, not 1.5-3.0 — it scored volume
+        # ~2-3x too low and under-ranked genuinely heavy stocks.) confirm points → 14, 2x → the 30 cap;
+        # for per_bar (confirm 1.5) this is identical to the previous formula.
+        _cfm = self.rvol_th.get('confirm') or 1.5
+        volume = min(30, 14 * min(st.rvol or 0, 2 * _cfm) / _cfm)
         liquidity = min(20, st.info.median_turnover_cr / 100 * 20)
         momentum = 12 if (st.last_tick and st.vwap and
                           ((st.last_tick.price >= st.vwap) == (st.side == 'LONG'))) else 0
