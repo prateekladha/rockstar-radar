@@ -345,9 +345,16 @@ def _auto_trade_smc(db: Session) -> int:
             side = plan.get('side')
             entry, stop, target, rr = (plan.get('entry'), plan.get('stop'),
                                        plan.get('target'), plan.get('rr'))
-            if side not in ('LONG', 'SHORT') or not entry or not stop or not target:
+            # Let-winners-run: when on, don't cap the position at a fixed target — it rides until the
+            # stop or the session square-off (15:15), the way the trader actually exits. The target is
+            # still computed above for the R:R shown in the note. Default off (fixed target).
+            runner = bool(sdata.get('smc_runner_target', cfg.get('smc_runner_target', False)))
+            if side not in ('LONG', 'SHORT') or not entry or not stop or (not target and not runner):
                 continue
-            if rr is None or rr < min_rr:
+            # The hard 2:1 reward:risk reject throws away otherwise-valid setups and is foreign to how
+            # the trader sizes risk. Keep it by default, but allow turning it off (R:R stays visible).
+            enforce_rr = bool(sdata.get('smc_enforce_min_rr', cfg.get('smc_enforce_min_rr', True)))
+            if enforce_rr and (rr is None or rr < min_rr):
                 continue   # fails the 2:1 net reward:risk gate
             sym = watchpins.bare(o.get('symbol') or '')
             if not sym or sym in held:
@@ -358,11 +365,15 @@ def _auto_trade_smc(db: Session) -> int:
             qty = int(floor(max_risk / rps)) if rps else 0
             if qty < 1:
                 continue
-            stop_src = 'OB stop' if plan.get('in_fresh_ob') else 'ATR stop'
+            stop_src = ('OB stop' if plan.get('in_fresh_ob')
+                        else 'structure stop' if str(cfg.get('smc_stop_mode', 'ob_atr')) == 'structure'
+                        else 'ATR stop')
+            order_target = None if runner else target
+            exit_note = 'let-run (stop/square-off)' if runner else f'target {target}'
             smc_order = Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
-                              target=target, status='pending', order_type='market', mode='paper',
+                              target=order_target, status='pending', order_type='market', mode='paper',
                               sim=1 if u.sim_enabled else 0, source='auto_smc',
-                              note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src} ({today}).')
+                              note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src}, {exit_note} ({today}).')
             try:   # log the confluence snapshot at entry (training data for the auto-trade path)
                 from . import trade_features
                 if o.get('confluence'):

@@ -147,3 +147,30 @@ The edge that exists is the **trader's discretionary skill**. The way to eventua
 3. **Learn a model on that human-generated data** once enough accumulates (weeks/months), then and only
    then consider auto-trading what's been proven to work. This reaches the goal *through* the trader's
    edge instead of pretending a mechanical edge exists where the data says it doesn't.
+
+---
+
+## Addendum (2026-11-23): static risk:reward — does structure stops / no-2:1-gate / let-run help?
+
+The trader flagged that the **static R:R** (fixed ATR stops + a hard 2:1 reward:risk reject + a fixed
+target) causes frequent stop-outs and caps profit, and that they never use those parameters manually.
+We built reversible flags for all three (`smc_stop_mode`, `smc_enforce_min_rr`, `smc_runner_target`) and
+backtested every combination on the 22-day real dataset (98 symbols, score≥80, ₹1,000/trade), split
+first-half / second-half to catch regime luck:
+
+| config | trades | win% | total | 1st-half | 2nd-half |
+|---|---:|---:|---:|---:|---:|
+| CURRENT (plan stop, fixed target, 2:1 gate) | 254 | 28% | −54,673 | −47,860 | −6,814 |
+| No 2:1 gate | 255 | 28% | −52,655 | −45,841 | −6,814 |
+| Structure stop only | 271 | 26% | −51,922 | −39,471 | −12,452 |
+| Let-run only (no cap) | 255 | 28% | −51,466 | −45,841 | −5,625 |
+| TRADER-FAITHFUL (structure + run + no gate) | 275 | 26% | −55,914 | −42,468 | −13,445 |
+
+**Verdict: no mechanical improvement.** All five land within ~₹4k of each other (noise), every variant
+loses on this (bear-leaning) stretch, and the full trader-faithful combo is marginally the *worst*. This
+is consistent with the main campaign: the P&L is driven by regime, not by the stop/target/R:R rule. The
+trader's manual edge is real-time discretion — *where* structure actually sits and *when* to exit — which
+a fixed swing-level + hold-to-square-off approximation does not reproduce. **Decision: ship the flags
+default-OFF** (so the trader can still experiment live in paper/sim, where their timing differs from a
+mechanical replay), do **not** flip defaults, and keep the real path = learn from the trader's own logged
+discretionary trades.

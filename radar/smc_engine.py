@@ -257,12 +257,28 @@ def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Op
     # No-OB fallback: stop a configurable ATR multiple from entry (or 1% if ATR is unavailable).
     atr_mult = float(config.get('auto_trade_smc_atr_stop_mult', 1.5) or 1.5)
     atr_stop_dist = (atr * atr_mult) if atr > 0 else (current_price * 0.01)
+    # Stop placement mode. 'ob_atr' (default): order-block edge when inside one, else a flat ATR
+    # distance. 'structure': order-block edge, else just beyond the nearest swing (the real
+    # invalidation level, the way a discretionary trader places it), ATR only as a last resort.
+    stop_mode = str(config.get('smc_stop_mode', 'ob_atr') or 'ob_atr')
+    swing_lo = state.swing_low.level if state.swing_low else None
+    swing_hi = state.swing_high.level if state.swing_high else None
     if side == 'LONG':
-        stop = (ob.low - buf) if in_fresh_ob else (current_price - atr_stop_dist)
+        if in_fresh_ob:
+            stop = ob.low - buf
+        elif stop_mode == 'structure' and swing_lo is not None and swing_lo < current_price:
+            stop = swing_lo - buf
+        else:
+            stop = current_price - atr_stop_dist
         target = (state.swing_high.level if (state.swing_high and state.swing_high.level > current_price)
                   else state.trailing_high)
     else:  # SHORT
-        stop = (ob.high + buf) if in_fresh_ob else (current_price + atr_stop_dist)
+        if in_fresh_ob:
+            stop = ob.high + buf
+        elif stop_mode == 'structure' and swing_hi is not None and swing_hi > current_price:
+            stop = swing_hi + buf
+        else:
+            stop = current_price + atr_stop_dist
         target = (state.swing_low.level if (state.swing_low and state.swing_low.level < current_price)
                   else state.trailing_low)
 

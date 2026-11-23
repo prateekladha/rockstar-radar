@@ -220,7 +220,18 @@ def run(history, cfg, min_score, max_risk, use_exit_engine=True, entry_mode='raw
                         atr = getattr(state, 'atr', 0) or 0
                         if stop_mode == 'tight' and atr > 0:
                             s = e - tight_mult * atr if side == 'LONG' else e + tight_mult * atr
-                        if target_mode == 'nearest':
+                        elif stop_mode == 'structure':
+                            sl = getattr(state, 'swing_low', None)
+                            sh = getattr(state, 'swing_high', None)
+                            if side == 'LONG' and sl and sl.level < e:
+                                s = sl.level
+                            elif side == 'SHORT' and sh and sh.level > e:
+                                s = sh.level
+                        if target_mode == 'run':
+                            # let it run: no fixed target — exit only on the stop or the 15:15 square-off
+                            t = e * 1000 if side == 'LONG' else 0.0
+                            rr = abs(t - e) / abs(e - s) if abs(e - s) else 0
+                        elif target_mode == 'nearest':
                             nt = nearest_target(side, e, state, candles, i - slots[i], i)
                             if nt is None:
                                 continue
