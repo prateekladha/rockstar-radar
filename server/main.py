@@ -532,12 +532,18 @@ def _apply_prerequisite_filters(opportunities: list, user: User, strategy: str =
             'liquidity_cr': liquidity_cr
         })
 
-        # RVOL "unavailable" (None) means we could not MEASURE it — e.g. the SMC confluence buffer is
-        # too short for a cumulative RVOL — NOT that it is low. Rejecting on that would empty the whole
-        # radar, so treat an unmeasurable RVOL as not-applicable: keep the opportunity unless RVOL was
-        # actually computed and below threshold, or another prerequisite failed.
-        rvol_unavailable = rvol is None and set(result.failed_checks) <= {'RVOL'}
-        if result.passed or rvol_unavailable:
+        # An "unavailable" (None) input means we could not MEASURE that factor — e.g. the SMC
+        # confluence buffer is too short for a cumulative RVOL, or liquidity isn't computed here — NOT
+        # that the factor is bad. Rejecting on that would empty the whole radar, so keep the
+        # opportunity when EVERY failed check is merely unmeasurable; reject only on a real threshold
+        # breach (a value that was actually computed and fell outside the limit).
+        unmeasurable = set()
+        if rvol is None:
+            unmeasurable.add('RVOL')
+        if liquidity_cr is None:
+            unmeasurable.add('Liquidity')
+        only_unmeasurable = bool(result.failed_checks) and set(result.failed_checks) <= unmeasurable
+        if result.passed or only_unmeasurable:
             filtered.append(opp)
         else:
             rejected += 1

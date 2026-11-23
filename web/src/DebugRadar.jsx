@@ -334,7 +334,7 @@ const EmaSection = ({ ema }) => {
                     {cross.direction === 'UP' ? 'above (bullish)' : 'below (bearish)'}
                   </strong>{' '}
                   EMA {ema.slow_period}, {cross.bars_ago} bar{cross.bars_ago === 1 ? '' : 's'} ago.</>
-              : `No EMA ${ema.fast_period}/${ema.slow_period} crossover in the loaded window — EMA ${ema.fast_period} has stayed ${trend === 'BULLISH' ? 'above' : 'below'} EMA ${ema.slow_period}.`}
+              : `No EMA ${ema.fast_period}/${ema.slow_period} crossover in the loaded window — EMA ${ema.fast_period} has stayed ${trend === 'BULLISH' ? 'above' : trend === 'BEARISH' ? 'below' : 'level with'} EMA ${ema.slow_period}.`}
           {' '}(5-minute candles{ema.source ? ` · ${ema.source}` : ''}{ema.offset ? ` · offset ${ema.offset}` : ''}.)
         </p>
       </div>
