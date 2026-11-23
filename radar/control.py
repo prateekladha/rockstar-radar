@@ -310,7 +310,18 @@ class ControlCenter:
             cmdline = Path(f'/proc/{pid}/cmdline').read_bytes().replace(b'\x00', b' ')
         except (OSError, ValueError):
             return True  # no /proc (e.g. macOS dev) — can't verify, trust liveness
-        return b'launch.py' in cmdline
+        if b'launch.py' not in cmdline:
+            return False
+        # Not just "a scanner" — THIS owner's scanner. A live scanner is launched with its own
+        # per-owner selection file (`--selection .../today100_u<id>.json`), so requiring it stops one
+        # owner's stale pid file from matching a DIFFERENT owner's live scanner after PID reuse (both
+        # are `launch.py run`, different selection). Without this, a recycled pid belonging to another
+        # user's scanner reads as "running", the scanner is never (re)started, and the feed is stuck
+        # forever on "Scanner starting…". Sim/demo scanners carry no selection, so keep the weaker
+        # check there (their pid files are per-mode and not cross-owner shared the same way).
+        if not self.sim and not self.demo:
+            return str(self.selection_path).encode() in cmdline
+        return True
 
     def _read_pid(self) -> Optional[int]:
         if self.pid_path.exists():
