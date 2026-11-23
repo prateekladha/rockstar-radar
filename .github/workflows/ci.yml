@@ -53,7 +53,7 @@ jobs:
           RADAR_ORDER_ENGINE: '0'
         run: |
           pip install pytest
-          pytest -q
+          python -m pytest -q
 
       # ---- Infra validation (OKE migration): Terraform + Helm must stay valid ----
       - uses: hashicorp/setup-terraform@v3
