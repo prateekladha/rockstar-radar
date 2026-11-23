@@ -3,16 +3,14 @@ data "oci_objectstorage_namespace" "ns" {
   compartment_id = var.tenancy_ocid
 }
 
-# ---------------- Autonomous Database (Always Free) ----------------
-# Postgres → Oracle ADB is done in migration phase P4. This provisions the DB now so the schema port
-# and data load have a target; nothing connects to it until P4.
-resource "random_password" "db_admin" {
-  length           = 24
-  min_upper        = 2
-  min_lower        = 2
-  min_numeric      = 2
-  min_special      = 2
-  override_special = "#_"
+# ---------------- Shared Autonomous Database (reused, not created) ----------------
+# Rockstar does NOT create its own ADB (the tenancy's Always-Free ADB slots are used by dt-selfcare).
+# It reuses the existing dt-selfcare ADB *instance* and gets its own least-privilege schema/user
+# (ROCKSTAR_APP), created out-of-band by deploy/scripts/migrate_db.py --bootstrap-user. Here we only
+# read the instance to build the app's TLS DSN; nothing about the shared ADB is managed by Terraform.
+data "oci_database_autonomous_databases" "shared" {
+  compartment_id = var.shared_compartment_ocid
+  display_name   = var.shared_adb_name
 }
 
 resource "random_password" "db_app" {
@@ -24,29 +22,11 @@ resource "random_password" "db_app" {
   override_special = "#_"
 }
 
-resource "oci_database_autonomous_database" "main" {
-  compartment_id           = var.compartment_ocid
-  db_name                  = "rockstar"
-  display_name             = "${var.name}-adb"
-  db_workload              = "OLTP"
-  db_version               = "23ai"
-  is_free_tier             = true
-  admin_password           = random_password.db_admin.result
-  data_storage_size_in_tbs = 1
-  compute_model            = "ECPU"
-  compute_count            = 1 # Always Free is fixed-size; scaling = upgrade to paid ADB
-  # TLS without a wallet; only our VCN (reached via the service gateway) may connect.
-  is_mtls_connection_required = false
-  whitelisted_ips             = [oci_core_vcn.main.id]
-  lifecycle {
-    ignore_changes = [admin_password, compute_count, data_storage_size_in_tbs]
-  }
-}
-
 locals {
-  # SQLAlchemy connects as a least-privilege app user over this TLS (TCPS) DSN, LOW consumer group.
+  shared_adb = data.oci_database_autonomous_databases.shared.autonomous_databases[0]
+  # SQLAlchemy connects as ROCKSTAR_APP over this wallet-less TLS (TCPS) DSN, LOW consumer group.
   adb_tls_low = [
-    for p in oci_database_autonomous_database.main.connection_strings[0].profiles : p.value
+    for p in local.shared_adb.connection_strings[0].profiles : p.value
     if p.consumer_group == "LOW" && p.tls_authentication == "SERVER" && p.protocol == "TCPS"
   ][0]
 }

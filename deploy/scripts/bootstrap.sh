@@ -29,10 +29,16 @@ namespace = "$NS"
 key       = "$NAME/terraform.tfstate"
 region    = "$REGION"
 HCL
+# Shared project (dt-selfcare) compartment — holds the OKE cluster + ADB that Rockstar reuses.
+SHARED_NAME="${SHARED_NAME:-dt-selfcare}"
+SHARED_CPT=$(oci iam compartment list --compartment-id "$TENANCY" --compartment-id-in-subtree true \
+  --name "$SHARED_NAME" --lifecycle-state ACTIVE --query 'data[0].id' --raw-output 2>/dev/null || true)
+
 cat > "$DIR/terraform.tfvars" <<TF
-tenancy_ocid     = "$TENANCY"
-compartment_ocid = "$CPT"
-region           = "$REGION"
+tenancy_ocid            = "$TENANCY"
+compartment_ocid        = "$CPT"
+region                  = "$REGION"
+shared_compartment_ocid = "$SHARED_CPT"
 TF
-echo "compartment=$CPT namespace=$NS -> wrote backend.hcl and terraform.tfvars"
+echo "compartment=$CPT shared=$SHARED_CPT namespace=$NS -> wrote backend.hcl and terraform.tfvars"
 echo "next: cd $DIR && terraform init -backend-config=backend.hcl && terraform apply"

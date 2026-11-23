@@ -9,42 +9,28 @@ variable "oci_profile" {
 variable "tenancy_ocid" { type = string }
 variable "compartment_ocid" {
   type        = string
-  description = "Dedicated compartment for Rockstar Radar (created by bootstrap.sh) — isolates it from the existing VM deployment and other workloads."
+  description = "Rockstar Radar's own compartment (created by bootstrap.sh) — holds its Vault, OCIR repo and CI identity. The CLUSTER and ADB are NOT here; they are reused from the shared project (see shared_* vars)."
 }
 variable "name" {
   type    = string
   default = "rockstar-radar"
 }
-variable "kubernetes_version" {
-  type    = string
-  default = "v1.37.1"
-}
-variable "node_count" {
-  type        = number
-  default     = 1
-  description = "Worker nodes. Set to 0 to park the cluster at near-zero cost (control plane, Vault and ADB stay)."
-}
-variable "node_shape" {
+
+# ---- Shared infra reused from the dt-telekom / dt-selfcare project (same tenancy) ----
+# Rockstar runs as its own namespace on the existing OKE cluster and as its own schema in the existing
+# Autonomous DB, instead of standing up a second cluster/ADB (the tenancy's Always-Free limits are
+# 1 cluster + the ADB free slots, already used by dt-selfcare). See docs/K8S_MIGRATION.md.
+variable "shared_compartment_ocid" {
   type        = string
-  default     = "VM.Standard.A1.Flex"
-  description = <<-DESC
-    A1.Flex (ARM) is Always-Free eligible (4 OCPU / 24 GB total per tenancy). NOTE: the current
-    intraday.live VM already consumes the Always-Free A1 allocation, so while BOTH the VM and this
-    cluster run (migration phases P3–P6) either shrink the VM or set this to "VM.Standard.E5.Flex"
-    (AMD, small hourly cost) for the node pool, then switch back to A1.Flex after the VM is
-    decommissioned at cutover.
-  DESC
+  description = "Compartment holding the shared OKE cluster + ADB (dt-selfcare)."
 }
-variable "node_ocpus" {
-  type    = number
-  default = 2
+variable "shared_adb_name" {
+  type        = string
+  default     = "dt-selfcare-adb"
+  description = "Display name of the existing Autonomous DB whose instance Rockstar shares (its own ROCKSTAR_APP schema)."
 }
-variable "node_memory_gb" {
-  type    = number
-  default = 12
-}
-variable "api_allowed_cidrs" {
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
-  description = "Who may reach the Kubernetes API endpoint (auth is still OCI IAM)."
+variable "shared_node_dynamic_group" {
+  type        = string
+  default     = "dt-selfcare-nodes"
+  description = "Dynamic group of the shared cluster's worker nodes — granted read access to Rockstar's Vault so External Secrets (instance principal) can sync Rockstar's secrets."
 }
