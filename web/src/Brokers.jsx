@@ -96,6 +96,11 @@ export default function Brokers() {
           <span className="hint">One platform powers your data, quotes, history &amp; orders</span></div>
         <div className="panel-b">
           {msg && <div className={'banner ' + (msg.ok ? 'ok' : 'err')}>{msg.t}</div>}
+          {platform === 'fyers' && (
+            <p className="hint" style={{ marginBottom: 12 }}>
+              New to this? Read the <a href="/blog/how-to-connect-fyers" target="_blank" rel="noreferrer">step-by-step FYERS setup guide →</a>
+            </p>
+          )}
           <div className="field"><label>Platform</label>
             <Select value={platform} onChange={setPlatform} width={'100%'} options={data.platforms.map(p => ({
               value: p.id, label: p.label + (p.status !== 'available' ? ' · coming soon' : ''), disabled: p.status !== 'available' }))} />
@@ -173,7 +178,7 @@ export default function Brokers() {
               )}
             </>
           ) : <div className="empty">No broker connected yet. Fill in the form to get started.</div>}
-          <p className="note">More platforms are on the way — Upstox, Angel One, Dhan, Groww, Paytm Money and 5paisa.</p>
+          <p className="note">More platforms are on the way — Zerodha Kite, Upstox, Angel One, Dhan, Groww, Paytm Money and 5paisa. FYERS is fully supported today.</p>
         </div>
       </div>
     </div>

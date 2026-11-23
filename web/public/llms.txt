@@ -28,6 +28,14 @@
   programmatic token refresh is not permitted, so the product uses a one-tap daily login.
 - Not investment advice. Short-term trading is risky.
 
+## Guides
+- How to connect your FYERS account (first-time setup, ~5 min): https://intraday.live/blog/how-to-connect-fyers
+  Create a FYERS API app at myapi.fyers.in, set the redirect URL to
+  https://intraday.live/api/brokers/callback, paste the App ID and Secret into the Broker page, and
+  log in. SEBI requires a fresh broker login each trading day. Rockstar Radar never sees your
+  password (OAuth); no paid FYERS API plan is required.
+
 ## Links
 - Home: https://intraday.live/
+- Blog / guides: https://intraday.live/blog
 - Source: https://github.com/prateekladha/rockstar-radar
