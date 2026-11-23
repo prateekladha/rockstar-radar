@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 from .models import Candle, Instrument, Signal, SymbolState, Tick
 from .risk import position_size
-from .rvol import RvolConfig, rvol_runtime, rvol_thresholds
+from .rvol import RvolConfig, baseline_has_data, rvol_runtime, rvol_thresholds
 from .utils import IST, bar_start, market_dt, now_ist, signal_bar_minutes
 
 
@@ -230,7 +230,13 @@ class RadarEngine:
     def _score(self, st: SymbolState, distance: float) -> int:
         cfg = self.config
         proximity = max(0, 30 * (1 - max(0.0, distance) / cfg['near_boundary_pct']))
-        volume = min(30, 14 * min(st.rvol or 0, 3.0) / 1.5)
+        # Volume term, normalised to the ACTIVE RVOL metric's confirm threshold so the 0-30 points mean
+        # the same thing in either mode. (The old hardcoded /1.5 + cap 3.0 was the per-bar confirm scale;
+        # on the now-default cumulative metric — which sits ~1.0-1.3, not 1.5-3.0 — it scored volume
+        # ~2-3x too low and under-ranked genuinely heavy stocks.) confirm points → 14, 2x → the 30 cap;
+        # for per_bar (confirm 1.5) this is identical to the previous formula.
+        _cfm = self.rvol_th.get('confirm') or 1.5
+        volume = min(30, 14 * min(st.rvol or 0, 2 * _cfm) / _cfm)
         liquidity = min(20, st.info.median_turnover_cr / 100 * 20)
         momentum = 12 if (st.last_tick and st.vwap and
                           ((st.last_tick.price >= st.vwap) == (st.side == 'LONG'))) else 0
@@ -505,18 +511,30 @@ class RadarEngine:
         if not retest_ok:
             return
         entry = c.close
-        # Stop beyond the OR level and the retest wick, but WIDENED to at least a fraction of the
-        # stock's daily ATR so it isn't a sub-0.2% hair-trigger that noise takes out. Risk distance =
-        # max(structure distance, atr_mult × daily ATR). atr_mult is configurable (default 0.5).
+        # Stop placement (orb_stop_mode):
+        #   'atr_floor' (default): stop beyond the OR level and the retest wick, but WIDENED to at least
+        #       atr_mult × daily ATR so it isn't a sub-0.2% hair-trigger noise takes out. Risk distance =
+        #       max(structure distance, atr_mult × ATR). Protects against noise, but on a nearby target
+        #       the wide risk can drop net R:R under the gate (→ RISK_FAIL, setup hidden).
+        #   'structure': stop at the structural level only (just beyond the OR level / retest wick), no
+        #       ATR widening — the way a discretionary trader places it. Tighter risk, better R:R, but
+        #       more exposed to noise. ATR is still the fallback when there's no structural level.
         atr_mult = self.config.get('intraday_atr_stop_mult', 0.5)
+        stop_mode = self.config.get('orb_stop_mode', 'atr_floor')
         atr_dist = entry * (st.info.daily_atr_pct or 0) / 100 * atr_mult
         if st.confirmed_side == 'LONG':
             struct_stop = min(op.high * (1 - 0.001), c.low * (1 - 0.0005))
-            stop = min(struct_stop, entry - atr_dist) if atr_dist else struct_stop
+            if stop_mode == 'structure':
+                stop = struct_stop
+            else:
+                stop = min(struct_stop, entry - atr_dist) if atr_dist else struct_stop
             targets = sorted(x for x in st.info.resistance if x > entry * 1.001)
         else:
             struct_stop = max(op.low * (1 + 0.001), c.high * (1 + 0.0005))
-            stop = max(struct_stop, entry + atr_dist) if atr_dist else struct_stop
+            if stop_mode == 'structure':
+                stop = struct_stop
+            else:
+                stop = max(struct_stop, entry + atr_dist) if atr_dist else struct_stop
             targets = sorted((x for x in st.info.support if x < entry * 0.999), reverse=True)
         target = targets[0] if targets else None
         rr = None
@@ -703,7 +721,8 @@ class RadarEngine:
                     'morning_monitored': sum(r['source'] == 'MORNING' for r in rows),
                     'received_ticks': sum(bool(st.last_tick) for st in self.states.values()),
                     'anchors_ready': sum(bool(st.opening) for st in self.states.values()),
-                    'baselines_ready': sum(bool(self.baselines.get(s)) for s in self.states),
+                    'baselines_ready': sum(baseline_has_data(self.baselines.get(s), self.rvol_cfg.mode)
+                                           for s in self.states),
                     'active_candidates': len(actionable),
                     'counts': dict(counts), 'top5': actionable[:5],
                     'all': sorted(rows, key=lambda r: (-r['score'], r['symbol'])),

@@ -41,17 +41,22 @@
   "liquidity_lookback_days": 30,
   "dashboard_port": 8765,
   "intraday_atr_stop_mult": 0.5,
+  "orb_stop_mode": "structure",
   "alert_fresh_seconds": 360,
   "auto_trade_trigger": "RETEST_READY",
   "auto_trade_fresh_seconds": 300,
   "auto_trade_smc": false,
   "auto_trade_smc_min_score": 80,
   "auto_trade_smc_atr_stop_mult": 1.5,
+  "smc_stop_mode": "structure",
+  "smc_enforce_min_rr": false,
+  "smc_runner_target": true,
+  "smc_block_reentry_after_stop": true,
   "exit_breakeven_at_r": 0,
   "exit_partial_frac": 0,
   "exit_partial_at_r": 1.0,
   "exit_velocity_governor": false,
   "exit_velocity_slack": 1.5,
   "exit_mgmt_cutoff": "15:00",
-  "max_trades_per_symbol": 4
+  "max_trades_per_symbol": 2
 }

@@ -116,6 +116,42 @@ class ControlLogicTests(unittest.TestCase):
         st = self.c.live_state()
         self.assertTrue(st['offline'])
 
+    # ---- PID-reuse guard (stale pid file after a container restart) ----
+    def test_pid_alive_rejects_another_owners_scanner(self):
+        # u1's scanner identity is its own selection file.
+        self.c.selection_path = self.tmp / 'data' / 'today100_u1.json'
+        # A recycled pid now belongs to a DIFFERENT owner's live scanner (u3) — same launch.py,
+        # different --selection. This must NOT read as u1's scanner (the real prod bug).
+        other = (b'/usr/local/bin/python3.11 /app/launch.py run --port 51423 '
+                 b'--selection /app/data/today100_u3.json --lock /app/data/.fyers_api_u3.lock')
+        with patch('os.kill', return_value=None), \
+             patch('pathlib.Path.read_bytes', return_value=other):
+            self.assertFalse(self.c._pid_alive(9))
+
+    def test_pid_alive_accepts_own_scanner(self):
+        self.c.selection_path = self.tmp / 'data' / 'today100_u1.json'
+        mine = (b'/usr/local/bin/python3.11 /app/launch.py run --port 40805 '
+                + str(self.c.selection_path).encode()
+                + b' --lock /app/data/.fyers_api_u1.lock')
+        with patch('os.kill', return_value=None), \
+             patch('pathlib.Path.read_bytes', return_value=mine):
+            self.assertTrue(self.c._pid_alive(40805))
+
+    def test_scanner_status_clears_stale_colliding_pidfile(self):
+        # Full repro: u1's stale pid file holds a pid that, after a restart, is a live process —
+        # but it's u3's scanner. scanner_status must report not-running AND clear the stale file so
+        # the scanner gets (re)started instead of being stuck forever on "Scanner starting…".
+        self.c.selection_path = self.tmp / 'data' / 'today100_u1.json'
+        self.c.pid_path = self.tmp / 'data' / '.scanner_live_u1.pid'
+        self.c.pid_path.write_text('9')
+        other = b'/usr/local/bin/python3.11 /app/launch.py run --selection /app/data/today100_u3.json'
+        with patch('os.kill', return_value=None), \
+             patch('pathlib.Path.read_bytes', return_value=other):
+            s = self.c.scanner_status()
+        self.assertFalse(s['running'])
+        self.assertIsNone(s['pid'])
+        self.assertFalse(self.c.pid_path.exists())  # stale file cleared
+
 
 class ApiSmokeTests(unittest.TestCase):
     """Light end-to-end via FastAPI TestClient against the real repo files (no network)."""

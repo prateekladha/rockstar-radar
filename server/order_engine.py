@@ -334,6 +334,17 @@ def _auto_trade_smc(db: Session) -> int:
         held = {watchpins.bare(o.symbol) for o in db.query(Order)
                 .filter(Order.user_id == u.id, Order.source.in_(('auto', 'auto_smc')),
                         Order.status.in_(('pending', 'open'))).all()}
+        # Don't re-enter a symbol that already took a STOP (~ -1R) today: the 2026-11-23 run showed
+        # repeated same-symbol stop-outs (KALYANKJIL ×4 ≈ -₹7.8k, SOLARINDS ×3, …) were the bulk of the
+        # losing bucket. Blocking re-entry after a stop cuts that churn. Config-gated (default on).
+        stopped_today: set[str] = set()
+        if bool(cfg.get('smc_block_reentry_after_stop', True)):
+            for so in (db.query(Order)
+                       .filter(Order.user_id == u.id, Order.source.in_(('auto', 'auto_smc')),
+                               Order.status == 'closed').all()):
+                if (so.result_r is not None and so.result_r <= -0.9
+                        and so.closed_at and so.closed_at.date() == now_ist().date()):
+                    stopped_today.add(watchpins.bare(so.symbol))
         for o in opps:
             try:
                 score = int(o.get('score') or 0)
@@ -345,12 +356,19 @@ def _auto_trade_smc(db: Session) -> int:
             side = plan.get('side')
             entry, stop, target, rr = (plan.get('entry'), plan.get('stop'),
                                        plan.get('target'), plan.get('rr'))
-            if side not in ('LONG', 'SHORT') or not entry or not stop or not target:
+            # Let-winners-run: when on, don't cap the position at a fixed target — it rides until the
+            # stop or the session square-off (15:15), the way the trader actually exits. The target is
+            # still computed above for the R:R shown in the note. Default off (fixed target).
+            runner = bool(sdata.get('smc_runner_target', cfg.get('smc_runner_target', False)))
+            if side not in ('LONG', 'SHORT') or not entry or not stop or (not target and not runner):
                 continue
-            if rr is None or rr < min_rr:
+            # The hard 2:1 reward:risk reject throws away otherwise-valid setups and is foreign to how
+            # the trader sizes risk. Keep it by default, but allow turning it off (R:R stays visible).
+            enforce_rr = bool(sdata.get('smc_enforce_min_rr', cfg.get('smc_enforce_min_rr', True)))
+            if enforce_rr and (rr is None or rr < min_rr):
                 continue   # fails the 2:1 net reward:risk gate
             sym = watchpins.bare(o.get('symbol') or '')
-            if not sym or sym in held:
+            if not sym or sym in held or sym in stopped_today:
                 continue
             if not u.sim_enabled and _trades_today(db, u.id, sym, today) >= int(cfg.get('max_trades_per_symbol', 4) or 4):
                 continue
@@ -358,11 +376,15 @@ def _auto_trade_smc(db: Session) -> int:
             qty = int(floor(max_risk / rps)) if rps else 0
             if qty < 1:
                 continue
-            stop_src = 'OB stop' if plan.get('in_fresh_ob') else 'ATR stop'
+            stop_src = ('OB stop' if plan.get('in_fresh_ob')
+                        else 'structure stop' if str(cfg.get('smc_stop_mode', 'ob_atr')) == 'structure'
+                        else 'ATR stop')
+            order_target = None if runner else target
+            exit_note = 'let-run (stop/square-off)' if runner else f'target {target}'
             smc_order = Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
-                              target=target, status='pending', order_type='market', mode='paper',
+                              target=order_target, status='pending', order_type='market', mode='paper',
                               sim=1 if u.sim_enabled else 0, source='auto_smc',
-                              note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src} ({today}).')
+                              note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src}, {exit_note} ({today}).')
             try:   # log the confluence snapshot at entry (training data for the auto-trade path)
                 from . import trade_features
                 if o.get('confluence'):
@@ -379,20 +401,22 @@ def _auto_trade_smc(db: Session) -> int:
 
 
 def _square_off_paper(db: Session) -> int:
-    """Intraday safety: force-close any still-open real PAPER position when its session ends and the
-    feed-based stop/target didn't trigger — 15:15 (live) or when the feed's session closes. Simulation
-    orders are EXCLUDED: they live in accelerated sim-time (real 15:15 is irrelevant) and exit purely
-    via target/stop; a real-clock square-off would instantly close them near entry."""
+    """Intraday safety at session end (15:15 live, or when the feed's session closes): force-close any
+    still-open real PAPER position whose stop/target didn't trigger, AND cancel any still-WORKING
+    (pending, unfilled) order — a working order must never carry past the square-off into the next day.
+    Simulation orders are EXCLUDED: they live in accelerated sim-time (real 15:15 is irrelevant) and are
+    handled by _square_off_sim."""
     from radar.utils import now_ist
-    open_paper = db.query(Order).filter_by(status='open', mode='paper').filter(Order.sim == 0).all()
-    if not open_paper:
+    orders = (db.query(Order).filter_by(mode='paper').filter(Order.sim == 0)
+              .filter(Order.status.in_(('open', 'pending'))).all())
+    if not orders:
         return 0
     live_cutoff = now_ist().strftime('%H:%M') >= '15:15'
     by_user: dict[int, list[Order]] = {}
-    for o in open_paper:
+    for o in orders:
         by_user.setdefault(o.user_id, []).append(o)
-    closed = 0
-    for uid, orders in by_user.items():
+    changed = 0
+    for uid, uorders in by_user.items():
         user = db.get(User, uid)
         if user is None:
             continue
@@ -404,13 +428,18 @@ def _square_off_paper(db: Session) -> int:
         if not (live_cutoff or feed_closed):
             continue
         pm = {watchpins.bare(r['symbol']): r.get('price') for r in (st.get('all') or []) if r.get('symbol')}
-        for o in orders:
-            exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
-            mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
-            closed += 1
-    if closed:
+        for o in uorders:
+            if o.status == 'pending':
+                o.status = 'cancelled'
+                o.closed_at = datetime.utcnow()
+                o.note = 'Auto-cancelled: working order unfilled at session end (intraday rule).'
+            else:
+                exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
+                mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
+            changed += 1
+    if changed:
         db.commit()
-    return closed
+    return changed
 
 
 def _square_off_sim(db: Session) -> int:

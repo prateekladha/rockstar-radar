@@ -147,3 +147,83 @@ The edge that exists is the **trader's discretionary skill**. The way to eventua
 3. **Learn a model on that human-generated data** once enough accumulates (weeks/months), then and only
    then consider auto-trading what's been proven to work. This reaches the goal *through* the trader's
    edge instead of pretending a mechanical edge exists where the data says it doesn't.
+
+---
+
+## Addendum (2026-11-23): static risk:reward — does structure stops / no-2:1-gate / let-run help?
+
+The trader flagged that the **static R:R** (fixed ATR stops + a hard 2:1 reward:risk reject + a fixed
+target) causes frequent stop-outs and caps profit, and that they never use those parameters manually.
+We built reversible flags for all three (`smc_stop_mode`, `smc_enforce_min_rr`, `smc_runner_target`) and
+backtested every combination on the 22-day real dataset (98 symbols, score≥80, ₹1,000/trade), split
+first-half / second-half to catch regime luck:
+
+| config | trades | win% | total | 1st-half | 2nd-half |
+|---|---:|---:|---:|---:|---:|
+| CURRENT (plan stop, fixed target, 2:1 gate) | 254 | 28% | −54,673 | −47,860 | −6,814 |
+| No 2:1 gate | 255 | 28% | −52,655 | −45,841 | −6,814 |
+| Structure stop only | 271 | 26% | −51,922 | −39,471 | −12,452 |
+| Let-run only (no cap) | 255 | 28% | −51,466 | −45,841 | −5,625 |
+| TRADER-FAITHFUL (structure + run + no gate) | 275 | 26% | −55,914 | −42,468 | −13,445 |
+
+**Verdict: no mechanical improvement.** All five land within ~₹4k of each other (noise), every variant
+loses on this (bear-leaning) stretch, and the full trader-faithful combo is marginally the *worst*. This
+is consistent with the main campaign: the P&L is driven by regime, not by the stop/target/R:R rule. The
+trader's manual edge is real-time discretion — *where* structure actually sits and *when* to exit — which
+a fixed swing-level + hold-to-square-off approximation does not reproduce. **Decision: ship the flags
+default-OFF** (so the trader can still experiment live in paper/sim, where their timing differs from a
+mechanical replay), do **not** flip defaults, and keep the real path = learn from the trader's own logged
+discretionary trades.
+
+---
+
+## Addendum (2026-11-23): the ORB radar was hiding ~92% of retests (ATR-floor stop + 2:1 gate)
+
+Running pytest in CI for the first time surfaced two long-failing `test_radar` cases. Root cause: the
+ORB retest stop was `max(structure, intraday_atr_stop_mult × daily-ATR)` — the ATR "floor" (default
+0.5 × ~1.8% ≈ 0.9% risk) over-widens risk on a nearby target, so the hard 2:1 net-R:R gate marks the
+setup `RISK_FAIL` and **hides it from the radar**. Backtest on the 22-day set (98 symbols, RETEST_READY
+trigger, per-bar RVOL), 1st-half/2nd-half split:
+
+| orb_stop_mode / gate | trades | win% | total | 1st | 2nd |
+|---|---:|---:|---:|---:|---:|
+| atr_floor m0.5, gate 2.0 (OLD default) | **10** | 20% | −7,796 | −8,369 | 573 |
+| atr_floor m0.35, gate 2.0 | 22 | 40% | −6,793 | −11,968 | 5,175 |
+| atr_floor m0.25, gate 2.0 | 42 | 33% | −14,558 | −13,255 | −1,303 |
+| **structure, gate 2.0 (NEW default)** | **128** | 25% | +94,043 | −33,901 | +127,945 |
+| structure, gate 1.5 | 152 | 30% | +139,879 | −9,071 | +148,950 |
+
+**Robust finding (regime-independent): ATR-floor at any multiple yields ~10–74 signals/month and loses;
+`structure` yields 128+ — the thin ORB radar was this.** **Honest caveat:** the positive P&L is
+regime-dependent (2nd half, a trend, dominates; win% only ~25–30%) — NOT a mechanical edge, same as the
+main campaign. So the value is **decision-support visibility** (the trader sees the retests and applies
+their own entries/exits/stops, which the displayed stop explicitly flags as "ESTIMATE ONLY"), not
+auto-trading this. **Change: `orb_stop_mode` config flag; default flipped `atr_floor` → `structure`**
+(reversible). Do NOT read this as a signal to auto-trade ORB.
+
+---
+
+## Live auto-paper run — 2026-11-23 (first real study of a logged run)
+
+Studied the day's real auto-paper trades from prod (read-only). 66 closed, **+₹16k realised**
+(~₹26k incl. 2 still-open), **win% 22%**, **payoff 3.45:1** (avg win +7,146 / avg loss −2,072) —
+a positive-skew day.
+
+| cut | trades | P&L |
+|---|---:|---:|
+| exit = square-off (let-run to 15:15) | 21 | **+63,761** |
+| exit = stop | 43 | **−35,897** |
+| SHORT | 41 | +34,641 |
+| LONG | 25 | −18,605 |
+| source = `auto_smc` | 64 | +27,864 |
+| source = `auto` (ORB) | 2 | **−11,827** |
+
+**Insights → changes shipped (config + order_engine):**
+1. **Let-winners-run is the entire profit engine** (+63.8k square-off vs −35.9k stop) → `smc_runner_target` ON.
+2. **Re-entry churn was the main bleed** — same-symbol repeat stop-outs (KALYANKJIL ×4 ≈ −7.8k, SOLARINDS ×3, NTPC/TCS/TECHM/RELIANCE/BHARTIARTL ×2) → NEW `smc_block_reentry_after_stop` (default on) + `max_trades_per_symbol` 4→2. On today's data this avoids ~15+ of the −1R stops (~−25-30k) for the cost of one re-entry winner (CUPID +2.7k).
+3. The confluence **score did not separate winners (34) from losers (32)** — don't tighten on score.
+4. **Regime, not edge:** shorts won / longs lost → it was a down day; the skew partly rode the trend. One session is a single sample.
+5. **ORB `auto` lost −₹11.8k on 2 trades**, incl. MARUTI **−₹9,950 (~5R, exit≠stop)** — ORB auto risk-sizing / stop-trigger needs review before relying on it. **Flagged, not changed.**
+
+Also enabled `smc_stop_mode=structure` and `smc_enforce_min_rr=false` (the trader's requested flags) —
+reversible; **tomorrow's paper run is their evaluation** (the honest-path learn-from-real-trades loop).

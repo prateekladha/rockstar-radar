@@ -1,0 +1,6 @@
+# Copy to backend.hcl (bootstrap.sh writes this for you), then:
+#   terraform init -backend-config=backend.hcl
+bucket    = "rockstar-radar-tfstate"
+namespace = "your-objectstorage-namespace"
+key       = "rockstar-radar/terraform.tfstate"
+region    = "ap-mumbai-1"

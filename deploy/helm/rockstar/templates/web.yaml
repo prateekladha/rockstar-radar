@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app: web
+    {{- include "rockstar.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.web.hpa }}
+  replicas: {{ .Values.web.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      {{- include "rockstar.podSecurity" . | nindent 6 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: web
+          image: {{ include "rockstar.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- include "rockstar.commonEnv" . | nindent 12 }}
+            - { name: RADAR_SCHED, value: "0" }        # the scanner pod runs the scheduler
+            - { name: RADAR_ORDER_ENGINE, value: "0" } # the scanner pod runs the order engine
+            - { name: SCANNER_HOST, value: "scanner" } # proxy radar/SMC state to the scanner Service
+            - { name: HOST, value: "0.0.0.0" }
+            - { name: PORT, value: "8080" }
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe:  { httpGet: { path: /healthz, port: http }, periodSeconds: 20, failureThreshold: 3 }
+          startupProbe:   { httpGet: { path: /healthz, port: http }, periodSeconds: 5, failureThreshold: 36 }
+          resources: {{- toYaml .Values.web.resources | nindent 12 }}
+          {{- include "rockstar.containerSecurity" . | nindent 10 }}
+---
+apiVersion: v1
+kind: Service
+metadata: { name: web, labels: { app: web } }
+spec:
+  selector: { app: web }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+{{- if .Values.web.hpa }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: web }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: web }
+  minReplicas: {{ .Values.web.hpa.min }}
+  maxReplicas: {{ .Values.web.hpa.max }}
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: {{ .Values.web.hpa.cpu }} } } }]
+---
+{{- end }}
+{{- if gt (int (.Values.web.hpa.min | default .Values.web.replicas)) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: web }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: web } }
+{{- end }}

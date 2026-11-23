@@ -1,0 +1,87 @@
+name: Deploy to OKE
+
+# OKE migration P5. MANUAL ONLY (workflow_dispatch) until the P6 cutover, so it can never fire on a
+# merge while the legacy VM is still production. At cutover, add `push: branches:[main]` here and
+# retire deploy.yml (the VM deploy). Builds one image, pushes to OCIR, and `helm upgrade`s — a web
+# code change rolls only the web Deployment; the scanner pod is untouched (its template unchanged).
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_scanner:
+        description: "Also roll the scanner pod (only when scanner code changed; causes a feed blip)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-oke
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ${{ vars.OCIR_REGISTRY }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build + push image
+        run: |
+          echo "${{ secrets.OCIR_TOKEN }}" | docker login "${REGISTRY%%/*}" -u "${{ secrets.OCIR_USERNAME }}" --password-stdin
+          docker build -t "$REGISTRY/app:$SHA" -t "$REGISTRY/app:latest" .
+          docker push "$REGISTRY/app:$SHA"
+          docker push "$REGISTRY/app:latest"
+
+      - name: OCI auth + kubeconfig
+        run: |
+          pip install oci-cli >/dev/null
+          mkdir -p ~/.oci
+          printf '%s' "${{ secrets.OCI_CI_PRIVATE_KEY }}" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          cat > ~/.oci/config <<CFG
+          [DEFAULT]
+          user=${{ secrets.OCI_CI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_CI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=/home/runner/.oci/key.pem
+          CFG
+          oci ce cluster create-kubeconfig --cluster-id "${{ vars.OCI_CLUSTER_ID }}" \
+            --region "${{ vars.OCI_REGION }}" --file ~/.kube/config --token-version 2.0.0 \
+            --kube-endpoint PUBLIC_ENDPOINT --overwrite
+
+      - name: Helm upgrade
+        run: |
+          curl -sSL https://get.helm.sh/helm-v3.16.2-linux-amd64.tar.gz | tar xz
+          HELM=./linux-amd64/helm
+          # Keep the scanner pinned to its CURRENTLY-deployed image on a routine (web-only) deploy, so
+          # its pod template is unchanged and the stateful scanner is NOT restarted. Only bump it when
+          # deploy_scanner=true (or on the very first install, where there's nothing running yet).
+          CUR=$(kubectl -n rockstar-radar get deploy scanner -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://')
+          if [ "${{ github.event.inputs.deploy_scanner }}" = "true" ] || [ -z "$CUR" ]; then
+            SCANNER_TAG="$SHA"
+          else
+            SCANNER_TAG="$CUR"
+          fi
+          echo "web tag=$SHA  scanner tag=$SCANNER_TAG"
+          $HELM upgrade --install rockstar deploy/helm/rockstar -n rockstar-radar --create-namespace \
+            -f deploy/helm/values-oci.yaml \
+            --set image.repository="$REGISTRY/app" --set image.tag="$SHA" \
+            --set scanner.imageTag="$SCANNER_TAG" \
+            --set oci.region="${{ vars.OCI_REGION }}" \
+            --set oci.vaultId="${{ vars.OCI_VAULT_ID }}" \
+            --set oci.compartmentId="${{ vars.OCI_COMPARTMENT_ID }}" \
+            --set domain="${{ vars.DOMAIN }}" --set publicBaseUrl="https://${{ vars.DOMAIN }}" \
+            --set letsencryptEmail="${{ vars.LETSENCRYPT_EMAIL }}" \
+            --wait --timeout 8m
+
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 18); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://${{ vars.DOMAIN }}/healthz" || echo 000)
+            echo "attempt $i: HTTP $code"; [ "$code" = "200" ] && exit 0; sleep 5
+          done
+          echo "prod did not return 200"; exit 1

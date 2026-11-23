@@ -19,8 +19,10 @@ sqlalchemy>=2,<3
 authlib>=1.3,<2
 itsdangerous>=2,<3
 cryptography>=42
-# Postgres driver for production (psycopg 3). Dev can still use SQLite via DATABASE_URL.
+# Postgres driver (legacy single-VM). Dev/tests use SQLite via DATABASE_URL.
 psycopg[binary]>=3.1,<4
+# Oracle Autonomous DB driver (production on OKE) — thin mode, no Instant Client needed.
+oracledb>=2.2,<3
 # Used for the FYERS refresh-token REST call.
 requests>=2.31,<3
 # Load local .env for development (prod injects env via docker).

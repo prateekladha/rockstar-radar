@@ -1,0 +1,35 @@
+# Defaults; per-environment overrides in values-oci.yaml (set by CI from Terraform outputs).
+image:
+  repository: ""        # e.g. ap-mumbai-1.ocir.io/<ns>/rockstar-radar/app
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# OCI Vault the External Secrets store reads (instance principal on the worker nodes).
+oci:
+  region: ap-mumbai-1
+  vaultId: ""
+  compartmentId: ""
+
+domain: ""              # intraday.live at cutover; an <ip>.sslip.io test domain before that
+letsencryptEmail: ""    # cert-manager ACME registration
+
+# Non-secret app config shared by both pods.
+publicBaseUrl: ""       # https://<domain>
+
+# web: stateless, horizontally scalable, serves the SPA/API and proxies to the scanner.
+web:
+  replicas: 1
+  hpa: { min: 1, max: 3, cpu: 70 }
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 512Mi }
+
+# scanner: stateful (live FYERS feed + per-user subprocesses + day-state on a PVC). Single replica,
+# Recreate — never two managers fighting over the FYERS locks. Deployed only when scanner code changes.
+scanner:
+  imageTag: ""                # pinned by CI to the currently-deployed tag on a web-only deploy
+  storageSize: 10Gi
+  storageClass: oci-bv        # OCI Block Volume (default on OKE)
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { memory: 1536Mi }

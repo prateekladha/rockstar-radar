@@ -1,0 +1,8 @@
+# Local state, provider plugins, and the real (OCID-bearing) config — never commit these.
+.terraform/
+.terraform.lock.hcl
+backend.hcl
+terraform.tfvars
+*.tfstate
+*.tfstate.*
+crash.log

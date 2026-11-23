@@ -1,16 +1,35 @@
-"""Database layer — SQLAlchemy. SQLite for dev/single-VM, Postgres-ready via DATABASE_URL."""
+"""Database layer — SQLAlchemy. Three targets, chosen by env:
+  - Oracle Autonomous DB (production on OKE): when DB_DSN is set, connect as a least-privilege app
+    user over the ADB TLS (wallet-less) connect string. Portable SQLAlchemy types, so the SAME schema
+    also runs on SQLite/Postgres.
+  - Postgres (legacy single-VM): DATABASE_URL=postgresql+psycopg://...
+  - SQLite (dev/tests): the default.
+"""
 from __future__ import annotations
 import os
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 ROOT = Path(__file__).resolve().parent.parent
-DB_URL = os.environ.get('DATABASE_URL', f'sqlite:///{ROOT / "data" / "radar.db"}')
 
-_connect_args = {'check_same_thread': False} if DB_URL.startswith('sqlite') else {}
-engine = create_engine(DB_URL, connect_args=_connect_args, pool_pre_ping=True, future=True)
+
+def _build_engine():
+    dsn = os.environ.get('DB_DSN')  # Oracle ADB TLS connect string (set on OKE; see deploy/helm)
+    if dsn:
+        url = URL.create('oracle+oracledb',
+                         username=os.environ.get('DB_USER', 'ROCKSTAR_APP'),
+                         password=os.environ.get('DB_APP_PASSWORD', ''))
+        return create_engine(url, connect_args={'dsn': dsn}, pool_pre_ping=True,
+                             pool_size=5, max_overflow=5, pool_recycle=1800, future=True)
+    db_url = os.environ.get('DATABASE_URL', f'sqlite:///{ROOT / "data" / "radar.db"}')
+    connect_args = {'check_same_thread': False} if db_url.startswith('sqlite') else {}
+    return create_engine(db_url, connect_args=connect_args, pool_pre_ping=True, future=True)
+
+
+engine = _build_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 
@@ -79,17 +98,26 @@ _ADDED_COLUMNS = {
 }
 
 
+def _add_column_ddl(dialect: str, table: str, col: str, sqltype: str) -> str:
+    """Portable 'add a column' DDL. Oracle has no TEXT (→ CLOB) and its syntax is `ADD (col type)`
+    with no COLUMN keyword; SQLite/Postgres use `ADD COLUMN col type`."""
+    if dialect == 'oracle':
+        return f'ALTER TABLE {table} ADD ({col} {sqltype.replace("TEXT", "CLOB")})'
+    return f'ALTER TABLE {table} ADD COLUMN {col} {sqltype}'
+
+
 def _apply_additive_migrations() -> None:
     insp = inspect(engine)
-    existing_tables = set(insp.get_table_names())
+    dialect = engine.dialect.name
+    existing_tables = {t.lower() for t in insp.get_table_names()}
     with engine.begin() as conn:
         for table, cols in _ADDED_COLUMNS.items():
-            if table not in existing_tables:
+            if table.lower() not in existing_tables:
                 continue  # create_all will build it fresh with all columns
-            have = {c['name'] for c in insp.get_columns(table)}
+            have = {c['name'].lower() for c in insp.get_columns(table)}
             for col, sqltype in cols.items():
-                if col not in have:
-                    conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {sqltype}'))
+                if col.lower() not in have:
+                    conn.execute(text(_add_column_ddl(dialect, table, col, sqltype)))
 
 
 def init_db() -> None:
