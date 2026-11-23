@@ -47,6 +47,22 @@ def _rates(cfg: dict | None) -> dict:
     return r
 
 
+def rates_from_config(cfg: dict | None) -> dict:
+    """Map a full app config (its ``cost_*`` keys) to the rate dict the cost functions expect.
+
+    Lets operators true-up rates against a real contract note via config without touching code. Any
+    missing/None ``cost_*`` key falls back to the published default."""
+    if not cfg:
+        return dict(DEFAULT_RATES)
+    mapping = {
+        'brokerage_pct': 'cost_brokerage_pct', 'brokerage_cap': 'cost_brokerage_cap',
+        'stt_sell_pct': 'cost_stt_sell_pct', 'exch_txn_pct': 'cost_exch_txn_pct',
+        'sebi_per_cr': 'cost_sebi_per_cr', 'ipft_per_cr': 'cost_ipft_per_cr',
+        'stamp_buy_pct': 'cost_stamp_buy_pct', 'gst_pct': 'cost_gst_pct',
+    }
+    return _rates({rate_key: cfg.get(cfg_key) for rate_key, cfg_key in mapping.items()})
+
+
 def _leg_brokerage(turnover: float, r: dict) -> float:
     return min(r['brokerage_cap'], r['brokerage_pct'] / 100.0 * turnover) if turnover > 0 else 0.0
 

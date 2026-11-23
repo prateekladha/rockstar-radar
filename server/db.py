@@ -71,6 +71,11 @@ _ADDED_COLUMNS = {
         'booked_qty': 'INTEGER DEFAULT 0',
         'booked_pnl': 'FLOAT DEFAULT 0',
         'features': 'TEXT',
+        # Paper→live parity (docs/PAPER_LIVE_PARITY.md)
+        'gross_pnl': 'FLOAT',
+        'charges': 'FLOAT DEFAULT 0',
+        'margin_used': 'FLOAT',
+        'exit_reason': 'VARCHAR(16)',
     },
     'alert_configs': {
         'smc_alerts_enabled': 'INTEGER DEFAULT 0',

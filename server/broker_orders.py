@@ -115,6 +115,40 @@ def fetch_funds(app_id: str, access_token: str) -> float:
     return round(float(val), 2)
 
 
+def fetch_order_margin(app_id: str, access_token: str, *, symbol: str, qty: int, side: str,
+                       product: str = 'INTRADAY') -> dict:
+    """Real broker margin for ONE intraday order, via the FYERS Multi-order Margin Calculator.
+
+    This is the *actual* per-stock INTRADAY margin (so leverage/eligibility come from FYERS, not a
+    made-up multiplier). The calculator is NOT wrapped in the Python SDK, so we call the v3 REST
+    endpoint directly with the same ``{app_id}:{access_token}`` auth the SDK uses.
+    Returns {'margin_total': ₹ this order needs, 'margin_avail': ₹ available balance}.
+    Raises OrderError on any failure — the caller skips the trade (we never trade on an unknown pool).
+
+    Note (documented FYERS behaviour): the calculator does not validate product eligibility, so a
+    non-MIS stock still returns an INTRADAY margin. We approximate eligibility via the implied
+    leverage (notional / margin_total) in the caller — see docs/PAPER_LIVE_PARITY.md."""
+    import requests
+    url = 'https://api-t1.fyers.in/api/v3/multiorder/margin'
+    body = {'data': [{
+        'symbol': symbol, 'qty': int(qty), 'side': 1 if side == 'LONG' else -1, 'type': 2,
+        'productType': product, 'limitPrice': 0.0, 'stopPrice': 0.0, 'stopLoss': 0.0, 'takeProfit': 0.0,
+    }]}
+    try:
+        resp = requests.post(url, json=body, timeout=8, headers={
+            'Authorization': f'{app_id}:{access_token}', 'Content-Type': 'application/json'})
+        j = resp.json()
+    except Exception as e:
+        raise OrderError(f'{type(e).__name__}: {e}'[:160]) from e
+    if not isinstance(j, dict) or j.get('s') != 'ok':
+        raise OrderError(str((j or {}).get('message', 'margin lookup failed'))[:160])
+    d = j.get('data') or {}
+    mt, ma = d.get('margin_total'), d.get('margin_avail')
+    if mt is None or ma is None:
+        raise OrderError('margin response missing margin_total/margin_avail')
+    return {'margin_total': round(float(mt), 2), 'margin_avail': round(float(ma), 2)}
+
+
 def cancel_live_order(app_id: str, access_token: str, broker_order_id: str) -> None:
     """Cancel a working order at the broker. User-initiated only."""
     try:

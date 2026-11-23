@@ -235,7 +235,8 @@ async def close_order(oid: int, request: Request, user: User = Depends(require_u
         except OrderError as e:
             return JSONResponse({'error': 'Broker rejected the square-off: ' + str(e)}, status_code=400)
     exit_price = float(b.get('exit_price') or live_px or o.target or o.fill_price or o.entry)
-    mark_closed(o, exit_price)
+    # Tag the manual exit so the auto-trader won't fight the override by re-entering this symbol today.
+    mark_closed(o, exit_price, reason='manual')
     db.commit()
     return o.public()
 

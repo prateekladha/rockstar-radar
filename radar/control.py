@@ -89,6 +89,24 @@ EDITABLE_CONFIG = {
     'orb_stop_mode': ('choice', ('atr_floor', 'structure'), None),
     # Max auto entries per symbol per day (both auto strategies share the count); re-entry churn guard.
     'max_trades_per_symbol': ('int', 1, 20),
+    # --- Paper→live parity (docs/PAPER_LIVE_PARITY.md) --------------------------------------------
+    # Make paper auto-trading a faithful replica of a real FYERS INTRADAY order so paper P&L is
+    # evidence of edge, not an artifact of optimistic simulation. All tunable without a code change.
+    'paper_apply_charges': ('bool', None, None),        # deduct brokerage+statutory costs from paper P&L
+    'paper_slippage_bps': ('num', 0, 500),              # adverse fill slippage on entries + market/stop exits
+    'paper_margin_gate': ('bool', None, None),          # gate entries on REAL broker buying power (margin API)
+    'intraday_leverage_floor': ('num', 0, 20),          # skip a stock whose broker intraday leverage < this (~not MIS)
+    'block_reentry_after_manual_exit': ('bool', None, None),  # a manual exit blocks auto re-entry that day
+    'fill_max_pct_daily_turnover': ('num', 0, 100),     # liquidity sanity: cap position vs daily turnover (0=off)
+    # FYERS intraday-equity charge rates (defaults = published card; true-up against a contract note).
+    'cost_brokerage_pct': ('num', 0, 5),
+    'cost_brokerage_cap': ('num', 0, 1000),
+    'cost_stt_sell_pct': ('num', 0, 5),
+    'cost_exch_txn_pct': ('num', 0, 5),
+    'cost_sebi_per_cr': ('num', 0, 10000),
+    'cost_ipft_per_cr': ('num', 0, 10000),
+    'cost_stamp_buy_pct': ('num', 0, 5),
+    'cost_gst_pct': ('num', 0, 100),
 }
 
 

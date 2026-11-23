@@ -70,26 +70,40 @@ https://fyers.in/calculator/brokerage/ . Implemented in `server/charges.py`.
 
 ## 3. Build phases
 
-### Phase 1 — the P&L-distorting cores (this PR)
-1. **Charges model** (`server/charges.py`) — deduct real round-trip costs; store gross + charges + net. *(G4)*
-2. **Real margin gate** — before each auto-entry, call the margin API; track cumulative open margin;
-   skip the entry if `open_margin + margin_total > margin_avail`. **If balance/margin can't be
-   fetched → skip the entry** (do not trade on an unknown pool). *(G1)*
-3. **Slippage** on paper fills — entry fills worse by `slippage_bps`; stop/target fill through by
-   `slippage_bps`; applied in `process_paper` + square-off. *(G3)*
-4. **Manual-exit re-entry guard** — `block_reentry_after_manual_exit` (default on). *(G5)*
-5. **SMC score fixes** — best-OB (not first), div-by-zero guard, down-weight far key levels; add a
-   score-bucket → realized-R report to validate/kill the 80 threshold with our own logged trades. *(G6)*
+### Phase 1 — the P&L-distorting cores ✅ DONE (PR #54)
+1. ✅ **Charges model** (`server/charges.py`) — `mark_closed` now stores `gross_pnl`, `charges`, and a
+   NET `pnl`; R stays measured on the gross edge. Paper only (live books real charges). *(G4)*
+2. ✅ **Real margin gate** (`order_engine._parity_ctx` / `_gate_entry`, `broker_orders.fetch_order_margin`)
+   — each auto-entry calls FYERS `multiorder/margin`; a running `committed` pool (sum of open paper
+   positions' `margin_used`) is checked against live `margin_avail`; over-budget entries are skipped.
+   **Can't read the broker → skip all that user's auto entries** (user's choice). Sim bypasses it. *(G1)*
+3. ✅ **Slippage** (`_apply_slippage`) — adverse on entries, stop exits, velocity/reversal/square-off
+   market exits; favourable limit targets fill clean. `paper_slippage_bps` (default 5). *(G3)*
+4. ✅ **Manual-exit re-entry guard** — manual close tags `exit_reason='manual'`; both auto strategies
+   skip a symbol manually exited today. `block_reentry_after_manual_exit` (default on). *(G5)*
+5. ✅ **SMC score fixes** — strongest-OB (not first), zero-width-zone guard, far (>2%) key levels
+   down-weighted; `smc_engine.score_bucket_report()` buckets realised R by entry score to validate or
+   kill the 80 gate with our own trades. *(G6)*
 
-### Phase 2 — remaining realism
-- MIS eligibility approximation (known-eligible list from FYERS margin data). *(residual of G1)*
-- Liquidity / fill feasibility from depth quote; partial fills; circuit limits; freeze qty.
-- Per-leg charges for partial books (Phase 1 charges the full round-trip at blended fills).
+### Phase 2 — remaining realism (status)
+- ✅ **MIS eligibility — leverage proxy.** `intraday_leverage_floor`: an order whose broker implied
+  leverage (notional/margin) is below the floor is skipped as "no real intraday benefit." Default 1.0
+  (off) — raise it (e.g. 1.2) to exclude effectively-non-MIS names. **Honest residual:** this is a
+  proxy, not FYERS's eligibility flag (which the API doesn't expose); a true list needs a live reject.
+- ✅ **Liquidity sanity.** `fill_max_pct_daily_turnover`: skip a position whose notional exceeds X% of
+  the stock's median daily turnover. Default 0 (off). Uses daily turnover (per-bar depth isn't in the
+  feed) — a coarse guard, not an order-book fill model.
+- ⬜ **Deferred (no data in the current feed):** per-bar depth/partial-fill microstructure, circuit
+  (UC/LC) limits, freeze-qty caps, and per-leg charges for partial books (Phase 1 charges the full
+  round-trip at blended fills). Documented here so they're not silently assumed solved.
 
-### Config keys (all tunable, added to `radar/control.py::EDITABLE_CONFIG`)
-`paper_apply_charges` (bool), charge rates (see §2.3), `paper_slippage_bps` (num),
-`paper_margin_gate` (bool), `paper_leverage_fallback` (num, unused when margin API available),
-`block_reentry_after_manual_exit` (bool).
+### Config keys (all tunable, in `radar/control.py::EDITABLE_CONFIG`, defaults in `config.json`)
+`paper_apply_charges` (bool), `paper_slippage_bps` (num), `paper_margin_gate` (bool),
+`intraday_leverage_floor` (num), `block_reentry_after_manual_exit` (bool),
+`fill_max_pct_daily_turnover` (num), and the `cost_*` charge rates (§2.3).
+
+### DB columns added (`orders`, additive migration in `server/db.py`)
+`gross_pnl`, `charges`, `margin_used`, `exit_reason`.
 
 ---
 

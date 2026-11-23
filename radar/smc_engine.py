@@ -372,14 +372,15 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
 
     # === 1. ZONE PROXIMITY SCORING (0-35 points) ===
     # How deep into the premium/discount zone?
+    _zone_span = (current_zone.high - current_zone.low) or 1e-9   # guard: zero-width zone
     if current_zone.zone_type == 'PREMIUM':
         # Higher score when deeper into premium (closer to top)
-        zone_depth = (current_price - current_zone.low) / (current_zone.high - current_zone.low)
+        zone_depth = (current_price - current_zone.low) / _zone_span
         score += int(25 + (zone_depth * 10))  # 25-35 points
 
     elif current_zone.zone_type == 'DISCOUNT':
         # Higher score when deeper into discount (closer to bottom)
-        zone_depth = (current_zone.high - current_price) / (current_zone.high - current_zone.low)
+        zone_depth = (current_zone.high - current_price) / _zone_span
         score += int(25 + (zone_depth * 10))  # 25-35 points
 
     else:  # EQUILIBRIUM
@@ -400,8 +401,8 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
             proximity_bonus = 25 if state.swing_high.is_strong else 15
         elif distance_pct < 0.02:  # Within 2%
             proximity_bonus = 20 if state.swing_high.is_strong else 10
-        else:
-            proximity_bonus = 10 if state.swing_high.is_strong else 5
+        else:  # >2% away: a distant level shouldn't inflate the score (fix 2026-11-23)
+            proximity_bonus = 5 if state.swing_high.is_strong else 2
 
     elif current_zone.zone_type == 'DISCOUNT' and state.swing_low:
         # Distance to swing low (bullish setup)
@@ -413,52 +414,49 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
             proximity_bonus = 25 if state.swing_low.is_strong else 15
         elif distance_pct < 0.02:  # Within 2%
             proximity_bonus = 20 if state.swing_low.is_strong else 10
-        else:
-            proximity_bonus = 10 if state.swing_low.is_strong else 5
+        else:  # >2% away: a distant level shouldn't inflate the score (fix 2026-11-23)
+            proximity_bonus = 5 if state.swing_low.is_strong else 2
 
     score += proximity_bonus
 
     # === 3. ORDER BLOCK CONFLUENCE (0-20 points) ===
     # Enhanced: Uses mitigation status, strength, and 50% body zones
-    ob_bonus = 0
+    ob_bonus = 0.0
     for ob in state.order_blocks[-5:]:  # Check last 5 order blocks
         # Skip mitigated OBs (they've been touched and are less valuable)
         if ob.mitigated:
             continue
 
+        cand = 0.0
         # Check if price is within the enhanced body zone (50% retracement)
-        in_body_zone = False
-        if ob.body_low is not None and ob.body_high is not None:
-            in_body_zone = ob.body_low <= current_price <= ob.body_high
+        in_body_zone = (ob.body_low is not None and ob.body_high is not None
+                        and ob.body_low <= current_price <= ob.body_high)
 
         if in_body_zone:
             # Price IS in the key institutional zone (50% body)
             base_score = 20 if ob.strength > 0.7 else (15 if ob.strength > 0.5 else 10)
-
             # Apply zone alignment multiplier
             if current_zone.zone_type == 'PREMIUM' and ob.bias == 'BEARISH':
-                ob_bonus += base_score  # Perfect alignment
+                cand = base_score  # Perfect alignment
             elif current_zone.zone_type == 'DISCOUNT' and ob.bias == 'BULLISH':
-                ob_bonus += base_score  # Perfect alignment
+                cand = base_score  # Perfect alignment
             else:
-                ob_bonus += base_score * 0.5  # Some confluence but not aligned
+                cand = base_score * 0.5  # Some confluence but not aligned
 
         # Check if price is within the full OB range (but not body zone)
         elif ob.low <= current_price <= ob.high:
             # In OB but not at optimal 50% zone
-            base_score = 10 if ob.strength > 0.6 else 5
-            ob_bonus += base_score
+            cand = 10 if ob.strength > 0.6 else 5
 
         # Check if price is near the OB (within 0.5%)
-        elif ob.low > 0:
+        elif ob.low > 0 and current_price > 0:
             distance_pct = min(abs(current_price - ob.low) / current_price,
-                             abs(current_price - ob.high) / current_price)
+                               abs(current_price - ob.high) / current_price)
             if distance_pct < 0.005:  # Within 0.5%
-                ob_bonus += 8 * ob.strength
+                cand = 8 * ob.strength
 
-        # Only count the best OB, don't stack
-        if ob_bonus > 0:
-            break
+        # Credit only the STRONGEST qualifying OB, not the first one found (fix 2026-11-23).
+        ob_bonus = max(ob_bonus, cand)
 
     score += min(ob_bonus, 20)  # Cap at 20 points
 
@@ -572,6 +570,32 @@ def calculate_smc_score(state: SMCSymbolState, current_price: float) -> int:
     final_score = max(0, min(score, 100))
 
     return final_score
+
+
+def score_bucket_report(samples) -> list:
+    """Aggregate realised performance by SMC entry-score bucket — the tool to VALIDATE (or kill) the
+    auto-trade score threshold using our OWN closed trades, instead of trusting that score>=80 means
+    an edge (docs/PAPER_LIVE_PARITY.md G6). Pure/testable.
+
+    `samples`: iterable of dicts with 'score' (entry score), 'result_r' (realised R, may be None) and
+    'pnl' (realised ₹, may be None). Returns bucket summaries ordered low->high, each with n (trade
+    count), win_rate (share with R>0), avg_r, and total_pnl. A healthy score should show avg_r and
+    win_rate RISING across buckets; if 70-79 matches 80-89, the 80 gate isn't buying anything."""
+    edges = [(0, 59), (60, 69), (70, 79), (80, 89), (90, 100)]
+    samples = list(samples)
+    out = []
+    for lo, hi in edges:
+        rs = [s for s in samples if s.get('score') is not None and lo <= int(s['score']) <= hi]
+        rr = [float(s['result_r']) for s in rs if s.get('result_r') is not None]
+        pnl = [float(s['pnl']) for s in rs if s.get('pnl') is not None]
+        wins = sum(1 for v in rr if v > 0)
+        out.append({
+            'bucket': f'{lo}-{hi}', 'n': len(rs),
+            'win_rate': round(wins / len(rr), 3) if rr else None,
+            'avg_r': round(sum(rr) / len(rr), 3) if rr else None,
+            'total_pnl': round(sum(pnl), 2) if pnl else 0.0,
+        })
+    return out
 
 
 def calculate_smc_score_with_breakdown(state: SMCSymbolState, current_price: float) -> Tuple[int, Dict[str, any]]:
