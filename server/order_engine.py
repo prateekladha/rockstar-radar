@@ -390,20 +390,22 @@ def _auto_trade_smc(db: Session) -> int:
 
 
 def _square_off_paper(db: Session) -> int:
-    """Intraday safety: force-close any still-open real PAPER position when its session ends and the
-    feed-based stop/target didn't trigger — 15:15 (live) or when the feed's session closes. Simulation
-    orders are EXCLUDED: they live in accelerated sim-time (real 15:15 is irrelevant) and exit purely
-    via target/stop; a real-clock square-off would instantly close them near entry."""
+    """Intraday safety at session end (15:15 live, or when the feed's session closes): force-close any
+    still-open real PAPER position whose stop/target didn't trigger, AND cancel any still-WORKING
+    (pending, unfilled) order — a working order must never carry past the square-off into the next day.
+    Simulation orders are EXCLUDED: they live in accelerated sim-time (real 15:15 is irrelevant) and are
+    handled by _square_off_sim."""
     from radar.utils import now_ist
-    open_paper = db.query(Order).filter_by(status='open', mode='paper').filter(Order.sim == 0).all()
-    if not open_paper:
+    orders = (db.query(Order).filter_by(mode='paper').filter(Order.sim == 0)
+              .filter(Order.status.in_(('open', 'pending'))).all())
+    if not orders:
         return 0
     live_cutoff = now_ist().strftime('%H:%M') >= '15:15'
     by_user: dict[int, list[Order]] = {}
-    for o in open_paper:
+    for o in orders:
         by_user.setdefault(o.user_id, []).append(o)
-    closed = 0
-    for uid, orders in by_user.items():
+    changed = 0
+    for uid, uorders in by_user.items():
         user = db.get(User, uid)
         if user is None:
             continue
@@ -415,13 +417,18 @@ def _square_off_paper(db: Session) -> int:
         if not (live_cutoff or feed_closed):
             continue
         pm = {watchpins.bare(r['symbol']): r.get('price') for r in (st.get('all') or []) if r.get('symbol')}
-        for o in orders:
-            exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
-            mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
-            closed += 1
-    if closed:
+        for o in uorders:
+            if o.status == 'pending':
+                o.status = 'cancelled'
+                o.closed_at = datetime.utcnow()
+                o.note = 'Auto-cancelled: working order unfilled at session end (intraday rule).'
+            else:
+                exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
+                mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
+            changed += 1
+    if changed:
         db.commit()
-    return closed
+    return changed
 
 
 def _square_off_sim(db: Session) -> int:
