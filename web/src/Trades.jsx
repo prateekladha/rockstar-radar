@@ -108,7 +108,11 @@ export default function Trades() {
         <div className="tbl-wrap">
           <table>
             <thead><tr><th>Placed</th><th>Symbol</th><th>Via</th><th>Side</th><th className="num">Qty</th>
-              <th className="num">Entry → Exit</th><th>Status</th><th className="num">P&L</th><th className="num">R</th></tr></thead>
+              <th className="num">Entry → Exit</th><th>Status</th>
+              <th className="num" title="Realised P&L before trading costs">Gross</th>
+              <th className="num" title="Brokerage + statutory charges modelled for a real FYERS intraday round-trip">Charges</th>
+              <th className="num" title="P&L after costs — what a live trade would have netted">Net P&L</th>
+              <th className="num">R</th></tr></thead>
             <tbody>
               {orders.items.map(o => (
                 <tr key={o.id}><td className="dim">{fmtDateTime(o.created_at)}</td>
@@ -117,7 +121,9 @@ export default function Trades() {
                   <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
                   <td className="num">{o.qty}</td>
                   <td className="num">{fmt(o.fill_price != null ? o.fill_price : o.entry)} → {o.exit_price != null ? fmt(o.exit_price) : '—'}</td>
-                  <td><span className={'chip ' + statusChip(o)}>{statusLabel(o.status)}</span></td>
+                  <td><span className={'chip ' + statusChip(o)} title={o.exit_reason ? 'exit: ' + o.exit_reason : undefined}>{statusLabel(o.status)}</span></td>
+                  <td className="num dim">{o.gross_pnl != null ? money(o.gross_pnl) : '—'}</td>
+                  <td className="num down">{o.charges ? money(-o.charges) : (o.status === 'closed' && o.mode !== 'live' ? '₹0' : '—')}</td>
                   <td className={'num ' + (o.pnl >= 0 ? 'up' : 'down')}>{o.pnl != null ? money(o.pnl) : '—'}</td>
                   <td className={'num ' + ((o.result_r || 0) >= 0 ? 'up' : 'down')}>{o.result_r != null ? o.result_r + 'R' : '—'}</td></tr>
               ))}

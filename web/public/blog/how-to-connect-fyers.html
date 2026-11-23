@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="theme-color" content="#0a0e16" />
+
+  <title>How to Connect Your FYERS Account to Rockstar Radar (2026 Step-by-Step Guide)</title>
+  <meta name="description" content="A first-timer's step-by-step guide to connecting your FYERS broker account to Rockstar Radar: create a FYERS API app at myapi.fyers.in, copy the App ID and Secret, set the redirect URL, and log in — in about 5 minutes. Includes the daily-login (SEBI) rule, troubleshooting and FAQs." />
+  <meta name="keywords" content="connect FYERS API, FYERS App ID Secret, myapi.fyers.in, FYERS redirect URL, FYERS Rockstar Radar setup, NSE intraday broker API, FYERS OAuth login, intraday trading India" />
+  <meta name="author" content="Rockstar Radar" />
+  <meta name="robots" content="index, follow" />
+  <link rel="canonical" href="https://intraday.live/blog/how-to-connect-fyers" />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Rockstar Radar" />
+  <meta property="og:url" content="https://intraday.live/blog/how-to-connect-fyers" />
+  <meta property="og:title" content="How to Connect Your FYERS Account to Rockstar Radar — Step-by-Step" />
+  <meta property="og:description" content="Create a FYERS API app, copy the App ID and Secret, set the redirect URL, and log in — connect your broker to Rockstar Radar in about 5 minutes." />
+  <meta property="og:image" content="https://intraday.live/og-cover.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="How to Connect FYERS to Rockstar Radar — Step-by-Step" />
+  <meta name="twitter:description" content="Connect your own FYERS account to the NSE intraday radar in ~5 minutes. We never see your password." />
+  <meta name="twitter:image" content="https://intraday.live/og-cover.png" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": "How to connect your FYERS account to Rockstar Radar",
+    "description": "Connect your own FYERS broker account to Rockstar Radar so the NSE intraday radar can stream live market data and prepare orders for you to confirm.",
+    "totalTime": "PT5M",
+    "image": "https://intraday.live/og-cover.png",
+    "supply": [
+      { "@type": "HowToSupply", "name": "A FYERS trading account" },
+      { "@type": "HowToSupply", "name": "A Rockstar Radar account (sign in with Google)" }
+    ],
+    "tool": [
+      { "@type": "HowToTool", "name": "FYERS API dashboard (myapi.fyers.in)" }
+    ],
+    "step": [
+      {
+        "@type": "HowToStep",
+        "name": "Create a FYERS API app",
+        "text": "Sign in at myapi.fyers.in, open Create App, give it any name, and choose app type Web. This gives you an App ID and a Secret ID.",
+        "url": "https://intraday.live/blog/how-to-connect-fyers#step-1"
+      },
+      {
+        "@type": "HowToStep",
+        "name": "Set the redirect URL",
+        "text": "In the FYERS app, set the Redirect URL to the exact value Rockstar Radar shows on the Connect your broker page: https://intraday.live/api/brokers/callback",
+        "url": "https://intraday.live/blog/how-to-connect-fyers#step-2"
+      },
+      {
+        "@type": "HowToStep",
+        "name": "Paste your App ID and Secret into Rockstar Radar",
+        "text": "In Rockstar Radar, open the profile menu, go to Broker, select FYERS, and paste your App ID and Secret ID.",
+        "url": "https://intraday.live/blog/how-to-connect-fyers#step-3"
+      },
+      {
+        "@type": "HowToStep",
+        "name": "Connect and log in to FYERS",
+        "text": "Click Connect. You are redirected to the FYERS login, you approve access, and FYERS sends you back to Rockstar Radar — now streaming live data.",
+        "url": "https://intraday.live/blog/how-to-connect-fyers#step-4"
+      },
+      {
+        "@type": "HowToStep",
+        "name": "Log in again each trading morning",
+        "text": "SEBI requires a fresh broker login every trading day for Indian brokers. Tap Connect once each morning (ideally before 9:15 IST) to start the scan.",
+        "url": "https://intraday.live/blog/how-to-connect-fyers#step-5"
+      }
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Does Rockstar Radar see my FYERS password?",
+        "acceptedAnswer": { "@type": "Answer", "text": "No. You log in on FYERS' own page via OAuth. Rockstar Radar never sees or stores your FYERS password — only a daily access token, which is encrypted." }
+      },
+      {
+        "@type": "Question",
+        "name": "Why do I have to log in to FYERS every day?",
+        "acceptedAnswer": { "@type": "Answer", "text": "SEBI rules require a fresh broker login each trading day for all Indian brokers, and programmatic token renewal is not permitted. So you tap Connect once each morning; it takes a few seconds." }
+      },
+      {
+        "@type": "Question",
+        "name": "Is a paid FYERS API plan required?",
+        "acceptedAnswer": { "@type": "Answer", "text": "No. Creating an API app at myapi.fyers.in and using it for market data and your own orders is included with a FYERS account at no extra charge." }
+      },
+      {
+        "@type": "Question",
+        "name": "Will Rockstar Radar place trades on its own?",
+        "acceptedAnswer": { "@type": "Answer", "text": "No. It is semi-automatic: it prepares ranked setups with entry, stop-loss and target. You confirm every order. Paper trading is the default and it never fires real orders autonomously." }
+      },
+      {
+        "@type": "Question",
+        "name": "What if I get a redirect URL mismatch error?",
+        "acceptedAnswer": { "@type": "Answer", "text": "The Redirect URL in your FYERS app must exactly match the one Rockstar Radar shows (https://intraday.live/api/brokers/callback), including https and no trailing slash. Fix it in the FYERS app and connect again." }
+      }
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://intraday.live/" },
+      { "@type": "ListItem", "position": 2, "name": "Blog", "item": "https://intraday.live/blog" },
+      { "@type": "ListItem", "position": 3, "name": "Connect FYERS", "item": "https://intraday.live/blog/how-to-connect-fyers" }
+    ]
+  }
+  </script>
+
+  <style>
+    :root {
+      --bg: #0a0e16; --panel: #121826; --border: #1f2838; --text: #e7ecf3;
+      --muted: #9aa7bd; --accent: #4f9dff; --accent-2: #6ee7b7; --code: #0e1422;
+      --maxw: 760px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .nav {
+      display: flex; align-items: center; gap: 10px; max-width: var(--maxw);
+      margin: 0 auto; padding: 18px 20px;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+    .brand .mark { font-size: 20px; }
+    .brand small { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+    .spring { flex: 1; }
+    .btn {
+      display: inline-block; padding: 9px 16px; border-radius: 10px; border: 1px solid var(--border);
+      color: var(--text); font-weight: 600; font-size: 14px; cursor: pointer;
+    }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #04101f; }
+    main { max-width: var(--maxw); margin: 0 auto; padding: 8px 20px 64px; }
+    .crumbs { font-size: 13px; color: var(--muted); margin: 8px 0 18px; }
+    .crumbs a { color: var(--muted); }
+    h1 { font-size: 32px; line-height: 1.25; margin: 6px 0 10px; letter-spacing: -0.02em; }
+    h2 { font-size: 22px; margin: 38px 0 12px; letter-spacing: -0.01em; }
+    h3 { font-size: 17px; margin: 22px 0 6px; }
+    .lede { font-size: 18px; color: var(--muted); margin: 0 0 8px; }
+    .meta { font-size: 13px; color: var(--muted); margin-bottom: 26px; }
+    .callout {
+      background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: 10px; padding: 14px 16px; margin: 18px 0; color: var(--text);
+    }
+    .callout.warn { border-left-color: #f0b429; }
+    .callout.safe { border-left-color: var(--accent-2); }
+    ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 10px 0; }
+    ol.steps > li {
+      counter-increment: s; position: relative; padding: 18px 18px 18px 60px; margin: 14px 0;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    }
+    ol.steps > li::before {
+      content: counter(s); position: absolute; left: 16px; top: 18px; width: 30px; height: 30px;
+      display: grid; place-items: center; background: var(--accent); color: #04101f;
+      border-radius: 50%; font-weight: 700;
+    }
+    ol.steps h3 { margin-top: 0; }
+    code, kbd {
+      background: var(--code); border: 1px solid var(--border); border-radius: 6px;
+      padding: 1px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px;
+      color: var(--accent-2); word-break: break-all;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14.5px; }
+    th, td { text-align: left; padding: 10px 12px; border: 1px solid var(--border); vertical-align: top; }
+    th { background: var(--panel); }
+    details {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 16px; margin: 10px 0;
+    }
+    details summary { cursor: pointer; font-weight: 600; }
+    details p { margin: 10px 0 2px; color: var(--muted); }
+    .cta {
+      text-align: center; background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px 20px; margin: 40px 0 10px;
+    }
+    footer { max-width: var(--maxw); margin: 0 auto; padding: 24px 20px 48px; color: var(--muted); font-size: 13px; }
+    footer a { color: var(--muted); }
+    .disc { margin-top: 10px; }
+    @media (max-width: 520px) { h1 { font-size: 26px; } main { padding-bottom: 48px; } }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="/"><span class="mark">⚡</span><div>Rockstar&nbsp;Radar<small>NSE intraday</small></div></a>
+    <span class="spring"></span>
+    <a class="btn primary" href="/login">Sign in</a>
+  </nav>
+
+  <main>
+    <div class="crumbs"><a href="/">Home</a> › <a href="/blog">Blog</a> › Connect FYERS</div>
+
+    <article>
+      <h1>How to connect your FYERS account to Rockstar Radar</h1>
+      <p class="lede">A first-timer's step-by-step guide — about 5 minutes, start to finish.</p>
+      <p class="meta">Updated November 2026 · For new Rockstar Radar users on the NSE (Indian market)</p>
+
+      <p><a href="/">Rockstar Radar</a> is a real-time NSE intraday opening-range breakout radar. It works
+      with <strong>your own</strong> broker account: you connect FYERS once, log in each morning, and the
+      radar streams live market data to rank intraday setups with entry, stop-loss and target levels. It
+      never sees your password and never fires real orders on its own — you confirm every trade, and paper
+      trading is the default.</p>
+
+      <div class="callout safe">
+        <strong>What you'll need:</strong> a FYERS trading account, and a Rockstar Radar account
+        (<a href="/login">sign in with Google</a> — it's free). That's it. No paid API add-on is required.
+      </div>
+
+      <h2>The 5 steps at a glance</h2>
+      <ol>
+        <li>Create a FYERS API app at <code>myapi.fyers.in</code></li>
+        <li>Set the redirect URL to <code>https://intraday.live/api/brokers/callback</code></li>
+        <li>Paste the App ID &amp; Secret into Rockstar Radar → Broker</li>
+        <li>Click <strong>Connect</strong> and log in on the FYERS page</li>
+        <li>Log in again each trading morning (a SEBI rule)</li>
+      </ol>
+
+      <h2>Step-by-step</h2>
+      <ol class="steps">
+        <li id="step-1">
+          <h3>Create a FYERS API app</h3>
+          <p>Go to <a href="https://myapi.fyers.in/" target="_blank" rel="noopener nofollow">myapi.fyers.in</a>
+          and sign in with your FYERS credentials. Open <strong>Create App</strong>, give it any name
+          (e.g. <em>Rockstar Radar</em>), and choose app type <strong>Web</strong>. FYERS then issues two
+          values you'll use in a moment: an <strong>App ID</strong> (also called Client ID) and a
+          <strong>Secret ID</strong>.</p>
+        </li>
+        <li id="step-2">
+          <h3>Set the redirect URL</h3>
+          <p>In the same FYERS app, set the <strong>Redirect URL</strong> to the exact value Rockstar Radar
+          shows on its <strong>Broker</strong> page:</p>
+          <p><code>https://intraday.live/api/brokers/callback</code></p>
+          <p>This is where FYERS sends you back after you approve access, so the radar can capture your
+          daily token automatically. It must match <em>exactly</em> — same <code>https</code>, no trailing
+          slash. (Already have a FYERS app with its own redirect URL? You can keep it and use the manual
+          paste-the-link option in Rockstar Radar instead.)</p>
+        </li>
+        <li id="step-3">
+          <h3>Paste your App ID &amp; Secret into Rockstar Radar</h3>
+          <p>In Rockstar Radar, open the <strong>profile menu</strong> (top right) → <strong>Broker</strong>.
+          Choose <strong>FYERS</strong> as the platform, then paste your <strong>App ID</strong> and
+          <strong>Secret ID</strong> into the form. Your secret is encrypted before it's stored — it's never
+          kept in plain text and never shown back to you.</p>
+        </li>
+        <li id="step-4">
+          <h3>Connect and log in to FYERS</h3>
+          <p>Click <strong>Connect</strong>. You're taken to the official FYERS login page, where you sign
+          in and approve access. FYERS then redirects you back to Rockstar Radar, which captures the token
+          and starts streaming live data. You'll see your broker status flip to <strong>connected</strong>.</p>
+        </li>
+        <li id="step-5">
+          <h3>Log in again each trading morning</h3>
+          <p>SEBI requires a fresh broker login every trading day for all Indian brokers, and tokens can't
+          be auto-renewed. So each morning you tap <strong>Connect</strong> once — ideally before
+          <strong>9:15 IST</strong> — to start the day's scan. It's one tap on FYERS' own page; you never
+          re-enter the App ID or Secret.</p>
+        </li>
+      </ol>
+
+      <div class="callout safe">
+        <strong>Your security:</strong> you log in on FYERS' own page (OAuth). Rockstar Radar never sees
+        your FYERS password; it only holds an encrypted, single-day access token. Your login, your data,
+        your trades.
+      </div>
+
+      <h2>Troubleshooting</h2>
+      <table>
+        <thead><tr><th>What you see</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>"Redirect URL mismatch" / login bounces back with an error</td>
+            <td>The Redirect URL in the FYERS app doesn't exactly match
+            <code>https://intraday.live/api/brokers/callback</code>. Check for a missing <code>https</code>,
+            a trailing slash, or a typo, save it in the FYERS app, and connect again.</td>
+          </tr>
+          <tr>
+            <td>"The broker rejected the login. Check your Secret."</td>
+            <td>Re-copy the <strong>Secret ID</strong> from <code>myapi.fyers.in</code> (no stray spaces),
+            paste it again, and retry. The App ID and Secret must be from the same FYERS app.</td>
+          </tr>
+          <tr>
+            <td>Feed says "warming up" or shows no data</td>
+            <td>Make sure you logged in <em>today</em> (the token is daily) and that it's a trading day
+            during market hours (09:15–15:30 IST). Tap Connect again if your morning login has expired.</td>
+          </tr>
+          <tr>
+            <td>You pasted the return link but nothing connected</td>
+            <td>If your FYERS app uses its own custom redirect URL, use the manual option: open the login
+            link, sign in, then copy the <em>full</em> URL from your browser's address bar and paste it back
+            into Rockstar Radar.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Frequently asked questions</h2>
+      <details>
+        <summary>Does Rockstar Radar see my FYERS password?</summary>
+        <p>No. You log in on FYERS' own page via OAuth. Rockstar Radar never sees or stores your password —
+        only an encrypted daily access token.</p>
+      </details>
+      <details>
+        <summary>Why do I have to log in to FYERS every day?</summary>
+        <p>SEBI rules require a fresh broker login each trading day for all Indian brokers, and programmatic
+        token renewal isn't permitted. So you tap Connect once each morning; it takes a few seconds.</p>
+      </details>
+      <details>
+        <summary>Is a paid FYERS API plan required?</summary>
+        <p>No. Creating an API app at <code>myapi.fyers.in</code> and using it for market data and your own
+        orders is included with a FYERS account at no extra charge.</p>
+      </details>
+      <details>
+        <summary>Will Rockstar Radar place trades on its own?</summary>
+        <p>No. It's semi-automatic: it prepares ranked setups with entry, stop-loss and target, and you
+        confirm every order. Paper trading is the default, and it never fires real orders autonomously.</p>
+      </details>
+      <details>
+        <summary>Which other brokers are supported?</summary>
+        <p>FYERS is fully supported today. Zerodha Kite, Upstox, Angel One, Dhan, Groww, Paytm Money and
+        5paisa are planned and appear as "coming soon" in the Broker page.</p>
+      </details>
+
+      <div class="cta">
+        <h2 style="margin-top:0">Ready to connect your broker?</h2>
+        <p class="lede" style="margin-bottom:16px">Sign in free, link FYERS once, and start in paper mode.</p>
+        <a class="btn primary" href="/login">Get started — sign in</a>
+      </div>
+    </article>
+  </main>
+
+  <footer>
+    <div>⚡ Rockstar Radar · <a href="/blog">More guides</a> · <a href="/">Home</a></div>
+    <div class="disc">Short-term trading is risky. This is a personal tool, not investment advice. Rockstar
+    Radar is not affiliated with FYERS; FYERS is a trademark of its respective owner.</div>
+  </footer>
+</body>
+</html>

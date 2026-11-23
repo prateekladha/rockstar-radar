@@ -221,6 +221,14 @@ class Order(Base):
     # Phase 2 learning: the confluence signals/score captured at entry (JSON). Paired with the
     # realised pnl/result_r at exit, these rows are the training data for re-weighting (NO per-tick ML).
     features = Column(Text)
+    # Paper→live parity (docs/PAPER_LIVE_PARITY.md). gross_pnl = realised ₹ BEFORE costs; charges =
+    # modelled round-trip brokerage+statutory costs (paper only; live books real charges at the broker);
+    # `pnl` is NET of charges. margin_used = real broker INTRADAY margin blocked at entry (margin API).
+    # exit_reason tags how it closed: stop | target | velocity | square_off | reversal | manual.
+    gross_pnl = Column(Float)
+    charges = Column(Float, default=0.0)
+    margin_used = Column(Float)
+    exit_reason = Column(String(16))
 
     def risk_per_share(self):
         if self.entry and self.stop:
@@ -242,6 +250,7 @@ class Order(Base):
             'status': self.status, 'order_type': self.order_type, 'mode': self.mode,
             'working': self.status == 'pending', 'source': self.source,
             'pnl': self.pnl, 'result_r': self.result_r, 'unrealized': unreal, 'note': self.note,
+            'gross_pnl': self.gross_pnl, 'charges': self.charges, 'exit_reason': self.exit_reason,
         }
 
 

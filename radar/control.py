@@ -73,6 +73,40 @@ EDITABLE_CONFIG = {
     'auto_trade_smc': ('bool', None, None),
     'auto_trade_smc_min_score': ('int', 50, 100),
     'auto_trade_smc_atr_stop_mult': ('float', 0.5, 5.0),
+    # SMC exit/entry shaping (data-driven from the 2026-11-23 live run — see docs/BACKTEST_FINDINGS.md).
+    # 'smc_runner_target' lets winners ride to the stop/square-off instead of a fixed target (the
+    # profit engine); 'smc_enforce_min_rr' keeps/drops the hard 2:1 reward:risk reject;
+    # 'smc_block_reentry_after_stop' skips a symbol for the rest of the day once it took a stop
+    # (kills the re-entry churn). All three are per-user overridable; config.json holds the default.
+    'smc_runner_target': ('bool', None, None),
+    'smc_enforce_min_rr': ('bool', None, None),
+    'smc_block_reentry_after_stop': ('bool', None, None),
+    # Stop placement. 'choice' is a case-sensitive enum (unlike 'enum', which upper-cases) because
+    # the engines compare these against lowercase literals. SMC: order-block edge, then either a flat
+    # ATR distance ('ob_atr') or the nearest swing ('structure'). ORB retest: structural level
+    # widened to >= ATR floor ('atr_floor') or the bare structural level ('structure').
+    'smc_stop_mode': ('choice', ('ob_atr', 'structure'), None),
+    'orb_stop_mode': ('choice', ('atr_floor', 'structure'), None),
+    # Max auto entries per symbol per day (both auto strategies share the count); re-entry churn guard.
+    'max_trades_per_symbol': ('int', 1, 20),
+    # --- Paper→live parity (docs/PAPER_LIVE_PARITY.md) --------------------------------------------
+    # Make paper auto-trading a faithful replica of a real FYERS INTRADAY order so paper P&L is
+    # evidence of edge, not an artifact of optimistic simulation. All tunable without a code change.
+    'paper_apply_charges': ('bool', None, None),        # deduct brokerage+statutory costs from paper P&L
+    'paper_slippage_bps': ('num', 0, 500),              # adverse fill slippage on entries + market/stop exits
+    'paper_margin_gate': ('bool', None, None),          # gate entries on REAL broker buying power (margin API)
+    'intraday_leverage_floor': ('num', 0, 20),          # skip a stock whose broker intraday leverage < this (~not MIS)
+    'block_reentry_after_manual_exit': ('bool', None, None),  # a manual exit blocks auto re-entry that day
+    'fill_max_pct_daily_turnover': ('num', 0, 100),     # liquidity sanity: cap position vs daily turnover (0=off)
+    # FYERS intraday-equity charge rates (defaults = published card; true-up against a contract note).
+    'cost_brokerage_pct': ('num', 0, 5),
+    'cost_brokerage_cap': ('num', 0, 1000),
+    'cost_stt_sell_pct': ('num', 0, 5),
+    'cost_exch_txn_pct': ('num', 0, 5),
+    'cost_sebi_per_cr': ('num', 0, 10000),
+    'cost_ipft_per_cr': ('num', 0, 10000),
+    'cost_stamp_buy_pct': ('num', 0, 5),
+    'cost_gst_pct': ('num', 0, 100),
 }
 
 
@@ -95,6 +129,14 @@ def validate_config_patch(patch: dict) -> dict:
         elif kind == 'enum':
             allowed = lo  # for enum, the 2nd slot holds the tuple of allowed values
             sval = str(value).upper()
+            if sval not in allowed:
+                raise ControlError(f'{key} must be one of {", ".join(allowed)}, got {value!r}')
+            value = sval
+        elif kind == 'choice':
+            # Case-sensitive enum: the engines compare against lowercase literals, so (unlike 'enum')
+            # the value is matched as-is rather than upper-cased.
+            allowed = lo  # 2nd slot holds the tuple of allowed values
+            sval = str(value)
             if sval not in allowed:
                 raise ControlError(f'{key} must be one of {", ".join(allowed)}, got {value!r}')
             value = sval

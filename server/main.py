@@ -803,6 +803,32 @@ async def set_universe(request: Request, user: User = Depends(require_user),
     return {'ok': True, 'current': idx, 'label': U.label_for(idx)}
 
 
+# ----------------------------------------------------------------- Blog (static, crawlable)
+# Public SEO/GEO pages served as REAL HTML (not the client-rendered SPA shell) at clean, canonical
+# URLs. Source lives in web/public/blog/ and is copied to web/dist/blog/ by the vite build. These
+# routes are registered BEFORE the SPA catch-all below, so they win; the .html files stay reachable
+# too, but each page's <link rel="canonical"> points at the clean URL to avoid duplicate content.
+def _blog_file(name: str):
+    if not WEB_DIST.exists():
+        return None
+    blog_dir = (WEB_DIST / 'blog').resolve()
+    f = (blog_dir / name).resolve()
+    if f.is_file() and str(f).startswith(str(blog_dir) + os.sep):
+        return FileResponse(str(f), media_type='text/html; charset=utf-8')
+    return None
+
+
+@app.get('/blog', response_class=HTMLResponse)
+@app.get('/blog/', response_class=HTMLResponse)
+def blog_index():
+    return _blog_file('index.html') or HTMLResponse('<h1>Blog coming soon.</h1>', status_code=404)
+
+
+@app.get('/blog/how-to-connect-fyers', response_class=HTMLResponse)
+def blog_connect_fyers():
+    return _blog_file('how-to-connect-fyers.html') or HTMLResponse('<h1>Not found</h1>', status_code=404)
+
+
 # ----------------------------------------------------------------- SPA
 if WEB_DIST.exists():
     app.mount('/assets', StaticFiles(directory=str(WEB_DIST / 'assets')), name='assets')

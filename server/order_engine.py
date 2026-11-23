@@ -46,10 +46,26 @@ def mark_closed(order: Order, exit_price: float, note: str | None = None,
     order.exit_price = exit_price
     order.status = 'closed'
     order.closed_at = datetime.utcnow()
-    order.pnl = total
+    # gross (pre-cost) first — R is measured on the gross price edge (pure strategy signal).
+    order.gross_pnl = total
     order.result_r = round(total / (rps * order.qty), 2) if (rps and order.qty) else None
+    # Net paper P&L of modelled round-trip costs (brokerage + statutory). Live books real charges at
+    # the broker, so we don't double-count there. docs/PAPER_LIVE_PARITY.md.
+    cost = 0.0
+    if order.mode == 'paper':
+        try:
+            from radar.utils import load_config
+            from . import charges
+            _cfg = load_config()
+            if _cfg.get('paper_apply_charges', True):
+                cost = charges.trade_charges(order.side, basis, exit_price, order.qty,
+                                             charges.rates_from_config(_cfg)).get('total', 0.0)
+        except Exception:
+            cost = 0.0
+    order.charges = round(cost, 2)
+    order.pnl = round(total - cost, 2)
     if reason:
-        order._exit_reason = reason
+        order.exit_reason = reason
     if note:
         order.note = note
 
@@ -75,6 +91,131 @@ def _exit_hit(order: Order, px: float):
         if order.target and px <= order.target:
             return order.target, 'target'
     return None
+
+
+def _exit_capped_at_stop(order: Order, px):
+    """Clamp a close price so a paper position carrying a stop can never realise WORSE than that stop.
+
+    A resting stop-loss fills at the stop (±slippage), not at a far-away later print. But the intraday
+    stop pass only runs when the symbol has a live price in `_price_map`, and `_price_map` is EMPTY
+    for any stretch the feed isn't `live` (own-broker token expiry / rate-limit / restart gap). During
+    such a gap the stop is never evaluated, so without this clamp the session-end square-off would
+    book the position at the 15:15 price — multiple R away (the MARUTI −₹9,950 / ~5R, exit≠stop, on
+    2026-11-23). Clamping to the stop makes a skipped stop cost ~1R, the honest outcome of a resting
+    SL. Only ever improves the fill (never worse), so it's safe on every close path.
+    Returns (exit_price, clamped?)."""
+    if order.stop is None or px is None:
+        return px, False
+    if order.side == 'LONG' and px < order.stop:
+        return order.stop, True
+    if order.side == 'SHORT' and px > order.stop:
+        return order.stop, True
+    return px, False
+
+
+def _apply_slippage(price, side: str, bps, kind: str):
+    """Worsen a paper fill by `bps` basis points — never improve it. Real market/stop fills slip
+    against you; perfect fills are the single biggest reason paper beats live (docs/PAPER_LIVE_PARITY).
+      kind='entry' : you cross the spread to get in  (LONG pays up, SHORT sells down).
+      kind='exit'  : a market/stop exit             (LONG sells down, SHORT buys up).
+      kind=None/other (e.g. a favourable LIMIT target): unchanged — a resting limit fills at its price.
+    """
+    try:
+        b = float(bps or 0)
+    except (TypeError, ValueError):
+        b = 0.0
+    if not price or b <= 0:
+        return price
+    f = b / 10000.0
+    if kind == 'entry':
+        return round(price * (1 + f), 2) if side == 'LONG' else round(price * (1 - f), 2)
+    if kind == 'exit':
+        return round(price * (1 - f), 2) if side == 'LONG' else round(price * (1 + f), 2)
+    return price
+
+
+def _fundable(margin_total, margin_avail, committed_margin: float) -> bool:
+    """Can a new order needing `margin_total` be funded, given `margin_avail` (broker live balance)
+    and `committed_margin` already reserved by this user's open/pending paper positions this session?
+    Mirrors a broker margin-shortfall check. Unknown inputs -> not fundable (never trade on guesses)."""
+    if margin_total is None or margin_avail is None:
+        return False
+    return (float(committed_margin or 0.0) + float(margin_total)) <= float(margin_avail)
+
+
+def _intraday_leverage(notional, margin_total):
+    """Implied INTRADAY leverage the broker is giving on this order (notional / margin). ~1x means the
+    stock effectively gets no intraday margin benefit (a proxy for 'not really MIS-tradeable')."""
+    if not notional or not margin_total:
+        return None
+    return round(float(notional) / float(margin_total), 3)
+
+
+def _fy_symbol(sym: str) -> str:
+    """Bare ticker or FYERS symbol -> canonical FYERS equity symbol (NSE:XXX-EQ) for API calls."""
+    s = str(sym or '').strip()
+    if s.startswith('NSE:'):
+        return s
+    return f'NSE:{watchpins.bare(s)}-EQ'
+
+
+def _parity_ctx(db: Session, user: User, cfg: dict):
+    """Per-user context shared by both auto strategies' pre-entry gates:
+      - (app_id, token): the user's own-broker credentials for the real margin check;
+      - committed: ₹ margin already reserved by their open/pending paper auto positions this session;
+      - blocked_manual: bare symbols the user MANUALLY exited today (re-entry blocked so the bot
+        doesn't fight the trader's override).
+    Returns None when the margin gate is ON but we can't read the user's broker — the caller then
+    skips all of that user's auto entries (we never trade on an unknown buying-power pool)."""
+    from radar.utils import now_ist, IST
+    from datetime import timezone as _tz
+    app_id, token = None, None
+    if bool(cfg.get('paper_margin_gate', True)):
+        try:
+            own = scanners._own_broker(db, user)
+            if own and own.token_enc and scanners._token_is_fresh_today(own):
+                from .crypto import decrypt
+                token, app_id = (decrypt(own.token_enc) or None), own.app_id
+        except Exception:
+            token = None
+        if not token:
+            return None
+    committed = sum((o.margin_used or 0.0) for o in db.query(Order).filter(
+        Order.user_id == user.id, Order.source.in_(('auto', 'auto_smc')),
+        Order.status.in_(('open', 'pending'))).all())
+    blocked_manual: set[str] = set()
+    if bool(cfg.get('block_reentry_after_manual_exit', True)):
+        today = now_ist().date()
+        for mo in db.query(Order).filter(
+                Order.user_id == user.id, Order.source.in_(('auto', 'auto_smc')),
+                Order.status == 'closed', Order.exit_reason == 'manual').all():
+            if mo.closed_at and mo.closed_at.replace(tzinfo=_tz.utc).astimezone(IST).date() == today:
+                blocked_manual.add(watchpins.bare(mo.symbol))
+    return app_id, token, committed, blocked_manual
+
+
+def _gate_entry(cfg: dict, *, app_id, token, side, fy_symbol, qty, entry, turnover_cr,
+                committed: float):
+    """All pre-placement parity gates for ONE candidate. Returns the ₹ margin to reserve for it
+    (0.0 when the margin gate is off), or None to SKIP the entry.
+    Gates: liquidity sanity (notional vs daily turnover), real broker margin fundability, and the
+    intraday-leverage floor (a ~1x stock gets no real MIS benefit). See docs/PAPER_LIVE_PARITY.md."""
+    cap_pct = float(cfg.get('fill_max_pct_daily_turnover', 0) or 0)
+    if cap_pct > 0 and turnover_cr and (qty * entry / 1e7) > cap_pct / 100.0 * float(turnover_cr):
+        return None
+    if not bool(cfg.get('paper_margin_gate', True)):
+        return 0.0
+    from . import broker_orders
+    try:
+        mg = broker_orders.fetch_order_margin(app_id, token, symbol=fy_symbol, qty=qty, side=side)
+    except Exception:
+        return None
+    lev = _intraday_leverage(qty * entry, mg['margin_total'])
+    if lev is not None and lev < float(cfg.get('intraday_leverage_floor', 1.0) or 1.0):
+        return None
+    if not _fundable(mg['margin_total'], mg['margin_avail'], committed):
+        return None
+    return mg['margin_total']
 
 
 def _manage_open_paper(order: Order, px: float, cfg: dict, now_ist_dt) -> bool:
@@ -115,7 +256,8 @@ def _manage_open_paper(order: Order, px: float, cfg: dict, now_ist_dt) -> bool:
         if exit_engine.velocity_exit(side, fill, px, order.target, elapsed_min, now_ist_dt,
                                      str(cfg.get('exit_mgmt_cutoff', '15:00')),
                                      float(cfg.get('exit_velocity_slack', 1.5) or 1.5)):
-            mark_closed(order, px, reason='velocity')
+            mark_closed(order, _apply_slippage(px, side, cfg.get('paper_slippage_bps', 0), 'exit'),
+                        reason='velocity')
             return True
     return changed
 
@@ -124,10 +266,12 @@ def process_paper(order: Order, px: float, cfg: dict | None = None, now_ist_dt=N
     """Advance one paper order against the latest price. Returns True if it changed."""
     if px is None:
         return False
+    slip = (cfg or {}).get('paper_slippage_bps', 0)
     if order.status == 'pending':
         if _entry_triggered(order, px):
             order.status = 'open'
-            order.fill_price = order.entry
+            # Realistic entry: you cross the spread, so the fill is worse than the trigger by `slip` bps.
+            order.fill_price = _apply_slippage(order.entry, order.side, slip, 'entry')
             order.filled_at = datetime.utcnow()
             if order.init_stop is None:
                 order.init_stop = order.stop   # capture the ORIGINAL stop for 1R math
@@ -140,6 +284,8 @@ def process_paper(order: Order, px: float, cfg: dict | None = None, now_ist_dt=N
         hit = _exit_hit(order, px)     # stop (maybe breakeven now) / target
         if hit:
             exit_price, reason = hit
+            if reason == 'stop':       # a stop fills through the level (market-ish); a limit target doesn't
+                exit_price = _apply_slippage(exit_price, order.side, slip, 'exit')
             mark_closed(order, exit_price, reason=reason)
             return True
         return changed
@@ -231,6 +377,17 @@ def _auto_trade(db: Session) -> int:
                       cfg.get('auto_trade_trigger', 'RETEST_READY')) or 'RETEST_READY').upper()
         if trigger not in ('RETEST_READY', 'CONFIRMED'):
             trigger = 'RETEST_READY'
+        # Parity gates (real-money replica). Sim is accelerated practice — real buying power is
+        # irrelevant there, so it bypasses the margin gate and keeps flowing.
+        if u.sim_enabled:
+            app_id = token = None
+            committed, blocked_manual, gate_on = 0.0, set(), False
+        else:
+            ctx = _parity_ctx(db, u, cfg)
+            if ctx is None:
+                continue   # margin gate on but can't read broker -> skip this user's real auto entries
+            app_id, token, committed, blocked_manual = ctx
+            gate_on = True
         for r in rows:
             state = r.get('state')
             if trigger == 'CONFIRMED':
@@ -260,7 +417,10 @@ def _auto_trade(db: Session) -> int:
                 # opportunity -> exit now at the live price. Same side = already in, nothing to do.
                 if pos.side != side:
                     px = price_map.get(sym) or entry
-                    mark_closed(pos, px, note='Auto exit — opposite (reversal) signal on the stock.')
+                    px = _apply_slippage(px, pos.side, cfg.get('paper_slippage_bps', 0), 'exit')
+                    px, _ = _exit_capped_at_stop(pos, px)   # never realise worse than the protective stop
+                    mark_closed(pos, px, note='Auto exit — opposite (reversal) signal on the stock.',
+                                reason='reversal')
                     del open_auto[sym]
                     changed += 1
                 continue
@@ -269,7 +429,7 @@ def _auto_trade(db: Session) -> int:
             # flowing while you watch — but NOT after the session has ended.
             if sim_closed:
                 continue
-            if sym in pending_auto:
+            if sym in pending_auto or sym in blocked_manual:
                 continue
             if not u.sim_enabled and _trades_today(db, u.id, sym, today) >= int(cfg.get('max_trades_per_symbol', 4) or 4):
                 continue
@@ -277,9 +437,17 @@ def _auto_trade(db: Session) -> int:
             qty = int(floor(max_risk / rps)) if (max_risk and rps) else 0
             if qty < 1:
                 continue
+            margin_used = None
+            if gate_on:
+                margin_used = _gate_entry(cfg, app_id=app_id, token=token, side=side,
+                                          fy_symbol=_fy_symbol(r.get('symbol')), qty=qty, entry=entry,
+                                          turnover_cr=r.get('turnover_cr'), committed=committed)
+                if margin_used is None:
+                    continue   # not fundable / no intraday leverage / too illiquid -> skip
+                committed += margin_used
             db.add(Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
                          target=target, status='pending', order_type='market', mode='paper',
-                         sim=1 if u.sim_enabled else 0, source='auto',
+                         sim=1 if u.sim_enabled else 0, source='auto', margin_used=margin_used,
                          note=f'Auto paper trade — algo {state} ({today}).'))
             pending_auto.add(sym)
             changed += 1
@@ -345,6 +513,16 @@ def _auto_trade_smc(db: Session) -> int:
                 if (so.result_r is not None and so.result_r <= -0.9
                         and so.closed_at and so.closed_at.date() == now_ist().date()):
                     stopped_today.add(watchpins.bare(so.symbol))
+        # Parity gates (shared with ORB). Sim bypasses the real-margin gate.
+        if u.sim_enabled:
+            app_id = token = None
+            committed, blocked_manual, gate_on = 0.0, set(), False
+        else:
+            ctx = _parity_ctx(db, u, cfg)
+            if ctx is None:
+                continue
+            app_id, token, committed, blocked_manual = ctx
+            gate_on = True
         for o in opps:
             try:
                 score = int(o.get('score') or 0)
@@ -368,7 +546,7 @@ def _auto_trade_smc(db: Session) -> int:
             if enforce_rr and (rr is None or rr < min_rr):
                 continue   # fails the 2:1 net reward:risk gate
             sym = watchpins.bare(o.get('symbol') or '')
-            if not sym or sym in held or sym in stopped_today:
+            if not sym or sym in held or sym in stopped_today or sym in blocked_manual:
                 continue
             if not u.sim_enabled and _trades_today(db, u.id, sym, today) >= int(cfg.get('max_trades_per_symbol', 4) or 4):
                 continue
@@ -376,6 +554,14 @@ def _auto_trade_smc(db: Session) -> int:
             qty = int(floor(max_risk / rps)) if rps else 0
             if qty < 1:
                 continue
+            margin_used = None
+            if gate_on:
+                margin_used = _gate_entry(cfg, app_id=app_id, token=token, side=side,
+                                          fy_symbol=_fy_symbol(o.get('symbol')), qty=qty, entry=entry,
+                                          turnover_cr=o.get('turnover_cr'), committed=committed)
+                if margin_used is None:
+                    continue
+                committed += margin_used
             stop_src = ('OB stop' if plan.get('in_fresh_ob')
                         else 'structure stop' if str(cfg.get('smc_stop_mode', 'ob_atr')) == 'structure'
                         else 'ATR stop')
@@ -383,7 +569,7 @@ def _auto_trade_smc(db: Session) -> int:
             exit_note = 'let-run (stop/square-off)' if runner else f'target {target}'
             smc_order = Order(user_id=u.id, symbol=sym, side=side, qty=qty, entry=entry, stop=stop,
                               target=order_target, status='pending', order_type='market', mode='paper',
-                              sim=1 if u.sim_enabled else 0, source='auto_smc',
+                              sim=1 if u.sim_enabled else 0, source='auto_smc', margin_used=margin_used,
                               note=f'Auto SMC trade — {side} score {score}, R:R {rr}, {stop_src}, {exit_note} ({today}).')
             try:   # log the confluence snapshot at entry (training data for the auto-trade path)
                 from . import trade_features
@@ -406,7 +592,8 @@ def _square_off_paper(db: Session) -> int:
     (pending, unfilled) order — a working order must never carry past the square-off into the next day.
     Simulation orders are EXCLUDED: they live in accelerated sim-time (real 15:15 is irrelevant) and are
     handled by _square_off_sim."""
-    from radar.utils import now_ist
+    from radar.utils import now_ist, load_config
+    slip = load_config().get('paper_slippage_bps', 0)
     orders = (db.query(Order).filter_by(mode='paper').filter(Order.sim == 0)
               .filter(Order.status.in_(('open', 'pending'))).all())
     if not orders:
@@ -435,7 +622,11 @@ def _square_off_paper(db: Session) -> int:
                 o.note = 'Auto-cancelled: working order unfilled at session end (intraday rule).'
             else:
                 exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
-                mark_closed(o, exit_px, note='Auto square-off at session end (intraday rule).')
+                exit_px = _apply_slippage(exit_px, o.side, slip, 'exit')   # market square-off slips
+                exit_px, capped = _exit_capped_at_stop(o, exit_px)
+                note = ('Auto square-off — stop enforced (feed gap; SL would have filled at the stop).'
+                        if capped else 'Auto square-off at session end (intraday rule).')
+                mark_closed(o, exit_px, note=note, reason='square_off')
             changed += 1
     if changed:
         db.commit()
@@ -448,6 +639,8 @@ def _square_off_sim(db: Session) -> int:
     the last sim price AND cancel any unfilled (pending) SIM orders — the practice equivalent of the
     intraday square-off. While the session is still playing, session_closed is False so trades exit
     normally via stop/target."""
+    from radar.utils import load_config
+    slip = load_config().get('paper_slippage_bps', 0)
     sim_orders = (db.query(Order).filter_by(mode='paper').filter(Order.sim == 1)
                   .filter(Order.status.in_(('open', 'pending'))).all())
     if not sim_orders:
@@ -474,7 +667,9 @@ def _square_off_sim(db: Session) -> int:
                 o.note = 'Sim — unfilled at session end, cancelled.'
             else:
                 exit_px = pm.get(watchpins.bare(o.symbol)) or o.target or o.fill_price or o.entry
-                mark_closed(o, exit_px, note='Sim square-off at session end.')
+                exit_px = _apply_slippage(exit_px, o.side, slip, 'exit')
+                exit_px, _ = _exit_capped_at_stop(o, exit_px)
+                mark_closed(o, exit_px, note='Sim square-off at session end.', reason='square_off')
             changed += 1
     if changed:
         db.commit()

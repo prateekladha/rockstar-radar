@@ -10,7 +10,7 @@ const FEATURES = [
 
 const STEPS = [
   ['1', 'Sign in', 'One tap with Google. Set up your profile in seconds.'],
-  ['2', 'Connect your broker', 'Link your FYERS account once. A quick daily login keeps it live (a SEBI requirement for all brokers).'],
+  ['2', 'Connect your broker', 'Link your FYERS account once — our step-by-step guide takes ~5 minutes. A quick daily login keeps it live (a SEBI requirement for all brokers).'],
   ['3', 'Scan & act', 'Watch ranked setups through the session and act with one tap — in paper mode first, so you prove the edge before risking capital.'],
 ]
 
@@ -63,6 +63,7 @@ export default function Landing() {
       <footer className="mktg-foot">
         <span>⚡ Rockstar Radar</span>
         <span className="dim">Short-term trading is risky. This is a personal tool, not investment advice.</span>
+        <a href="/blog/how-to-connect-fyers">Connect FYERS guide</a>
         <a href="https://github.com/prateekladha/rockstar-radar" target="_blank" rel="noreferrer">GitHub</a>
       </footer>
     </div>

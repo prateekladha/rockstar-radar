@@ -15,9 +15,11 @@ function ChartToggle({ v, set }) {
 
 export default function Insights() {
   const [s, setS] = useState(null)
+  const [rev, setRev] = useState(null)
   const [pnlKind, setPnlKind] = useState('bar')
   const mode = useViewMode()
   useEffect(() => { setS(null); api('/api/insights?mode=' + mode).then(setS).catch(() => {}) }, [mode])
+  useEffect(() => { setRev(null); api('/api/insights/strategy-review?mode=' + mode).then(setRev).catch(() => {}) }, [mode])
   if (!s) return <div className="empty">Loading insights…</div>
   if (!s.trades && !s.open) return <div className="empty"><div className="big">No trades yet</div>Your performance shows up here once you've taken a few trades.</div>
 
@@ -67,6 +69,39 @@ export default function Insights() {
           </div>
         </div>
       </div>
+
+      {rev && rev.trades > 0 && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-h"><h2>Strategy review</h2>
+            <span className="hint">real-cost P&amp;L, exits &amp; SMC score edge · {rev.mode}</span></div>
+          <div className="panel-b">
+            <div className="kpis">
+              <Tile label="Gross P&L" val={money(rev.costs.gross_pnl)} sub="before costs" />
+              <Tile label="Charges" val={money(-rev.costs.charges)} cls="down"
+                sub={rev.costs.charges_pct_of_gross != null ? rev.costs.charges_pct_of_gross + '% of gross' : 'brokerage + taxes'} />
+              <Tile label="Net P&L" val={money(rev.costs.net_pnl)} cls={rev.costs.net_pnl >= 0 ? 'live' : ''} sub="after real costs" />
+            </div>
+            <div className="planrow" style={{ marginTop: 10 }}><span className="pk">How trades exited</span>
+              <span className="pv mono">{Object.entries(rev.exit_reasons).map(([k, v]) => `${k}: ${v}`).join('  ·  ') || '—'}</span></div>
+            {rev.smc_score_buckets?.some(b => b.n > 0) && (
+              <div style={{ marginTop: 14 }}>
+                <div className="hint" style={{ marginBottom: 6 }}>
+                  SMC auto-trade — realised edge by entry score. The ≥80 gate is justified only if avg R
+                  and win-rate <strong>rise</strong> with the score bucket.
+                </div>
+                {rev.smc_score_buckets.map(b => (
+                  <div className="planrow" key={b.bucket}>
+                    <span className="pk">Score {b.bucket}</span>
+                    <span className="pv mono">{b.n
+                      ? `${b.n} trades · ${b.win_rate != null ? Math.round(b.win_rate * 100) : '—'}% win · ${b.avg_r != null ? b.avg_r + 'R' : '—'} · ${money(b.total_pnl)}`
+                      : 'no trades'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -5,6 +5,16 @@ import { Select } from './ui.jsx'
 const TIME_KEYS = ['open_range_start', 'watch_start', 'new_signals_stop']
 // Rendered as switches rather than number boxes, and skipped by the numeric validator.
 const BOOL_KEYS = ['use_one_minute_candles']
+// Auto-trade & strategy flags live on their own page (AutoTrade.jsx, in the profile menu, open to
+// all roles). They still arrive in /api/settings, so exclude them from this admin page's generic
+// numeric grid (the way auto_trade_trigger always has been) — otherwise the enums/bools would
+// render as broken number boxes and trip the Save validator.
+const STRATEGY_KEYS = [
+  'auto_trade_smc', 'auto_trade_smc_min_score', 'auto_trade_smc_atr_stop_mult', 'auto_trade_trigger',
+  'smc_runner_target', 'smc_enforce_min_rr', 'smc_block_reentry_after_stop',
+  'smc_stop_mode', 'orb_stop_mode', 'max_trades_per_symbol',
+]
+const STRATEGY_SET = new Set(STRATEGY_KEYS)
 const okTime = (t) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(t))
 const human = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/Pct/g, '%').replace(/Inr/g, '₹').replace(/Cr/g, '(cr)').replace(/Atr/g, 'ATR').replace(/Rvol/g, 'RVOL').replace(/Or /g, 'OR ')
 
@@ -33,7 +43,7 @@ export default function Settings() {
   if (!cfg) return <div className="empty">Loading settings…</div>
 
   const err = (k, v) => {
-    if (k === 'auto_trade_trigger') return ''   // enum, rendered as a dropdown below
+    if (STRATEGY_SET.has(k)) return ''          // own panel below (toggles/dropdowns/ints)
     if (BOOL_KEYS.includes(k)) return ''        // switch; can't be out of range
     if (TIME_KEYS.includes(k)) return okTime(v) ? '' : 'HH:MM'
     return v === '' || isNaN(Number(v)) ? 'number' : (Number(v) < 0 ? '≥ 0' : '')
@@ -64,7 +74,7 @@ export default function Settings() {
       <div className="panel-b">
         {msg && <div className="banner ok">{msg}</div>}
         <div className="settings-grid">
-          {Object.entries(cfg).filter(([k]) => k !== 'auto_trade_trigger').map(([k, v]) => {
+          {Object.entries(cfg).filter(([k]) => !STRATEGY_SET.has(k)).map(([k, v]) => {
             const e = err(k, v)
             if (BOOL_KEYS.includes(k)) {
               return (

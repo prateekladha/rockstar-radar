@@ -58,5 +58,19 @@
   "exit_velocity_governor": false,
   "exit_velocity_slack": 1.5,
   "exit_mgmt_cutoff": "15:00",
-  "max_trades_per_symbol": 2
+  "max_trades_per_symbol": 2,
+  "paper_apply_charges": true,
+  "paper_slippage_bps": 5,
+  "paper_margin_gate": true,
+  "intraday_leverage_floor": 1.5,
+  "block_reentry_after_manual_exit": true,
+  "fill_max_pct_daily_turnover": 2.0,
+  "cost_brokerage_pct": 0.03,
+  "cost_brokerage_cap": 20,
+  "cost_stt_sell_pct": 0.025,
+  "cost_exch_txn_pct": 0.00297,
+  "cost_sebi_per_cr": 10,
+  "cost_ipft_per_cr": 10,
+  "cost_stamp_buy_pct": 0.003,
+  "cost_gst_pct": 18
 }

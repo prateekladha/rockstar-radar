@@ -33,9 +33,8 @@ PLATFORMS = [
     {'id': 'fyers', 'label': 'FYERS', 'status': 'available', 'oauth': True,
      'help': 'Create an API app at myapi.fyers.in, paste its App ID and Secret, then register the '
              'redirect URL shown below in that app. Click Connect to log in to FYERS.'},
-    {'id': 'zerodha', 'label': 'Zerodha Kite', 'status': 'available', 'oauth': False,
-     'help': 'Create a Kite Connect app at developers.kite.trade and register the redirect URL '
-             'shown below.'},
+    # Not fully integrated yet — surfaced as "coming soon" so users don't try to connect it.
+    {'id': 'zerodha', 'label': 'Zerodha Kite', 'status': 'coming_soon'},
     {'id': 'upstox', 'label': 'Upstox', 'status': 'coming_soon'},
     {'id': 'angelone', 'label': 'Angel One', 'status': 'coming_soon'},
     {'id': 'dhan', 'label': 'Dhan', 'status': 'coming_soon'},
