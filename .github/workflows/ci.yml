@@ -46,3 +46,30 @@ jobs:
         run: |
           python -m compileall -q server radar launch.py
           python -c "import server.main; import radar.engine; import server.alerting; print('backend imports OK')"
+      - name: Backend tests
+        env:
+          SESSION_SECRET: ci-dummy-not-a-real-secret
+          RADAR_SCHED: '0'
+          RADAR_ORDER_ENGINE: '0'
+        run: |
+          pip install pytest
+          pytest -q
+
+      # ---- Infra validation (OKE migration): Terraform + Helm must stay valid ----
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - name: Terraform fmt + validate
+        working-directory: deploy/terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Helm lint + kubeconform
+        run: |
+          curl -sSL https://get.helm.sh/helm-v3.16.2-linux-amd64.tar.gz | tar xz
+          HELM=./linux-amd64/helm
+          VALS="--set image.repository=r/app --set domain=x.sslip.io --set oci.vaultId=v --set oci.compartmentId=c --set letsencryptEmail=a@b.c --set publicBaseUrl=https://x"
+          $HELM lint deploy/helm/rockstar $VALS
+          $HELM template r deploy/helm/rockstar $VALS > /tmp/rendered.yaml
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -ignore-missing-schemas /tmp/rendered.yaml

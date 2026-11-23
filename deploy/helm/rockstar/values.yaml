@@ -27,6 +27,7 @@ web:
 # scanner: stateful (live FYERS feed + per-user subprocesses + day-state on a PVC). Single replica,
 # Recreate — never two managers fighting over the FYERS locks. Deployed only when scanner code changes.
 scanner:
+  imageTag: ""                # pinned by CI to the currently-deployed tag on a web-only deploy
   storageSize: 10Gi
   storageClass: oci-bv        # OCI Block Volume (default on OKE)
   resources:
