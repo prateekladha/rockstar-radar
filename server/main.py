@@ -606,35 +606,81 @@ def _smc_market_closed():
 @app.get('/api/smc-radar')
 def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_db)):
     from . import scanners
-    # Get the effective control center for this user
-    cc = scanners.effective_cc(db, user)
     closed = _smc_market_closed()
-    if cc is None:
+    # Mode-aware: local scanner subprocess (single container / scanner pod) OR a proxy to the scanner
+    # pod (web pod). Returns 'offline': True when no live scanner, else the SMC state + opportunities.
+    state = scanners.smc_state(db, user)
+    if not state or state.get('offline'):
         return closed or {'offline': True, 'reason': 'Scanner not running', 'opportunities': []}
 
-    # Proxy the SMC state from the scanner subprocess
-    try:
+    # Apply prerequisite filters to SMC opportunities
+    if state.get('opportunities'):
+        filtered_opps, rejected_count = _apply_prerequisite_filters(
+            state['opportunities'], user, strategy='SMC'
+        )
+        state['opportunities'] = filtered_opps
+        if rejected_count > 0:
+            state['prereq_filtered'] = rejected_count
+            print(f'[Prereq] SMC - Filtered {rejected_count} opportunities for user {user.email}')
+    return state
+
+
+def _internal_authorized(request: Request) -> bool:
+    """Cluster-internal endpoints are reachable only inside the K8s network and gated by a shared
+    token (INTERNAL_TOKEN). When no token is configured (single container / dev) they're open —
+    they're not exposed via the public ingress anyway."""
+    from . import scanners
+    tok = scanners.INTERNAL_TOKEN
+    return (not tok) or request.headers.get('X-Internal-Token') == tok
+
+
+@app.get('/internal/radar-state')
+def internal_radar_state(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """The scanner pod serves the local radar state for the web pod (OKE migration P2). Not public."""
+    from . import scanners
+    if not _internal_authorized(request):
+        return JSONResponse({'error': 'forbidden'}, status_code=403)
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        return {'offline': True, 'data_mode': 'none', 'reason': 'unknown user'}
+    return scanners._radar_state_local(db, u)
+
+
+@app.get('/internal/smc-state')
+def internal_smc_state(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """The scanner pod serves the local SMC state for the web pod. Not public."""
+    from . import scanners
+    if not _internal_authorized(request):
+        return JSONResponse({'error': 'forbidden'}, status_code=403)
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        return {'offline': True, 'opportunities': []}
+    return scanners._smc_state_local(db, u)
+
+
+@app.get('/healthz')
+def healthz():
+    """Liveness: the process is up. Used by the K8s liveness/startup probes."""
+    return {'ok': True}
+
+
+@app.get('/readyz')
+def readyz():
+    """Readiness: the web pod is ready only once it can reach the scanner pod; the scanner pod (or a
+    single container) is ready when its process is up."""
+    from . import scanners
+    if scanners.SCANNER_HOST:
         import urllib.request
-        import json
-        with urllib.request.urlopen(
-                f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
-            state = json.loads(resp.read().decode('utf-8'))
-
-            # Apply prerequisite filters to SMC opportunities
-            if state.get('opportunities'):
-                filtered_opps, rejected_count = _apply_prerequisite_filters(
-                    state['opportunities'], user, strategy='SMC'
-                )
-                state['opportunities'] = filtered_opps
-
-                # Add metadata about filtering
-                if rejected_count > 0:
-                    state['prereq_filtered'] = rejected_count
-                    print(f'[Prereq] SMC - Filtered {rejected_count} opportunities for user {user.email}')
-
-            return state
-    except (urllib.error.URLError, OSError, ValueError):
-        return closed or {'offline': True, 'reason': 'SMC scanner starting...', 'opportunities': []}
+        try:
+            with urllib.request.urlopen(
+                    f'http://{scanners.SCANNER_HOST}:{scanners.SCANNER_INTERNAL_PORT}/healthz',
+                    timeout=3) as r:
+                if r.status == 200:
+                    return {'ready': True}
+        except Exception:
+            pass
+        return JSONResponse({'ready': False, 'reason': 'scanner unreachable'}, status_code=503)
+    return {'ready': True}
 
 
 @app.post('/api/debug-stock')

@@ -43,6 +43,29 @@ _lock = threading.Lock()
 _RESTART_COOLDOWN_SECS = 45.0
 _last_start_attempt: dict[str, float] = {}   # key "u<owner_id>" -> monotonic time of last spawn
 
+# --- web/scanner split (OKE migration P2) ---------------------------------------------------------
+# When SCANNER_HOST is set (the `web` pod), this process owns NO scanners: radar_state/smc_state proxy
+# over HTTP to the `scanner` pod's /internal endpoints. When it is unset (the `scanner` pod, local dev,
+# or the single-container VM) everything runs locally exactly as before — the split is transparent.
+SCANNER_HOST = os.environ.get('SCANNER_HOST') or ''
+SCANNER_INTERNAL_PORT = int(os.environ.get('SCANNER_INTERNAL_PORT', '8080') or 8080)
+INTERNAL_TOKEN = os.environ.get('INTERNAL_TOKEN', '') or ''
+
+
+def _proxy_internal(path: str, user_id: int, extra: str = '') -> dict:
+    """GET the scanner pod's internal state endpoint (web pod only). Read-only; cluster-internal."""
+    import json
+    import urllib.error
+    import urllib.request
+    url = f'http://{SCANNER_HOST}:{SCANNER_INTERNAL_PORT}/internal/{path}?user_id={int(user_id)}{extra}'
+    req = urllib.request.Request(url, headers={'X-Internal-Token': INTERNAL_TOKEN})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except (urllib.error.URLError, OSError, ValueError):
+        return {'offline': True, 'data_mode': 'none',
+                'reason': 'The scanner is starting up. Live data resumes shortly.'}
+
 
 def _free_port() -> int:
     """An OS-assigned free localhost port. Replaces the old `base + owner_id % 60` scheme, which
@@ -303,21 +326,28 @@ def effective_cc(db: Session, user: User) -> ControlCenter | None:
 
 
 def smc_state(db: Session, user: User) -> dict:
-    """SMC opportunities for the user's effective (already-running) scanner — sim, own, or shared.
-    Read-only: never starts a scanner (mirrors the /api/smc-radar proxy). Returns
-    {'opportunities': [...]} — an empty list when offline/none, so callers can iterate safely."""
+    """SMC opportunities for this user. On the `web` pod proxies to the `scanner` pod; otherwise runs
+    locally. Returns a dict with 'opportunities' (empty when offline), and 'offline': True when there's
+    no live scanner, so callers can distinguish 'not running' from 'running but nothing qualifies'."""
+    if SCANNER_HOST:
+        return _proxy_internal('smc-state', user.id)
+    return _smc_state_local(db, user)
+
+
+def _smc_state_local(db: Session, user: User) -> dict:
+    """The local SMC state: read-only, never starts a scanner (mirrors the /api/smc-radar proxy)."""
     import json
     import urllib.request
     import urllib.error
     cc = effective_cc(db, user)
     if cc is None:
-        return {'opportunities': []}
+        return {'offline': True, 'opportunities': []}
     try:
         with urllib.request.urlopen(
                 f'http://127.0.0.1:{cc.scanner_port}/api/smc-state', timeout=3) as resp:
             return json.loads(resp.read().decode('utf-8'))
     except (urllib.error.URLError, OSError, ValueError):
-        return {'opportunities': []}
+        return {'offline': True, 'opportunities': []}
 
 
 def connected_brokers(db: Session) -> list[BrokerConnection]:
@@ -494,7 +524,14 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
 
 
 def radar_state(db: Session, user: User) -> dict:
-    """The user's radar feed. Simulation (if on) takes over; else prefer their OWN broker, falling back
+    """The user's radar feed. On the `web` pod proxies to the `scanner` pod; otherwise runs locally."""
+    if SCANNER_HOST:
+        return _proxy_internal('radar-state', user.id)
+    return _radar_state_local(db, user)
+
+
+def _radar_state_local(db: Session, user: User) -> dict:
+    """The local radar feed. Simulation (if on) takes over; else prefer their OWN broker, falling back
     to the household's shared broker if their own is down (expired/auth/rate-limited)."""
     if user.sim_enabled:
         st = _sim_cc_for(user).live_state()
