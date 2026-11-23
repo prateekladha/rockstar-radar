@@ -34,7 +34,7 @@ resource "oci_database_autonomous_database" "main" {
   admin_password           = random_password.db_admin.result
   data_storage_size_in_tbs = 1
   compute_model            = "ECPU"
-  compute_count            = 1 # Always Free is fixed-size; scaling = upgrade to paid ADB
+  compute_count            = 2 # OCI minimum for an Autonomous DB is 2 ECPU (Always-Free allows 2 ECPU / 20 GB)
   # TLS without a wallet; only our VCN (reached via the service gateway) may connect.
   is_mtls_connection_required = false
   whitelisted_ips             = [oci_core_vcn.main.id]
