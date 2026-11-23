@@ -334,6 +334,17 @@ def _auto_trade_smc(db: Session) -> int:
         held = {watchpins.bare(o.symbol) for o in db.query(Order)
                 .filter(Order.user_id == u.id, Order.source.in_(('auto', 'auto_smc')),
                         Order.status.in_(('pending', 'open'))).all()}
+        # Don't re-enter a symbol that already took a STOP (~ -1R) today: the 2026-11-23 run showed
+        # repeated same-symbol stop-outs (KALYANKJIL ×4 ≈ -₹7.8k, SOLARINDS ×3, …) were the bulk of the
+        # losing bucket. Blocking re-entry after a stop cuts that churn. Config-gated (default on).
+        stopped_today: set[str] = set()
+        if bool(cfg.get('smc_block_reentry_after_stop', True)):
+            for so in (db.query(Order)
+                       .filter(Order.user_id == u.id, Order.source.in_(('auto', 'auto_smc')),
+                               Order.status == 'closed').all()):
+                if (so.result_r is not None and so.result_r <= -0.9
+                        and so.closed_at and so.closed_at.date() == now_ist().date()):
+                    stopped_today.add(watchpins.bare(so.symbol))
         for o in opps:
             try:
                 score = int(o.get('score') or 0)
@@ -357,7 +368,7 @@ def _auto_trade_smc(db: Session) -> int:
             if enforce_rr and (rr is None or rr < min_rr):
                 continue   # fails the 2:1 net reward:risk gate
             sym = watchpins.bare(o.get('symbol') or '')
-            if not sym or sym in held:
+            if not sym or sym in held or sym in stopped_today:
                 continue
             if not u.sim_enabled and _trades_today(db, u.id, sym, today) >= int(cfg.get('max_trades_per_symbol', 4) or 4):
                 continue
