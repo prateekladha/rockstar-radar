@@ -532,7 +532,12 @@ def _apply_prerequisite_filters(opportunities: list, user: User, strategy: str =
             'liquidity_cr': liquidity_cr
         })
 
-        if result.passed:
+        # RVOL "unavailable" (None) means we could not MEASURE it — e.g. the SMC confluence buffer is
+        # too short for a cumulative RVOL — NOT that it is low. Rejecting on that would empty the whole
+        # radar, so treat an unmeasurable RVOL as not-applicable: keep the opportunity unless RVOL was
+        # actually computed and below threshold, or another prerequisite failed.
+        rvol_unavailable = rvol is None and set(result.failed_checks) <= {'RVOL'}
+        if result.passed or rvol_unavailable:
             filtered.append(opp)
         else:
             rejected += 1
