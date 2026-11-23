@@ -66,3 +66,33 @@ def health_at(health: dict | None) -> datetime | None:
         return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return None
+
+
+def generic_failure_active(health: dict | None, token_refreshed_at, now: datetime,
+                           window_secs: float = 600.0) -> bool:
+    """True when the scanner's last health is a GENERIC start failure that should pause auto-restart.
+
+    A scanner that crashes on start writes ok=False. Auth and rate-limit crashes carry their own
+    flags (need_login / rate_limited) and are handled by dedicated guards. Everything else — e.g. the
+    "too few RVOL baselines" ValueError — is a *generic* failure with neither flag. Without this, the
+    web poll path respawns the scanner on every ~3s poll, and each respawn re-fetches ~100 FYERS
+    history calls, so a scanner that keeps failing can exhaust the whole daily quota in minutes.
+
+    Returns True only while the failure is recent (within `window_secs`) and the broker has NOT been
+    re-logged-in since (a token minted after the failure earns a fresh attempt). `now` and
+    `token_refreshed_at` may be naive or tz-aware; naive values are read as UTC.
+    """
+    if not health or health.get('ok') is not False:
+        return False
+    if health.get('need_login') or health.get('rate_limited'):
+        return False  # handled by the auth / rate-limit guards
+    at = health_at(health)
+    if at is None:
+        return False
+    if token_refreshed_at is not None:
+        tok = token_refreshed_at
+        tok = tok if tok.tzinfo else tok.replace(tzinfo=timezone.utc)
+        if tok > at:
+            return False  # logged in after the failure — allow a fresh attempt
+    now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    return (now - at).total_seconds() <= window_secs

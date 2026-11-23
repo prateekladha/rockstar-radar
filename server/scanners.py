@@ -18,7 +18,8 @@ from __future__ import annotations
 import os
 import socket
 import threading
-from datetime import timezone
+import time
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,12 @@ _demo: ControlCenter | None = None
 _scanners: dict[str, ControlCenter] = {}   # key "u<owner_id>" -> ControlCenter
 _sim_ccs: dict[int, ControlCenter] = {}    # user_id -> their accelerated sim ControlCenter
 _lock = threading.Lock()
+
+# A scanner that crashes on start must not be respawned on every ~3s radar poll — each respawn
+# re-fetches ~100 FYERS history baselines and can burn the whole 5,000/day quota in minutes. Cap
+# (re)start attempts per owner to at most one per this many seconds.
+_RESTART_COOLDOWN_SECS = 45.0
+_last_start_attempt: dict[str, float] = {}   # key "u<owner_id>" -> monotonic time of last spawn
 
 
 def _free_port() -> int:
@@ -230,8 +237,14 @@ def _cc_for(owner_id: int, app_id: str, token: str, idx: str, pins: str = '',
                     print(f'scanner stop before token refresh skipped ({key}): {e}')
         try:
             if not cc.scanner_status()['running']:
-                cc.scanner_port = _free_port()   # a fresh free port on every (re)start
-                cc.start_scanner()
+                now = time.monotonic()
+                if now - _last_start_attempt.get(key, 0.0) >= _RESTART_COOLDOWN_SECS:
+                    _last_start_attempt[key] = now
+                    cc.scanner_port = _free_port()   # a fresh free port on every (re)start
+                    cc.start_scanner()
+                # else: within the cooldown — a scanner that keeps crashing on start must not be
+                # respawned every poll (quota burn). Leave it stopped; radar_state then falls through
+                # to the household's shared feed, and we retry at most once per cooldown window.
         except Exception as e:
             print(f'live scanner start skipped ({key}): {e}')
         return cc
@@ -342,14 +355,25 @@ def _rate_limited_health(conn: BrokerConnection) -> dict | None:
     return h
 
 
+def _start_failed_health(conn: BrokerConnection) -> dict | None:
+    """The scanner's last health IF it crashed on start for a GENERIC reason (not auth/rate-limit)
+    recently and the user hasn't re-logged-in since. Used to STOP auto-restarting a scanner that keeps
+    failing — each restart re-fetches ~100 FYERS baselines, so an unguarded crash-loop can exhaust the
+    daily quota. The auth and rate-limit cases keep their own dedicated guards."""
+    h = health.read_health(f'u{conn.user_id}')
+    if health.generic_failure_active(h, conn.token_refreshed_at, datetime.now(timezone.utc)):
+        return h
+    return None
+
+
 def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
     """Scheduler/supervisor entry point: start the owner's scanner if today's token is present and it
     hasn't already runtime-failed auth (don't restart into the same -15/-16 until they re-login)."""
     if not _token_is_fresh_today(conn) or not conn.token_enc:
         return False
-    # Don't restart into a known auth failure or a hit rate limit — restarting only burns more of the
-    # broker's daily API quota and re-triggers the same error.
-    if _auth_failed_health(conn) or _rate_limited_health(conn):
+    # Don't restart into a known auth failure, a hit rate limit, or a recent generic start crash —
+    # restarting only burns more of the broker's daily API quota and re-triggers the same error.
+    if _auth_failed_health(conn) or _rate_limited_health(conn) or _start_failed_health(conn):
         return False
     _rmode, _rlen = _rvol_env(conn.user)
     _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), _universe_index(conn.user),
@@ -401,6 +425,14 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
         return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
                         'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
                         'rate_limited': True, 'reason': rl.get('reason')}
+    sf = _start_failed_health(conn)
+    if sf:
+        # The scanner recently crashed on start for a generic reason — don't respawn it here (each
+        # restart re-fetches ~100 FYERS baselines). Report 'down' so the caller falls through to the
+        # household's shared feed; the cooldown in _cc_for allows one retry per window after this.
+        return 'down', {'offline': True, 'data_mode': 'none', 'source': source,
+                        'shared': source == 'shared', 'universe': label, 'broker': conn.broker,
+                        'reason': sf.get('reason') or 'Live feed temporarily unavailable.'}
 
     _rmode, _rlen = _rvol_env(conn.user)
     cc = _cc_for(conn.user_id, conn.app_id, decrypt(conn.token_enc), idx,
