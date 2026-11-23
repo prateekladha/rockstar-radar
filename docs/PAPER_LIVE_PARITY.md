@@ -86,13 +86,17 @@ https://fyers.in/calculator/brokerage/ . Implemented in `server/charges.py`.
    kill the 80 gate with our own trades. *(G6)*
 
 ### Phase 2 — remaining realism (status)
-- ✅ **MIS eligibility — leverage proxy.** `intraday_leverage_floor`: an order whose broker implied
-  leverage (notional/margin) is below the floor is skipped as "no real intraday benefit." Default 1.0
-  (off) — raise it (e.g. 1.2) to exclude effectively-non-MIS names. **Honest residual:** this is a
-  proxy, not FYERS's eligibility flag (which the API doesn't expose); a true list needs a live reject.
-- ✅ **Liquidity sanity.** `fill_max_pct_daily_turnover`: skip a position whose notional exceeds X% of
-  the stock's median daily turnover. Default 0 (off). Uses daily turnover (per-bar depth isn't in the
-  feed) — a coarse guard, not an order-book fill model.
+- ✅ **MIS eligibility — leverage proxy. ON by default (`intraday_leverage_floor` = 1.5).** An order
+  whose broker implied leverage (notional / real margin) is below 1.5 is skipped as "no real intraday
+  benefit." FYERS intraday leverage is bimodal — eligible names get ~5x, non-MIS names ~1x — so a 1.5
+  floor cleanly drops the non-MIS (~1x) names while never tripping a genuine MIS name. **Honest
+  residual:** this is a proxy, not FYERS's eligibility flag (which the API doesn't expose); a true
+  list needs a live reject. Set 1.0 to disable.
+- ✅ **Liquidity sanity. ON by default (`fill_max_pct_daily_turnover` = 2.0%).** Skip a position whose
+  notional exceeds 2% of the stock's median daily turnover — at the min-liquidity universe (₹15cr/day)
+  that's a ₹30L position, far above any risk-sized entry, so it only trips genuinely oversized
+  (tight-stop, huge-qty) positions. Uses daily turnover (per-bar depth isn't in the feed) — a coarse
+  guard, not an order-book fill model. Set 0 to disable.
 - ⬜ **Deferred (no data in the current feed):** per-bar depth/partial-fill microstructure, circuit
   (UC/LC) limits, freeze-qty caps, and per-leg charges for partial books (Phase 1 charges the full
   round-trip at blended fills). Documented here so they're not silently assumed solved.
