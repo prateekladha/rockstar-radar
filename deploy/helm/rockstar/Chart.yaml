@@ -1,0 +1,6 @@
+apiVersion: v2
+name: rockstar-radar
+description: Rockstar Radar — web (stateless) + scanner (stateful) on OKE
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

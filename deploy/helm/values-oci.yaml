@@ -1,0 +1,12 @@
+# Non-secret OCI values. image.tag + image.repository, oci.*, domain are filled by the P5 deploy
+# workflow from `terraform output` (and the LB IP). Secrets come from Vault via External Secrets.
+image:
+  repository: "" # <region>.ocir.io/<namespace>/rockstar-radar/app  (terraform output ocir_registry + /app)
+  tag: "" # git SHA, set by CI
+oci:
+  region: ap-mumbai-1
+  vaultId: "" # terraform output vault_id
+  compartmentId: "" # terraform output compartment_id
+domain: "" # <lb-ip>.sslip.io before cutover; intraday.live at P6
+letsencryptEmail: "" # your ACME email
+publicBaseUrl: "" # https://<domain>

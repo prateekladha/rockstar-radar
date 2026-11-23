@@ -25,12 +25,18 @@ resource "random_password" "session_secret" {
   special = false
 }
 
+resource "random_password" "internal_token" {
+  length  = 40
+  special = false
+}
+
 locals {
   secrets = {
     "db-admin-password" = random_password.db_admin.result
     "db-app-password"   = random_password.db_app.result
     "db-dsn"            = local.adb_tls_low
     "session-secret"    = random_password.session_secret.result
+    "internal-token"    = random_password.internal_token.result # web↔scanner /internal auth
   }
 }
 

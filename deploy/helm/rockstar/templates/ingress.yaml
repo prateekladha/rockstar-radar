@@ -1,0 +1,33 @@
+# Public entry: Traefik ingress with a cert-manager Let's Encrypt certificate. Only `web` is exposed;
+# `scanner` is cluster-internal (its /internal endpoints never leave the pod network).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: {{ .Values.letsencryptEmail | quote }}
+    privateKeySecretRef: { name: letsencrypt-account }
+    solvers:
+      - http01: { ingress: { class: traefik } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [{{ .Values.domain | quote }}]
+      secretName: web-tls
+  rules:
+    - host: {{ .Values.domain | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: web, port: { number: 8080 } } }
