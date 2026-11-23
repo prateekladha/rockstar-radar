@@ -1,0 +1,15 @@
+{{- if .Values.resourceQuota.enabled }}
+# Fences Rockstar's namespace on the SHARED cluster so a runaway pod can't starve the co-tenant
+# dt-telekom prod. Caps total CPU/memory requests+limits across all Rockstar pods.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rockstar-quota
+spec:
+  hard:
+    requests.cpu: {{ .Values.resourceQuota.requestsCpu | quote }}
+    requests.memory: {{ .Values.resourceQuota.requestsMemory | quote }}
+    limits.cpu: {{ .Values.resourceQuota.limitsCpu | quote }}
+    limits.memory: {{ .Values.resourceQuota.limitsMemory | quote }}
+    persistentvolumeclaims: "2"
+{{- end }}

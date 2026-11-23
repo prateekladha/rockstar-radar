@@ -2,7 +2,7 @@ locals {
   cpt = "compartment id ${var.compartment_ocid}"
 }
 
-# ---- CI identity (GitHub Actions): push images to OCIR, deploy to the cluster ----
+# ---- CI identity (GitHub Actions): push images to Rockstar's OCIR repo ----
 resource "tls_private_key" "ci" {
   algorithm = "RSA"
   rsa_bits  = 2048
@@ -36,25 +36,19 @@ resource "oci_identity_auth_token" "ci" {
   description = "ocir push"
 }
 
-# ---- Worker nodes (instance principal): pull images, read secrets (for External Secrets) ----
-resource "oci_identity_dynamic_group" "nodes" {
-  compartment_id = var.tenancy_ocid
-  name           = "${var.name}-nodes"
-  description    = "OKE worker nodes of ${var.name}"
-  matching_rule  = "ALL {instance.compartment.id = '${var.compartment_ocid}'}"
-}
-
+# ---- Access grants ----
+# Rockstar reuses the shared cluster's worker nodes (dynamic group `dt-selfcare-nodes`), so THOSE nodes
+# — not a Rockstar-owned node group — must be allowed to read Rockstar's Vault (External Secrets uses
+# the node instance principal) and pull from Rockstar's OCIR repo.
 resource "oci_identity_policy" "workloads" {
   compartment_id = var.compartment_ocid
   name           = "${var.name}-workloads"
-  description    = "Least-privilege access for ${var.name} workloads and CI"
+  description    = "Least-privilege access for ${var.name} workloads (on the shared cluster) and CI"
   statements = [
-    # worker nodes: pull private images, read Vault secrets via instance principal (External Secrets)
-    "Allow dynamic-group ${oci_identity_dynamic_group.nodes.name} to read repos in ${local.cpt}",
-    "Allow dynamic-group ${oci_identity_dynamic_group.nodes.name} to read secret-family in ${local.cpt}",
-    # CI: push/manage images, deploy to the cluster, read secrets for smoke config
+    "Allow dynamic-group ${var.shared_node_dynamic_group} to read repos in ${local.cpt}",
+    "Allow dynamic-group ${var.shared_node_dynamic_group} to read secret-family in ${local.cpt}",
+    # CI: push/manage images, read secrets for smoke config
     "Allow group ${oci_identity_group.ci.name} to manage repos in ${local.cpt}",
-    "Allow group ${oci_identity_group.ci.name} to use clusters in ${local.cpt}",
     "Allow group ${oci_identity_group.ci.name} to read secret-family in ${local.cpt}",
   ]
 }
@@ -66,7 +60,7 @@ resource "oci_identity_policy" "ocir_tenancy" {
   description    = "Let ${var.name} identities authenticate to OCIR"
   statements = [
     "Allow group ${oci_identity_group.ci.name} to read objectstorage-namespaces in tenancy",
-    "Allow dynamic-group ${oci_identity_dynamic_group.nodes.name} to read objectstorage-namespaces in tenancy",
+    "Allow dynamic-group ${var.shared_node_dynamic_group} to read objectstorage-namespaces in tenancy",
   ]
 }
 

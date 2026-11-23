@@ -31,12 +31,14 @@ resource "random_password" "internal_token" {
 }
 
 locals {
+  # No db-admin-password: Rockstar does not own the shared ADB's admin. Its ROCKSTAR_APP user is
+  # bootstrapped with the shared ADB's admin password (supplied out-of-band to migrate_db.py), and
+  # thereafter the app authenticates as ROCKSTAR_APP with db-app-password over db-dsn.
   secrets = {
-    "db-admin-password" = random_password.db_admin.result
-    "db-app-password"   = random_password.db_app.result
-    "db-dsn"            = local.adb_tls_low
-    "session-secret"    = random_password.session_secret.result
-    "internal-token"    = random_password.internal_token.result # web↔scanner /internal auth
+    "db-app-password" = random_password.db_app.result
+    "db-dsn"          = local.adb_tls_low
+    "session-secret"  = random_password.session_secret.result
+    "internal-token"  = random_password.internal_token.result # web↔scanner /internal auth
   }
 }
 

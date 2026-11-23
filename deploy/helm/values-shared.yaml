@@ -1,0 +1,17 @@
+# Deploy values for running Rockstar on the SHARED dt-selfcare-oke cluster (own namespace + own schema
+# in dt-selfcare-adb). image.repository/tag, oci.vaultId, oci.compartmentId come from `terraform output`
+# at deploy time; secrets come from Rockstar's Vault via External Secrets. See docs/K8S_MIGRATION.md.
+image:
+  repository: "" # terraform output ocir_registry + "/app"
+  tag: "" # git SHA, set at deploy
+oci:
+  region: ap-mumbai-1
+  vaultId: "" # terraform output vault_id
+  compartmentId: "" # terraform output compartment_id
+# Shared cluster's Traefik LB IP is 130.210.124.37; sslip.io subdomain routes Rockstar to the same LB
+# without colliding with selfcare's own 130.210.124.37.sslip.io host.
+domain: "rockstar.130.210.124.37.sslip.io"
+publicBaseUrl: "https://rockstar.130.210.124.37.sslip.io"
+letsencryptEmail: "" # your ACME email
+resourceQuota:
+  enabled: true

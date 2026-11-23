@@ -174,3 +174,46 @@ DNS change, reversible in minutes.
   own lock + quota); the pod just co-locates them.
 - **A1 capacity:** OKE node pool + ADB + Traefik must fit the 4 OCPU/24 GB Always-Free A1 envelope;
   size node pool to leave headroom for the scanner's per-user subprocesses.
+
+---
+
+## 9. Shared-cluster deployment — DECIDED 2026-11-24 (supersedes the standalone P1)
+
+The standalone P1 (own cluster + own ADB) **cannot apply**: this OCI tenancy is shared with the
+dt-telekom project, and the Always-Free limits are **1 OKE cluster** (used by `dt-selfcare-oke`) and
+the **ADB free slots** (used by `dt-selfcare-adb` + `aidlc-adb`). Rather than request limit increases,
+Rockstar **reuses** both — K8s and Oracle ADB are multi-tenant:
+
+- **Cluster:** Rockstar runs in its own **`rockstar-radar` namespace** on `dt-selfcare-oke`, reusing
+  its already-installed Traefik, cert-manager and External Secrets. Fenced by a `ResourceQuota`.
+- **Database:** Rockstar gets its own **`ROCKSTAR_APP` user/schema** in the existing **`dt-selfcare-adb`**
+  instance (migrate_db.py `--bootstrap-user`), not a new ADB.
+- **Trade-off (accepted):** both the cluster nodes and the 1-ECPU ADB are shared with dt-telekom prod.
+  Namespace + schema isolate names/RBAC/secrets; compute is shared. Fenced with a ResourceQuota (k8s)
+  and a LOW consumer group + tablespace quota (DB).
+
+### Facts (this environment)
+- Shared cluster LB IP: **130.210.124.37** → Rockstar test domain **`rockstar.130.210.124.37.sslip.io`**.
+- Scanner egress (whitelist in FYERS): dt-selfcare NAT IP **`130.210.89.65`**.
+- Node group for the vault grant: **`dt-selfcare-nodes`**; shared compartment: `dt-selfcare`.
+- Capacity: the pool had **one 2-OCPU/16GB node at 87% CPU requests** → **add a 2nd node** before deploy.
+
+### What changed in Terraform (this stack now only owns Rockstar's compartment)
+Removed `network.tf` + `oke.tf` (no VCN/cluster/node pool) and the ADB *create* (now a data source on
+`dt-selfcare-adb`). Kept Vault + KMS + OCIR + CI user. `iam.tf` now grants **`dt-selfcare-nodes`** read
+on Rockstar's Vault/OCIR (External Secrets uses the node instance principal). `db-admin-password` secret
+dropped (we don't own the shared ADB admin). Applying this **destroys the orphaned VCN/NAT** created in
+the first attempt and creates the 4 Vault secrets (db-dsn now resolves from the shared ADB).
+
+### Execution runbook (revised)
+1. **Add a node:** scale `dt-selfcare-oke`'s pool 1→2 (in the dt-telekom repo's Terraform, their source of truth).
+2. **`terraform apply`** (this stack): destroys orphaned VCN/NAT, creates Rockstar's Vault secrets + IAM grants.
+3. **Bootstrap DB schema:** `migrate_db.py --bootstrap-user` against `dt-selfcare-adb` (needs its **admin password**).
+4. **`put-secrets.sh`** (encryption key byte-for-byte = prod; Google OAuth).
+5. **Whitelist `130.210.89.65`** in the FYERS app (keep the VM IP too).
+6. **Deploy:** build+push image → OCIR; `helm upgrade --install rockstar deploy/helm/rockstar -n rockstar-radar
+   --create-namespace -f deploy/helm/values-shared.yaml` (+ image/oci/email overrides); run `migrate_db.py` to copy data.
+7. **Validate** on `rockstar.130.210.124.37.sslip.io`, then the P6 DNS cutover as before.
+
+**User-only inputs:** FYERS whitelist IP `130.210.89.65`, the prod encryption key, and the `dt-selfcare-adb`
+admin password (one-time, for the schema bootstrap).

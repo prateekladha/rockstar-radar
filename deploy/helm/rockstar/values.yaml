@@ -16,6 +16,15 @@ letsencryptEmail: ""    # cert-manager ACME registration
 # Non-secret app config shared by both pods.
 publicBaseUrl: ""       # https://<domain>
 
+# Namespace fence for the SHARED cluster (co-tenant with dt-telekom prod). Headroom for web+scanner
+# while capping a runaway. Disable only on a dedicated cluster.
+resourceQuota:
+  enabled: true
+  requestsCpu: "1"
+  requestsMemory: 2Gi
+  limitsCpu: "2"
+  limitsMemory: 3Gi
+
 # web: stateless, horizontally scalable, serves the SPA/API and proxies to the scanner.
 web:
   replicas: 1

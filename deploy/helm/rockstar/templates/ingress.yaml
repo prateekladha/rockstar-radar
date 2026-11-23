@@ -1,7 +1,9 @@
 # Public entry: Traefik ingress with a cert-manager Let's Encrypt certificate. Only `web` is exposed;
 # `scanner` is cluster-internal (its /internal endpoints never leave the pod network).
+# Namespaced Issuer (not a ClusterIssuer) so Rockstar adds nothing cluster-scoped to the shared
+# cluster — matches how dt-selfcare/aidlc issue their certs.
 apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
+kind: Issuer
 metadata:
   name: letsencrypt
 spec:
@@ -17,7 +19,7 @@ kind: Ingress
 metadata:
   name: web
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt
+    cert-manager.io/issuer: letsencrypt
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
 spec:
   ingressClassName: traefik
