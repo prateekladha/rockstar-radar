@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars (bootstrap.sh writes this for you). Values are NOT secret.
+tenancy_ocid     = "ocid1.tenancy.oc1..xxxxxxxx"
+compartment_ocid = "ocid1.compartment.oc1..xxxxxxxx" # the rockstar-radar compartment from bootstrap.sh
+region           = "ap-mumbai-1"
