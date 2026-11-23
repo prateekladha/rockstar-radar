@@ -200,3 +200,30 @@ main campaign. So the value is **decision-support visibility** (the trader sees 
 their own entries/exits/stops, which the displayed stop explicitly flags as "ESTIMATE ONLY"), not
 auto-trading this. **Change: `orb_stop_mode` config flag; default flipped `atr_floor` → `structure`**
 (reversible). Do NOT read this as a signal to auto-trade ORB.
+
+---
+
+## Live auto-paper run — 2026-11-23 (first real study of a logged run)
+
+Studied the day's real auto-paper trades from prod (read-only). 66 closed, **+₹16k realised**
+(~₹26k incl. 2 still-open), **win% 22%**, **payoff 3.45:1** (avg win +7,146 / avg loss −2,072) —
+a positive-skew day.
+
+| cut | trades | P&L |
+|---|---:|---:|
+| exit = square-off (let-run to 15:15) | 21 | **+63,761** |
+| exit = stop | 43 | **−35,897** |
+| SHORT | 41 | +34,641 |
+| LONG | 25 | −18,605 |
+| source = `auto_smc` | 64 | +27,864 |
+| source = `auto` (ORB) | 2 | **−11,827** |
+
+**Insights → changes shipped (config + order_engine):**
+1. **Let-winners-run is the entire profit engine** (+63.8k square-off vs −35.9k stop) → `smc_runner_target` ON.
+2. **Re-entry churn was the main bleed** — same-symbol repeat stop-outs (KALYANKJIL ×4 ≈ −7.8k, SOLARINDS ×3, NTPC/TCS/TECHM/RELIANCE/BHARTIARTL ×2) → NEW `smc_block_reentry_after_stop` (default on) + `max_trades_per_symbol` 4→2. On today's data this avoids ~15+ of the −1R stops (~−25-30k) for the cost of one re-entry winner (CUPID +2.7k).
+3. The confluence **score did not separate winners (34) from losers (32)** — don't tighten on score.
+4. **Regime, not edge:** shorts won / longs lost → it was a down day; the skew partly rode the trend. One session is a single sample.
+5. **ORB `auto` lost −₹11.8k on 2 trades**, incl. MARUTI **−₹9,950 (~5R, exit≠stop)** — ORB auto risk-sizing / stop-trigger needs review before relying on it. **Flagged, not changed.**
+
+Also enabled `smc_stop_mode=structure` and `smc_enforce_min_rr=false` (the trader's requested flags) —
+reversible; **tomorrow's paper run is their evaluation** (the honest-path learn-from-real-trades loop).
