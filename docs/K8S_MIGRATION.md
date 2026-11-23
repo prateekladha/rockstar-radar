@@ -153,7 +153,13 @@ Traefik, metrics-server) lifted from dt-telekom and renamed.
   on SQLite + an ADB smoke. Point the OKE deployment at ADB. Validate end-to-end on the test domain.
 - **P5 — CI/CD:** `pr-validation` + `deploy-prod` (helm upgrade) workflows; retire the VM runner.
 - **P6 — Cutover:** final data sync Postgres→ADB, flip `intraday.live` DNS to the OKE LB, watch, keep
-  the VM as instant rollback for a week, then decommission.
+  the VM as instant rollback for a week, then decommission. **Full runbook: [K8S_CUTOVER.md](K8S_CUTOVER.md).**
+
+> **Build status (2026-11-23):** P1–P6 are code-complete on branch `feat/oke-migration` (PR #53),
+> carrying the earlier app fixes too. Validated locally with `terraform validate`, `helm lint` +
+> `kubeconform`, and `py_compile`; the split is backward-compatible (the VM keeps working unchanged).
+> End-to-end on real OKE + ADB is exercised when the user applies P1 and runs the cutover — nothing has
+> been applied to prod.
 
 **Rollback at every phase:** the VM + Compose + Postgres stay fully operational until P6; cutover is a
 DNS change, reversible in minutes.
