@@ -12,6 +12,7 @@ import DebugRadar from './DebugRadar.jsx'
 import Watchlist from './Watchlist.jsx'
 import Trades from './Trades.jsx'
 import Settings from './Settings.jsx'
+import AutoTrade from './AutoTrade.jsx'
 import Brokers from './Brokers.jsx'
 import Alerts from './Alerts.jsx'
 import Insights from './Insights.jsx'
@@ -33,7 +34,7 @@ function ViewModeToggle({ sim }) {
 }
 
 const NAV = [['/radar', 'Radar'], ['/smc-radar', 'SMC Radar'], ['/debug', 'Debug'], ['/watchlist', 'Watchlist'], ['/trades', 'Trades'], ['/journal', 'Journal'], ['/insights', 'Insights']]
-const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings', '/preferences']
+const ACCOUNT_PATHS = ['/brokers', '/alerts', '/family', '/settings', '/auto-trade', '/preferences']
 
 export default function App() {
   const [user, setUser] = useState(undefined)
@@ -113,11 +114,11 @@ function Shell({ user, onLogout }) {
     document.addEventListener('click', close); return () => document.removeEventListener('click', close)
   }, [])
   const onAccount = ACCOUNT_PATHS.includes(loc.pathname)
-  // Strategy settings are per-user (each member edits their own), so every role gets the page.
-  // Only Team (household membership) stays admin-only.
+  // Auto-trade settings are per-user, so every role gets that page. Strategy settings (universe /
+  // scan filters / prereq / RVOL / EMA) and Team stay admin-only.
   const menuItems = user.is_admin
-    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/settings', 'Strategy settings', '⚙️'], ['/family', 'Team', '👥']]
-    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/settings', 'Strategy settings', '⚙️']]
+    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/auto-trade', 'Auto-trade settings', '🤖'], ['/settings', 'Strategy settings', '⚙️'], ['/family', 'Team', '👥']]
+    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/auto-trade', 'Auto-trade settings', '🤖']]
   const go = (p) => { setMenu(false); nav(p) }
 
   return (
@@ -174,7 +175,8 @@ function Shell({ user, onLogout }) {
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/preferences" element={<Preferences />} />
           <Route path="/family" element={user.is_admin ? <Family /> : <Navigate to="/radar" />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/auto-trade" element={<AutoTrade />} />
+          <Route path="/settings" element={user.is_admin ? <Settings /> : <Navigate to="/radar" />} />
           <Route path="*" element={<Navigate to="/radar" />} />
         </Routes>
       </div>
