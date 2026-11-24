@@ -44,6 +44,7 @@ function CreateSimRunForm({ onCancel, onCreated }) {
     smc_runner_target: false,
     smc_atr_stop_floor: false,
     smc_atr_stop_floor_mult: 0.5,
+    smc_require_confirmation: false,
     capital_inr: 100000,
     risk_pct: 1.0
   })
@@ -74,6 +75,7 @@ function CreateSimRunForm({ onCancel, onCreated }) {
         smc_runner_target: form.smc_runner_target ? 1 : 0,
         smc_atr_stop_floor: form.smc_atr_stop_floor ? 1 : 0,
         smc_atr_stop_floor_mult: Number.isFinite(parseFloat(form.smc_atr_stop_floor_mult)) ? parseFloat(form.smc_atr_stop_floor_mult) : 0.5,
+        smc_require_confirmation: form.smc_require_confirmation ? 1 : 0,
         capital_inr: parseFloat(form.capital_inr),
         risk_pct: parseFloat(form.risk_pct),
         use_one_minute_candles: form.bar_interval === '1' ? 1 : 0
@@ -237,6 +239,14 @@ function CreateSimRunForm({ onCancel, onCreated }) {
                     <span className="knob" />{form.smc_runner_target ? 'On' : 'Off'}
                   </button>
                   <p className="note">When on, no fixed target — ride until the stop or end-of-day square-off.</p>
+                </div>
+
+                <div className="field">
+                  <label>Require Entry Confirmation</label>
+                  <button type="button" className={'toggle' + (form.smc_require_confirmation ? ' on' : '')} onClick={() => setForm({...form, smc_require_confirmation: !form.smc_require_confirmation})}>
+                    <span className="knob" />{form.smc_require_confirmation ? 'On' : 'Off'}
+                  </button>
+                  <p className="note">Only enter after a candle rejects the zone in the trade's direction (bullish close off the lows for longs, bearish close off the highs for shorts) — instead of firing the moment price is in the zone. Avoids catching knives.</p>
                 </div>
 
                 <div className="field">

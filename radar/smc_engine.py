@@ -252,6 +252,27 @@ def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Op
             break
     in_fresh_ob = ob is not None
 
+    # Optional ENTRY TRIGGER / confirmation (config-gated, default OFF → unchanged behaviour). Without it,
+    # a plan fires the instant price sits in the zone — i.e. catching a falling knife, the main reason the
+    # SMC fade loses. When enabled, require the latest completed candle to REJECT the zone in the trade's
+    # direction before producing a tradeable plan: for a LONG, a bullish candle that closed in the upper
+    # part of its range (buyers rejected the lows); for a SHORT, the mirror. Until that confirmation the
+    # setup is still surfaced (side + in_fresh_ob) but carries no entry/stop/target, so it is journaled yet
+    # not auto-traded. Shared with live trading, hence default off.
+    if bool(config.get('smc_require_confirmation', False)):
+        candles = getattr(state, 'candles', None) or []
+        if not candles:
+            return {'side': side, 'in_fresh_ob': in_fresh_ob}
+        c = candles[-1]
+        rng = (c.high - c.low) or 1e-9
+        frac = float(config.get('smc_confirmation_close_frac', 0.5) or 0.5)
+        if side == 'LONG':
+            confirmed = (c.close > c.open) and (c.close >= c.low + frac * rng)
+        else:
+            confirmed = (c.close < c.open) and (c.close <= c.high - frac * rng)
+        if not confirmed:
+            return {'side': side, 'in_fresh_ob': in_fresh_ob}
+
     atr = state.atr or 0.0
     buf = max(atr * 0.1, current_price * 0.0005)  # small cushion beyond the block
     # No-OB fallback: stop a configurable ATR multiple from entry (or 1% if ATR is unavailable).
