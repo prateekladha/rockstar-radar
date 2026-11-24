@@ -42,6 +42,8 @@ function CreateSimRunForm({ onCancel, onCreated }) {
     smc_stop_mode: 'ob_atr',
     smc_enforce_min_rr: true,
     smc_runner_target: false,
+    smc_atr_stop_floor: false,
+    smc_atr_stop_floor_mult: 0.5,
     capital_inr: 100000,
     risk_pct: 1.0
   })
@@ -70,6 +72,8 @@ function CreateSimRunForm({ onCancel, onCreated }) {
         smc_stop_mode: form.smc_stop_mode,
         smc_enforce_min_rr: form.smc_enforce_min_rr ? 1 : 0,
         smc_runner_target: form.smc_runner_target ? 1 : 0,
+        smc_atr_stop_floor: form.smc_atr_stop_floor ? 1 : 0,
+        smc_atr_stop_floor_mult: Number.isFinite(parseFloat(form.smc_atr_stop_floor_mult)) ? parseFloat(form.smc_atr_stop_floor_mult) : 0.5,
         capital_inr: parseFloat(form.capital_inr),
         risk_pct: parseFloat(form.risk_pct),
         use_one_minute_candles: form.bar_interval === '1' ? 1 : 0
@@ -234,6 +238,22 @@ function CreateSimRunForm({ onCancel, onCreated }) {
                   </button>
                   <p className="note">When on, no fixed target — ride until the stop or end-of-day square-off.</p>
                 </div>
+
+                <div className="field">
+                  <label>ATR Stop Floor</label>
+                  <button type="button" className={'toggle' + (form.smc_atr_stop_floor ? ' on' : '')} onClick={() => setForm({...form, smc_atr_stop_floor: !form.smc_atr_stop_floor})}>
+                    <span className="knob" />{form.smc_atr_stop_floor ? 'On' : 'Off'}
+                  </button>
+                  <p className="note">Widen the stop to clear intraday noise. Default SMC stops sit ~0.2–0.5% away (inside the wiggle) → nearly everything stops out. When on, the stop is at least the multiple below of the symbol's daily ATR.</p>
+                </div>
+
+                {form.smc_atr_stop_floor && (
+                  <div className="field">
+                    <label>ATR Floor × (of daily ATR)</label>
+                    <input type="number" step="0.1" min="0" value={form.smc_atr_stop_floor_mult} onChange={e => setForm({...form, smc_atr_stop_floor_mult: e.target.value})} />
+                    <p className="note">Minimum stop = this × daily ATR. 0.5 ≈ a ~1–1.5% stop on a typical name. Higher = wider stop, smaller size, fewer noise stop-outs.</p>
+                  </div>
+                )}
               </>
             )}
 
