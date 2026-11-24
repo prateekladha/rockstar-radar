@@ -15,6 +15,13 @@ spec:
   template:
     metadata:
       labels: { app: scanner }
+      annotations:
+        # The scanner is a stateful singleton (one owner of the FYERS locks + the live feed). Tell the
+        # cluster-autoscaler never to drain its node for scale-down — an eviction loses the in-memory
+        # live feed and forces a REST re-warm. Our own rollouts delete the pod directly (not via the
+        # Eviction API), so this does NOT block deploys. Node UPGRADES still work, but must be deliberate
+        # (`kubectl drain --force`), which the PDB below also enforces.
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       imagePullSecrets: [{ name: ocir-pull }]
       {{- include "rockstar.podSecurity" . | nindent 6 }}
@@ -38,7 +45,12 @@ spec:
           startupProbe:   { httpGet: { path: /healthz, port: http }, periodSeconds: 5, failureThreshold: 60 }
           resources: {{- toYaml .Values.scanner.resources | nindent 12 }}
           {{- include "rockstar.containerSecurity" . | nindent 10 }}
-          volumeMounts: [{ name: data, mountPath: /app/data }]
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+            # Today's completed-candle + signal CSVs (ROOT/output) also go on the PVC, so a mid-session
+            # pod restart can restore today's bars / OR levels from local logs instead of re-anchoring
+            # all 100 symbols from FYERS REST. Same volume, separate subPath — no extra PVC.
+            - { name: data, mountPath: /app/output, subPath: output }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: scanner-data }
@@ -57,3 +69,13 @@ spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: {{ .Values.scanner.storageClass }}
   resources: { requests: { storage: {{ .Values.scanner.storageSize }} } }
+---
+# Singleton scanner: forbid *voluntary* disruption (a node drain must be deliberate, `--force`). This
+# does not affect our own rollouts (the Deployment controller deletes the pod directly, not via the
+# Eviction API) — it only stops a routine shared-cluster node drain from silently killing the live feed.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: scanner }
+spec:
+  maxUnavailable: 0
+  selector: { matchLabels: { app: scanner } }

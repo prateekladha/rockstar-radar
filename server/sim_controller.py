@@ -436,6 +436,8 @@ class SimulationController:
 
         # Get trigger state (RETEST_READY or CONFIRMED)
         trigger = self.config.get('auto_trade_trigger', 'RETEST_READY').upper()
+        if trigger not in ('RETEST_READY', 'CONFIRMED'):
+            trigger = 'RETEST_READY'
 
         # Apply prerequisite filters (EXACT same as production)
         from .models import User
@@ -451,7 +453,17 @@ class SimulationController:
             filtered_opps = all_opps
 
         for opp in filtered_opps:
-            if opp.get('state') != trigger:
+            # Mirror production (order_engine._auto_trade): the CONFIRMED trigger enters on the breakout
+            # confirmation OR the later retest — whichever first carries a ticket. In replay, entry/stop
+            # are only populated at RETEST_READY (a CONFIRMED row has no ticket yet), so both triggers
+            # effectively enter at the retest. Matching the state EXACTLY to 'CONFIRMED' matched only
+            # ticketless rows and produced ZERO trades; the ticketless rows are then skipped below by the
+            # entry/stop guard, so this safely waits for RETEST_READY.
+            opp_state = opp.get('state')
+            if trigger == 'CONFIRMED':
+                if opp_state not in ('CONFIRMED', 'RETEST_READY'):
+                    continue
+            elif opp_state != 'RETEST_READY':
                 continue
 
             symbol = opp.get('symbol')
