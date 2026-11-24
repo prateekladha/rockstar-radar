@@ -23,7 +23,10 @@ resourceQuota:
   requestsCpu: "1"
   requestsMemory: 2Gi
   limitsCpu: "2"
-  limitsMemory: 3Gi
+  # Raised 3Gi -> 4Gi for the sim-worker pod (768Mi limit) while preserving web HPA headroom:
+  # web(512)x2 + scanner(1536) + sim-worker(768) = 3328Mi. Nodes have ~13.6Gi allocatable each and are
+  # <55% used, so this stays well within the shared cluster and keeps fencing dt-telekom.
+  limitsMemory: 4Gi
 
 # web: stateless, horizontally scalable, serves the SPA/API and proxies to the scanner.
 web:
@@ -42,3 +45,12 @@ scanner:
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits:   { memory: 1536Mi }
+
+# sim-worker: runs backtests/simulations off the web pod and off the live-feed scanner. Stateless and
+# claim-based (polls the DB for 'pending' SimRun rows), so eviction is harmless — no PVC, no Service.
+# Tracks image.tag (updates on every normal deploy). Set enabled:false to park it (sims then queue).
+simWorker:
+  enabled: true
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 768Mi }

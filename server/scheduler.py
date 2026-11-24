@@ -155,9 +155,11 @@ def _sweep_journal() -> None:
 
 
 def _reconcile_sims() -> None:
-    """Fail simulations orphaned by a pod restart. Sims run as in-process FastAPI BackgroundTasks in
-    the web pod, so a restart leaves a run stuck non-terminal ('running' forever). Cheap indexed query,
-    usually a no-op; runs here (scanner = singleton) so there's exactly one reconciler, no races."""
+    """Fail simulations orphaned by a pod restart. Sims are claimed and run by the sim-worker pod; if it
+    dies mid-run the row is left stuck non-terminal, so this fails it once its heartbeat goes stale.
+    Cheap indexed query, usually a no-op; runs here (scanner = singleton) so there's exactly one
+    reconciler, no races. (Lives in the scanner's scheduler, not the worker, so it also recovers runs
+    orphaned by the worker itself dying.)"""
     db = SessionLocal()
     try:
         from .sim_controller import reconcile_orphaned_runs

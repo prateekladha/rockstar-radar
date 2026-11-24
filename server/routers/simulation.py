@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -76,14 +76,16 @@ class SimRunResponse(BaseModel):
 @router.post('/api/sim/runs', response_model=SimRunResponse)
 async def create_sim_run(
     request: CreateSimRunRequest,
-    background_tasks: BackgroundTasks,
     user: User = Depends(require_user),
     db: Session = Depends(get_db)
 ):
     """
     Create a new simulation run.
 
-    The simulation will be queued for execution in the background.
+    The run is persisted as 'pending' and executed by the dedicated sim-worker pod (server/sim_worker),
+    which claims pending runs from the DB. It deliberately does NOT run here as a FastAPI BackgroundTask:
+    that tied execution to the web pod (multi-replica, redeployed often), so a restart orphaned it. The
+    worker is isolated from web and the live-feed scanner. See docs / [[fyers-pilot-browser-session-deps]].
     """
     try:
         # Validate dates
@@ -122,14 +124,8 @@ async def create_sim_run(
         db.commit()
         db.refresh(sim_run)
 
-        # Queue for execution in background
-        background_tasks.add_task(
-            _run_simulation_background,
-            sim_run.id,
-            user.id
-        )
-
-        logger.info(f"Created sim run {sim_run.id} for user {user.email}")
+        # Left 'pending'; the sim-worker pod claims and runs it. No in-process execution here.
+        logger.info(f"Queued sim run {sim_run.id} for user {user.email} (sim-worker will execute)")
 
         return _sim_run_to_response(sim_run)
 
@@ -366,15 +362,13 @@ def estimate_data_size_endpoint(
 
 
 # ============================================================================
-# Background Tasks
+# Simulation execution (invoked by the sim-worker pod — see server/sim_worker.py)
 # ============================================================================
 
-def _run_simulation_background(sim_run_id: int, user_id: int):
-    """
-    Background task to run a simulation.
-
-    This runs asynchronously after the API returns the initial response.
-    """
+def execute_sim_run(sim_run_id: int, user_id: int):
+    """Fetch data + replay one simulation to completion. Called by the sim-worker after it claims a
+    'pending' run (never as a web BackgroundTask — that orphaned runs on a web-pod restart). Updates the
+    SimRun row's status/heartbeat/results; opens and closes its own DB session."""
     from ..db import SessionLocal
 
     db = SessionLocal()

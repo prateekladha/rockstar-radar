@@ -38,17 +38,22 @@ async def lifespan(_app: FastAPI):
     import asyncio
     init_db()
     register_google()
-    sched_task = engine_task = None
+    sched_task = engine_task = simworker_task = None
     if os.environ.get('RADAR_SCHED', '1') != '0':
         from .scheduler import run_scheduler
         sched_task = asyncio.create_task(run_scheduler())
     if os.environ.get('RADAR_ORDER_ENGINE', '1') != '0':
         from .order_engine import run_order_engine
         engine_task = asyncio.create_task(run_order_engine())
+    # Dedicated sim-worker pod only (RADAR_SIM_WORKER=1): claims + runs queued simulations off the web
+    # pod, isolated from the live-feed scanner. Default off so web/scanner never run it.
+    if os.environ.get('RADAR_SIM_WORKER', '0') == '1':
+        from .sim_worker import run_sim_worker
+        simworker_task = asyncio.create_task(run_sim_worker())
     try:
         yield
     finally:
-        for t in (sched_task, engine_task):
+        for t in (sched_task, engine_task, simworker_task):
             if t:
                 t.cancel()
 

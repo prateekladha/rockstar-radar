@@ -663,11 +663,17 @@ class SimulationController:
 
 
 # ---- orphaned-run recovery ---------------------------------------------------------------------
-# Sims execute as in-process FastAPI BackgroundTasks in the web pod (possibly multi-replica, often
-# redeployed), so a pod restart silently leaves a run stuck non-terminal forever at its last progress.
+# A sim is claimed and run by the sim-worker pod (server/sim_worker). If that pod dies mid-run the row
+# is left non-terminal forever at its last progress, so this reconciler fails it once its heartbeat goes
+# stale. A still-'pending' row is just queued (not orphaned) — see the long pending grace below.
 _NONTERMINAL_SIM_STATUSES = ('pending', 'fetching_data', 'running')
-_SIM_HEARTBEAT_STALE_SECONDS = 300   # a live run stamps heartbeat_at per-symbol / per-10-timestamps
-_SIM_PENDING_GRACE_SECONDS = 300     # a run that never started (no heartbeat yet) is orphaned past this
+_SIM_HEARTBEAT_STALE_SECONDS = 300   # a CLAIMED run stamps heartbeat_at per-symbol / per-10-timestamps;
+#                                      stale => the pod executing it died mid-run.
+# 'pending' is a durable queue entry the sim-worker will claim (server/sim_worker). The worker is a
+# singleton that restarts in seconds and runs sims sequentially, so a long wait means it's truly down or
+# the run is unclaimable — only then (2h) do we give up on it. Short enough and this would fight a
+# routine worker restart or a backed-up queue.
+_SIM_PENDING_GRACE_SECONDS = 7200
 
 
 def _age_seconds(dt: datetime | None, assume_tz) -> float | None:
