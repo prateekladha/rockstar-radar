@@ -6,6 +6,14 @@ into a FYERS order and reports the result.
 """
 from __future__ import annotations
 
+import tempfile
+
+# The FYERS SDK writes fyersApi.log into log_path (falling back to the process CWD when empty). In the
+# web pod the CWD is /app, which the non-root container user cannot write, so an empty log_path raises
+# PermissionError at client construction and breaks every live-order/broker call. Point it at the temp
+# dir, which is always writable.
+_FYERS_LOG_DIR = tempfile.gettempdir()
+
 
 class OrderError(RuntimeError):
     pass
@@ -18,7 +26,7 @@ def place_live_order(app_id: str, access_token: str, *, symbol: str, side: str, 
     Raises OrderError on rejection."""
     from fyers_apiv3 import fyersModel
     fy = fyersModel.FyersModel(client_id=app_id, token=f'{app_id}:{access_token}',
-                               is_async=False, log_path='')
+                               is_async=False, log_path=_FYERS_LOG_DIR)
     data = {
         'symbol': symbol,
         'qty': int(qty),
@@ -48,7 +56,7 @@ def place_live_order(app_id: str, access_token: str, *, symbol: str, side: str, 
 def _model(app_id: str, access_token: str):
     from fyers_apiv3 import fyersModel
     return fyersModel.FyersModel(client_id=app_id, token=f'{app_id}:{access_token}',
-                                 is_async=False, log_path='')
+                                 is_async=False, log_path=_FYERS_LOG_DIR)
 
 
 # FYERS order status codes.

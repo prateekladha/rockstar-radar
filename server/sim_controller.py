@@ -20,7 +20,7 @@ from typing import List, Dict, Any
 
 from sqlalchemy.orm import Session
 
-from radar.engine import RadarEngine, same_time_baseline
+from radar.engine import RadarEngine
 from radar.models import Candle, Instrument
 from radar.utils import IST, now_ist
 from .models import SimRun, SimHistoricalBar, SimSignalLog, SimOrder
@@ -29,15 +29,60 @@ from .sim_data_fetcher import HistoricalDataFetcher
 logger = logging.getLogger(__name__)
 
 
+def _fmt_num(x, nd: int = 2):
+    """Round a numeric to a SHORT string for SimSignalLog's String(16) price columns.
+
+    The engine hands back unrounded floats (e.g. a stop of 213.15293999999997 = 18 chars). SQLite
+    (dev) ignores the column width, but Oracle ADB (prod) enforces VARCHAR(16) and rejects the row with
+    ORA-12899 — which aborts the commit, breaks the Session, and freezes the whole run at 0%. Rounding
+    to 2dp keeps every realistic NSE price/R:R/RVOL well inside 16 chars. None stays None.
+    """
+    if x is None:
+        return None
+    try:
+        return str(round(float(x), nd))
+    except (TypeError, ValueError):
+        return None
+
+
 class SimulationController:
     """Orchestrates simulation replay."""
 
-    def __init__(self, db: Session, sim_run: SimRun):
+    def __init__(self, db: Session, sim_run: SimRun, symbols: List[str] | None = None,
+                 profiles: List[Instrument] | None = None):
+        from radar.utils import load_config
         self.db = db
         self.sim_run = sim_run
-        self.config = json.loads(sim_run.config)
+        # The RadarEngine expects the FULL product config (new_signals_stop, near_boundary_pct,
+        # orb_stop_mode, rvol_thresholds, …), exactly as production builds it. sim_run.config is only
+        # the user's sim-specific overrides, so layer it ON TOP of the full config.json defaults —
+        # otherwise the engine KeyErrors on the first key the sim subset omits.
+        sim_overrides = json.loads(sim_run.config) if sim_run.config else {}
+        self.config = {**load_config(), **(sim_overrides or {})}
         self.current_time = None
         self.session_date = datetime.fromisoformat(sim_run.start_date).date()
+        # Width of a replayed bar. The engine only acts on a candle once the wall clock has passed the
+        # bar's CLOSE (engine.py guards against half-formed live bars: `candle.at + bar_delta > wall`).
+        # In replay we are the wall clock, so a bar opening at T is "observed" at its close, T + width —
+        # otherwise every bar looks unfinished, the opening range never forms and the whole day is stuck
+        # in WAIT_OR (0 opportunities/trades). bar_interval is '1' or '5' minutes.
+        try:
+            self._bar_delta = timedelta(minutes=int(sim_run.bar_interval or 5))
+        except (TypeError, ValueError):
+            self._bar_delta = timedelta(minutes=5)
+        # The watchlist the live scanner would have traded that day (selected upstream). When set, the
+        # replay and baselines are restricted to these symbols — so stale sim-day bars cached for other
+        # symbols by an earlier run don't leak the full universe back into the sim.
+        self.selected_symbols = list(symbols) if symbols else None
+        # Real per-symbol daily profiles (resistance/support/daily_atr_pct/turnover) from the selection
+        # step. The ORB engine derives retest TARGETS from Instrument.resistance/support and widens the
+        # stop by daily_atr_pct; without them every retest dies at RISK_FAIL ("no known target"), nothing
+        # reaches RETEST_READY, and the journal only ever shows CONFIRMED (score 65) with no entry/stop/
+        # target. When profiles aren't supplied (e.g. a direct/legacy call) we fall back to bare
+        # Instruments, which still replay but produce no entry tickets.
+        self._profiles_by_symbol = {p.symbol: p for p in (profiles or [])}
+        if profiles and not self.selected_symbols:
+            self.selected_symbols = [p.symbol for p in profiles]
 
         # Will be initialized during replay
         self.engine: RadarEngine = None
@@ -90,10 +135,14 @@ class SimulationController:
         ).count()
         logger.info(f"Found {total_bars} total bars in database")
 
-        bars = self.db.query(SimHistoricalBar).filter(
+        q = self.db.query(SimHistoricalBar).filter(
             SimHistoricalBar.date == self.sim_run.start_date,
             SimHistoricalBar.bar_interval == self.sim_run.bar_interval
-        ).order_by(SimHistoricalBar.timestamp).all()
+        )
+        if self.selected_symbols:
+            # Replay only the selected watchlist (the ~100 the live scanner would have traded).
+            q = q.filter(SimHistoricalBar.symbol.in_(self.selected_symbols))
+        bars = q.order_by(SimHistoricalBar.timestamp).all()
 
         # Group by symbol
         bars_by_symbol = defaultdict(list)
@@ -114,13 +163,16 @@ class SimulationController:
         # For simulation, we'll use a simplified version
         instruments = []
         for symbol in symbols:
-            # Extract symbol name without exchange prefix
-            sym_name = symbol.split(':')[-1].replace('-EQ', '')
-            instruments.append(Instrument(
-                symbol=symbol,
-                name=sym_name,
-                median_turnover_cr=1.0  # Placeholder - could load from cache
-            ))
+            # Prefer the real selection profile (resistance/support/ATR/turnover) so the ORB engine can
+            # compute retest targets and size stops. Fall back to a bare Instrument only when a profile
+            # wasn't supplied — that still replays but yields no entry tickets.
+            prof = self._profiles_by_symbol.get(symbol)
+            if prof is not None:
+                instruments.append(prof)
+            else:
+                # Instrument (radar/models.py) has no 'name' field — its identity is `symbol`; the
+                # optional classifier is `industry`. median_turnover_cr is a placeholder for the sim.
+                instruments.append(Instrument(symbol=symbol, median_turnover_cr=1.0))
 
         # Initialize RadarEngine in SIMULATION mode
         self.engine = RadarEngine(
@@ -192,62 +244,38 @@ class SimulationController:
         self.db.commit()
 
     def _calculate_baselines(self):
+        """Build RVOL baselines from the PRIOR sessions' intraday bars, using the SAME product-wide
+        builder as the live engine (radar.rvol.build_baseline). This yields the rich schema
+        ({'v', 'sessions', 'bar': {slot: median}, 'cum': {slot: mean_cumulative}}) that rvol_runtime
+        expects, so cumulative RVOL (the product default) is computed correctly — not the legacy flat
+        per-slot table reused for both modes. Requires the prior-session intraday history that
+        HistoricalDataFetcher.fetch_intraday_window caches alongside the sim day.
         """
-        Calculate RVOL baselines from historical data before simulation date.
+        from radar.rvol import build_baseline, RvolConfig
 
-        Uses same_time_baseline() from radar.engine to calculate median volume
-        at each clock slot from previous 20 trading days.
-        """
-        logger.info("Calculating RVOL baselines...")
-
-        # For each symbol, we need historical bars from 20 trading days before sim date
-        # For MVP, we'll use a simplified approach:
-        # - Query sim_historical_bars for previous 30 calendar days
-        # - Calculate baseline using same logic as production
-
+        logger.info("Calculating RVOL baselines (radar.rvol.build_baseline)...")
+        cfg = RvolConfig.from_config(self.config)
         cutoff_date = self.session_date
-        lookback_start = cutoff_date - timedelta(days=40)  # ~20 trading days
-
+        lookback_start = cutoff_date - timedelta(days=60)
+        built = 0
         for symbol in self.symbols:
-            # Get historical bars for this symbol (before simulation date)
             hist_bars_data = self.db.query(SimHistoricalBar).filter(
                 SimHistoricalBar.symbol == symbol,
                 SimHistoricalBar.bar_interval == self.sim_run.bar_interval,
                 SimHistoricalBar.date >= lookback_start.isoformat(),
                 SimHistoricalBar.date < cutoff_date.isoformat()
             ).order_by(SimHistoricalBar.timestamp).all()
-
             if not hist_bars_data:
-                logger.warning(f"No historical data for {symbol} baseline calculation")
                 continue
+            history = [Candle(at=datetime.fromisoformat(b.timestamp), open=b.open, high=b.high,
+                              low=b.low, close=b.close, volume=b.volume) for b in hist_bars_data]
+            baseline = build_baseline(history, cutoff_date, length=cfg.length)
+            if baseline.get('bar') or baseline.get('cum'):
+                self.engine.set_baseline(symbol, baseline)
+                built += 1
 
-            # Convert to Candle objects
-            history = []
-            for bar_data in hist_bars_data:
-                ts = datetime.fromisoformat(bar_data.timestamp)
-                candle = Candle(
-                    at=ts,
-                    open=bar_data.open,
-                    high=bar_data.high,
-                    low=bar_data.low,
-                    close=bar_data.close,
-                    volume=bar_data.volume
-                )
-                history.append(candle)
-
-            # Calculate baseline using production logic
-            baseline = same_time_baseline(history, cutoff_date, lookback_sessions=20)
-
-            # For now, set both bar and cumulative modes
-            # (The engine uses rvol_cfg.mode to pick which one)
-            baseline_dict = {
-                'bar': baseline,  # Per-bar mode
-                'cum': baseline   # Cumulative mode (same for now)
-            }
-
-            self.engine.set_baseline(symbol, baseline_dict)
-
-        logger.info(f"Baselines calculated for {len(self.symbols)} symbols")
+        logger.info(f"RVOL baselines built for {built}/{len(self.symbols)} symbols "
+                    f"(mode={cfg.mode}, length={cfg.length})")
 
     def _process_timestamp(self, bars_at_time: List[tuple]):
         """
@@ -268,16 +296,17 @@ class SimulationController:
                 volume=bar_data.volume
             )
 
-            # Feed to engine (non-provisional, authoritative historical data)
+            # Feed to engine (non-provisional, authoritative historical data). observed_at is the bar's
+            # CLOSE (open + width), the simulated moment the bar is fully known — see _bar_delta above.
             self.engine.ingest_closed_bar(
                 symbol=symbol,
                 candle=candle,
-                observed_at=self.current_time,
+                observed_at=self.current_time + self._bar_delta,
                 provisional=False
             )
 
-        # 2. Get engine snapshot
-        state = self.engine.snapshot(reference_time=self.current_time)
+        # 2. Get engine snapshot (as of the bar close, consistent with how the bars were ingested)
+        state = self.engine.snapshot(reference_time=self.current_time + self._bar_delta)
 
         # 3. Record opportunities (journal)
         self._record_opportunities(state)
@@ -347,11 +376,11 @@ class SimulationController:
                     side=r.get('side'),
                     state=state_name,
                     score=r.get('score') or 0,
-                    entry=str(r.get('entry')) if r.get('entry') else None,
-                    stop=str(r.get('stop')) if r.get('stop') else None,
-                    target=str(r.get('target')) if r.get('target') else None,
-                    net_rr=str(r.get('net_rr')) if r.get('net_rr') else None,
-                    rvol=str(r.get('rvol')) if r.get('rvol') else None,
+                    entry=_fmt_num(r.get('entry')),
+                    stop=_fmt_num(r.get('stop')),
+                    target=_fmt_num(r.get('target')),
+                    net_rr=_fmt_num(r.get('net_rr')),
+                    rvol=_fmt_num(r.get('rvol')),
                     qty=r.get('qty'),
                     provisional=1 if r.get('provisional') else 0,
                     note=r.get('reason'),
@@ -369,11 +398,11 @@ class SimulationController:
 
                 prev.state = state_name
                 prev.score = max(prev.score or 0, r.get('score') or 0)
-                prev.entry = str(r.get('entry')) if r.get('entry') else prev.entry
-                prev.stop = str(r.get('stop')) if r.get('stop') else prev.stop
-                prev.target = str(r.get('target')) if r.get('target') else prev.target
-                prev.net_rr = str(r.get('net_rr')) if r.get('net_rr') else prev.net_rr
-                prev.rvol = str(r.get('rvol')) if r.get('rvol') else prev.rvol
+                prev.entry = _fmt_num(r.get('entry')) or prev.entry
+                prev.stop = _fmt_num(r.get('stop')) or prev.stop
+                prev.target = _fmt_num(r.get('target')) or prev.target
+                prev.net_rr = _fmt_num(r.get('net_rr')) or prev.net_rr
+                prev.rvol = _fmt_num(r.get('rvol')) or prev.rvol
                 prev.provisional = 1 if r.get('provisional') else 0
                 prev.timeline = json.dumps(timeline)
                 prev.sim_time = self.current_time.isoformat()
