@@ -764,19 +764,28 @@ class SimulationController:
                    f"{metrics['win_rate']:.1f}% win rate, {metrics['total_r']:.2f}R total")
 
     def _close_all_at_eod(self):
-        """Close all open orders at end of day."""
-        # Get all open orders
+        """Close all open orders at end of day at the ACTUAL last-bar close (the session square-off).
+
+        Previously these closed at the entry price → every EOD exit booked ₹0, silently discarding the
+        real P&L of any position that rode to the close without hitting its stop/target (common for SMC,
+        whose far-swing targets rarely fill intraday). Now each closes at its symbol's last cached bar
+        close for the sim date, falling back to the entry only if no bar is found.
+        """
         open_orders = self.db.query(SimOrder).filter_by(
             sim_run_id=self.sim_run.id,
             status='open'
         ).all()
-
-        # Close each at last known price
-        # (In a real implementation, we'd use the closing price of the last bar)
+        iv = self.sim_run.bar_interval
+        last_close_cache: Dict[str, float] = {}
         for order in open_orders:
-            # For now, close at entry price (no P&L)
-            # TODO: Use actual closing bar price
-            self._close_order(order, order.entry, 'eod')
+            close_px = last_close_cache.get(order.symbol)
+            if close_px is None:
+                last_bar = self.db.query(SimHistoricalBar).filter_by(
+                    symbol=order.symbol, bar_interval=iv, date=self.sim_run.start_date
+                ).order_by(SimHistoricalBar.timestamp.desc()).first()
+                close_px = last_bar.close if last_bar else order.entry
+                last_close_cache[order.symbol] = close_px
+            self._close_order(order, close_px, 'eod')
 
     def _calculate_metrics(self) -> dict:
         """Calculate simulation metrics."""
