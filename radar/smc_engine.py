@@ -263,6 +263,17 @@ def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Op
     stop_mode = str(config.get('smc_stop_mode', 'ob_atr') or 'ob_atr')
     swing_lo = state.swing_low.level if state.swing_low else None
     swing_hi = state.swing_high.level if state.swing_high else None
+    # Optional ATR stop FLOOR (config-gated, default OFF → unchanged behaviour). On 5-minute bars the
+    # order-block-edge / structure stop can sit inside the noise band (~0.2-0.5%), so nearly every SMC
+    # trade stops out on normal wiggle. When enabled, the stop is widened to AT LEAST
+    # smc_atr_stop_floor_mult × the symbol's DAILY ATR (state.info.daily_atr_pct) — a noise-clearing
+    # minimum — while a naturally-wider structural stop is kept as-is. Shared with live trading, so this
+    # stays off unless a run/settings explicitly turns it on.
+    floor_dist = 0.0
+    if bool(config.get('smc_atr_stop_floor', False)):
+        daily_atr_pct = getattr(state.info, 'daily_atr_pct', 0) or 0
+        floor_mult = float(config.get('smc_atr_stop_floor_mult', 0.5) or 0.5)
+        floor_dist = current_price * (daily_atr_pct / 100.0) * floor_mult
     if side == 'LONG':
         if in_fresh_ob:
             stop = ob.low - buf
@@ -270,6 +281,8 @@ def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Op
             stop = swing_lo - buf
         else:
             stop = current_price - atr_stop_dist
+        if floor_dist > 0:
+            stop = min(stop, current_price - floor_dist)   # push the stop at least floor_dist below entry
         target = (state.swing_high.level if (state.swing_high and state.swing_high.level > current_price)
                   else state.trailing_high)
     else:  # SHORT
@@ -279,6 +292,8 @@ def derive_smc_trade_plan(state, zone, current_price: float, config: dict) -> Op
             stop = swing_hi + buf
         else:
             stop = current_price + atr_stop_dist
+        if floor_dist > 0:
+            stop = max(stop, current_price + floor_dist)   # push the stop at least floor_dist above entry
         target = (state.swing_low.level if (state.swing_low and state.swing_low.level < current_price)
                   else state.trailing_low)
 
