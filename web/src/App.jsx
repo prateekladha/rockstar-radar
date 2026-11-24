@@ -117,8 +117,8 @@ function Shell({ user, onLogout }) {
   // Auto-trade settings are per-user, so every role gets that page. Strategy settings (universe /
   // scan filters / prereq / RVOL / EMA) and Team stay admin-only.
   const menuItems = user.is_admin
-    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/auto-trade', 'Auto-trade settings', '🤖'], ['/settings', 'Strategy settings', '⚙️'], ['/family', 'Team', '👥']]
-    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/auto-trade', 'Auto-trade settings', '🤖']]
+    ? [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/auto-trade', 'My settings', '🎚️'], ['/settings', 'Strategy settings', '⚙️'], ['/family', 'Team', '👥']]
+    : [['/brokers', 'Broker', '🔗'], ['/alerts', 'Alerts', '🔔'], ['/preferences', 'Practice & alerts', '🎓'], ['/auto-trade', 'My settings', '🎚️']]
   const go = (p) => { setMenu(false); nav(p) }
 
   return (
