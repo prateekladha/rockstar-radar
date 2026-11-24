@@ -393,23 +393,24 @@ class SimulationController:
         }
 
     def _record_opportunities_smc(self, opps: list):
-        """Journal SMC opportunities that carry a trade plan — one row per (symbol, side), best score."""
-        from .models import User
-        from .journaling import apply_prerequisite_filters
+        """Journal SMC opportunities that carry a trade plan — one row per (symbol, side), best score.
+
+        Uses the engine's raw opportunities (no prerequisite RVOL filter) to stay faithful to how live
+        SMC trading works: order_engine._auto_trade_smc trades off the raw score/zone/R:R, not the
+        prereq filter (which is an ORB radar/journaling concern).
+        """
         if not opps:
             return
-        user = self.db.query(User).get(self.sim_run.user_id)
-        filtered = apply_prerequisite_filters(opps, user, strategy='SMC')[0] if user else opps
         day = self.sim_run.start_date
         existing = {(s.symbol, s.side): s for s in self.db.query(SimSignalLog).filter_by(
             sim_run_id=self.sim_run.id, day=day).all()}
         changed = False
-        for o in filtered:
+        for o in opps:
             plan = o.get('trade') or {}
             side = plan.get('side')
             if side not in ('LONG', 'SHORT'):
                 continue   # equilibrium / no fresh order block → not a tradeable setup
-            score = int(round(float(o.get('score') or 0)))
+            score = int(float(o.get('score') or 0))   # truncate, matching prod _auto_trade_smc
             key = (o.get('symbol'), side)
             prev = existing.get(key)
             entry, stop = _fmt_num(plan.get('entry')), _fmt_num(plan.get('stop'))
@@ -443,8 +444,6 @@ class SimulationController:
         """Auto paper-trade SMC opportunities — mirrors order_engine._auto_trade_smc, one entry/symbol."""
         if not self.config.get('auto_paper_trade'):
             return
-        from .models import User
-        from .journaling import apply_prerequisite_filters
         try:
             min_score = int(self.config.get('auto_trade_smc_min_score', 80) or 80)
         except (TypeError, ValueError):
@@ -457,13 +456,12 @@ class SimulationController:
         max_risk = capital * risk_pct / 100
         if not max_risk:
             return
-        user = self.db.query(User).get(self.sim_run.user_id)
-        if user:
-            opps = apply_prerequisite_filters(opps, user, strategy='SMC')[0]
+        # Trade off the engine's RAW opportunities — no prerequisite RVOL filter — exactly like
+        # order_engine._auto_trade_smc. The SMC score/zone/R:R are the quality gate.
         placed = False
         for o in opps:
             try:
-                score = int(round(float(o.get('score') or 0)))
+                score = int(float(o.get('score') or 0))   # truncate, matching prod _auto_trade_smc
             except (TypeError, ValueError):
                 continue
             if score < min_score:
