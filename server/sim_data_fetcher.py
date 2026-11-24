@@ -51,6 +51,7 @@ class HistoricalDataFetcher:
 
             logger.info(f"Fetching {interval}-min bars for {total_symbols} symbols on {date}")
 
+            fetched_count = 0
             for idx, symbol in enumerate(symbols):
                 # Check if already cached
                 cached_count = self.db.query(SimHistoricalBar).filter(
@@ -61,9 +62,12 @@ class HistoricalDataFetcher:
 
                 if cached_count > 0:
                     logger.debug(f"Using cached data for {symbol}")
+                    fetched_count += 1
                 else:
                     # Fetch from FYERS
-                    self._fetch_symbol_bars(symbol, date, interval)
+                    success = self._fetch_symbol_bars(symbol, date, interval)
+                    if success:
+                        fetched_count += 1
 
                 # Update progress
                 progress = int(((idx + 1) / total_symbols) * 100)
@@ -77,7 +81,16 @@ class HistoricalDataFetcher:
 
             sim_run.progress_pct = 100
             self.db.commit()
-            logger.info(f"Data fetch completed for {total_symbols} symbols")
+
+            # Verify data was actually saved
+            total_bars = self.db.query(SimHistoricalBar).filter(
+                SimHistoricalBar.date == date,
+                SimHistoricalBar.bar_interval == interval
+            ).count()
+            logger.info(f"Data fetch completed: {fetched_count}/{total_symbols} symbols have data. Total bars: {total_bars}")
+
+            if fetched_count == 0:
+                raise ValueError(f"No data could be fetched for any symbols on {date}. Check broker connection and date validity.")
 
         except Exception as e:
             logger.error(f"Data fetch failed: {e}")
@@ -86,7 +99,7 @@ class HistoricalDataFetcher:
             self.db.commit()
             raise
 
-    def _fetch_symbol_bars(self, symbol: str, date: str, interval: str) -> None:
+    def _fetch_symbol_bars(self, symbol: str, date: str, interval: str) -> bool:
         """
         Fetch bars for a single symbol from FYERS API.
 
@@ -94,6 +107,9 @@ class HistoricalDataFetcher:
             symbol: "NSE:RELIANCE-EQ"
             date: "2024-11-15"
             interval: "1" or "5" (minutes)
+
+        Returns:
+            True if data was fetched successfully, False otherwise
         """
         try:
             from fyers_apiv3 import fyersModel
@@ -130,13 +146,13 @@ class HistoricalDataFetcher:
 
             response = fyers.history(data=data)
 
-            if response['s'] != 'ok':
-                logger.warning(f"FYERS API error for {symbol}: {response}")
-                return
+            if response.get('s') != 'ok':
+                logger.warning(f"FYERS API error for {symbol}: {response.get('message', 'Unknown error')}")
+                return False
 
             if 'candles' not in response or not response['candles']:
-                logger.warning(f"No data returned for {symbol}")
-                return
+                logger.warning(f"No candles returned for {symbol} on {date}")
+                return False
 
             # Store bars in database
             bars_to_insert = []
@@ -163,10 +179,13 @@ class HistoricalDataFetcher:
                 self.db.bulk_save_objects(bars_to_insert)
                 self.db.commit()
                 logger.info(f"Cached {len(bars_to_insert)} bars for {symbol}")
+                return True
+            else:
+                return False
 
         except Exception as e:
             logger.error(f"Failed to fetch {symbol}: {e}")
-            # Continue with other symbols (don't raise)
+            return False  # Continue with other symbols (don't raise)
 
     def get_cached_bars(self, symbol: str, date: str, interval: str) -> List[SimHistoricalBar]:
         """

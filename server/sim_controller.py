@@ -81,7 +81,14 @@ class SimulationController:
 
     def _load_historical_data(self) -> Dict[str, List[SimHistoricalBar]]:
         """Load cached historical bars for this simulation."""
-        logger.info("Loading historical data...")
+        logger.info(f"Loading historical data for date={self.sim_run.start_date}, interval={self.sim_run.bar_interval}...")
+
+        # Check total bars available
+        total_bars = self.db.query(SimHistoricalBar).filter(
+            SimHistoricalBar.date == self.sim_run.start_date,
+            SimHistoricalBar.bar_interval == self.sim_run.bar_interval
+        ).count()
+        logger.info(f"Found {total_bars} total bars in database")
 
         bars = self.db.query(SimHistoricalBar).filter(
             SimHistoricalBar.date == self.sim_run.start_date,
@@ -93,7 +100,7 @@ class SimulationController:
         for bar in bars:
             bars_by_symbol[bar.symbol].append(bar)
 
-        logger.info(f"Loaded data for {len(bars_by_symbol)} symbols")
+        logger.info(f"Loaded data for {len(bars_by_symbol)} symbols ({total_bars} total bars)")
         return dict(bars_by_symbol)
 
     def _initialize_engine(self, symbols: List[str]):
