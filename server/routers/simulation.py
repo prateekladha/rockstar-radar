@@ -405,10 +405,23 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
         # Get universe symbols
         # TODO: Make this configurable per sim run
         universe_path = ROOT / 'data' / 'nifty500.csv'
+        logger.info(f"Loading universe from: {universe_path}")
+
+        if not universe_path.exists():
+            sim_run.status = 'failed'
+            sim_run.error_message = f"Universe file not found: {universe_path}"
+            db.commit()
+            return
+
         universe_data = load_universe(universe_path)
         symbols = [symbol for symbol, industry in universe_data]
+        logger.info(f"Loaded {len(symbols)} symbols from universe")
 
         fetcher.fetch_day_data(sim_run, symbols)
+
+        # Refresh session to see newly committed data
+        db.expire_all()
+        db.refresh(sim_run)
 
         # Step 2: Run simulation
         controller = SimulationController(db, sim_run)
