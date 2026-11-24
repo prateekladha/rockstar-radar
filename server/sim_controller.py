@@ -3,7 +3,7 @@ Simulation controller - orchestrates the replay of historical data through the O
 
 This is the core of the backtesting system. It:
 1. Loads historical bars
-2. Replays them chronologically through the ORB engine
+2. Replays them chronologically through the REAL ORB engine
 3. Records opportunities (journal)
 4. Executes simulated auto-trades
 5. Processes exits (stops/targets)
@@ -14,14 +14,16 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta, date
 from typing import List, Dict, Any
 
 from sqlalchemy.orm import Session
 
-from radar.control import ControlCenter
-from radar.engine import OrbEngine, Tick, Candle
+from radar.engine import RadarEngine, same_time_baseline
+from radar.models import Candle, Instrument
 from radar.utils import IST, now_ist
+from radar import universe as U
 from .models import SimRun, SimHistoricalBar, SimSignalLog, SimOrder
 from .sim_data_fetcher import HistoricalDataFetcher
 
@@ -36,10 +38,12 @@ class SimulationController:
         self.sim_run = sim_run
         self.config = json.loads(sim_run.config)
         self.current_time = None
+        self.session_date = datetime.fromisoformat(sim_run.start_date).date()
 
         # Will be initialized during replay
-        self.engine = None
+        self.engine: RadarEngine = None
         self.open_orders: Dict[str, SimOrder] = {}  # symbol -> order
+        self.symbols: List[str] = []
 
     def run(self) -> None:
         """Main entry point - run the complete simulation."""
@@ -94,20 +98,38 @@ class SimulationController:
         return dict(bars_by_symbol)
 
     def _initialize_engine(self, symbols: List[str]):
-        """Initialize ORB engine with simulation config."""
-        # TODO: This is a simplified version
-        # In reality, we need to initialize the full ORB engine properly
-        # For now, we'll use a mock approach and enhance it later
+        """Initialize REAL ORB engine with simulation config."""
+        logger.info(f"Initializing ORB engine with {len(symbols)} symbols...")
 
-        logger.info("Initializing simulation engine...")
+        self.symbols = symbols
 
-        # The engine needs to be initialized with:
-        # - Config from sim_run
-        # - Symbol list
-        # - Simulation mode enabled
+        # Create Instrument objects
+        # In production, this comes from universe.py with real median turnover data
+        # For simulation, we'll use a simplified version
+        instruments = []
+        for symbol in symbols:
+            # Extract symbol name without exchange prefix
+            sym_name = symbol.split(':')[-1].replace('-EQ', '')
+            instruments.append(Instrument(
+                symbol=symbol,
+                name=sym_name,
+                median_turnover_cr=1.0  # Placeholder - could load from cache
+            ))
 
-        # This will need integration with the actual OrbEngine
-        # For MVP, we'll use a simplified approach
+        # Initialize RadarEngine in SIMULATION mode
+        self.engine = RadarEngine(
+            instruments=instruments,
+            config=self.config,
+            session=self.session_date,
+            mode='SIMULATION',
+            on_signal=None  # No real-time signaling needed
+        )
+
+        # Calculate and set baselines for RVOL
+        # We need historical data from before the simulation date
+        self._calculate_baselines()
+
+        logger.info("ORB engine initialized successfully")
 
     def _replay_bars(self, bars_by_symbol: Dict[str, List[SimHistoricalBar]]):
         """
@@ -163,37 +185,131 @@ class SimulationController:
         self.sim_run.progress_pct = 100
         self.db.commit()
 
+    def _calculate_baselines(self):
+        """
+        Calculate RVOL baselines from historical data before simulation date.
+
+        Uses same_time_baseline() from radar.engine to calculate median volume
+        at each clock slot from previous 20 trading days.
+        """
+        logger.info("Calculating RVOL baselines...")
+
+        # For each symbol, we need historical bars from 20 trading days before sim date
+        # For MVP, we'll use a simplified approach:
+        # - Query sim_historical_bars for previous 30 calendar days
+        # - Calculate baseline using same logic as production
+
+        cutoff_date = self.session_date
+        lookback_start = cutoff_date - timedelta(days=40)  # ~20 trading days
+
+        for symbol in self.symbols:
+            # Get historical bars for this symbol (before simulation date)
+            hist_bars_data = self.db.query(SimHistoricalBar).filter(
+                SimHistoricalBar.symbol == symbol,
+                SimHistoricalBar.bar_interval == self.sim_run.bar_interval,
+                SimHistoricalBar.date >= lookback_start.isoformat(),
+                SimHistoricalBar.date < cutoff_date.isoformat()
+            ).order_by(SimHistoricalBar.timestamp).all()
+
+            if not hist_bars_data:
+                logger.warning(f"No historical data for {symbol} baseline calculation")
+                continue
+
+            # Convert to Candle objects
+            history = []
+            for bar_data in hist_bars_data:
+                ts = datetime.fromisoformat(bar_data.timestamp)
+                candle = Candle(
+                    at=ts,
+                    open=bar_data.open,
+                    high=bar_data.high,
+                    low=bar_data.low,
+                    close=bar_data.close,
+                    volume=bar_data.volume
+                )
+                history.append(candle)
+
+            # Calculate baseline using production logic
+            baseline = same_time_baseline(history, cutoff_date, lookback_sessions=20)
+
+            # For now, set both bar and cumulative modes
+            # (The engine uses rvol_cfg.mode to pick which one)
+            baseline_dict = {
+                'bar': baseline,  # Per-bar mode
+                'cum': baseline   # Cumulative mode (same for now)
+            }
+
+            self.engine.set_baseline(symbol, baseline_dict)
+
+        logger.info(f"Baselines calculated for {len(self.symbols)} symbols")
+
     def _process_timestamp(self, bars_at_time: List[tuple]):
         """
-        Process all bars at a specific timestamp.
+        Process all bars at a specific timestamp using REAL ORB engine.
 
         Args:
-            bars_at_time: List of (symbol, bar) tuples
+            bars_at_time: List of (symbol, SimHistoricalBar) tuples
         """
-        # TODO: This is where we integrate with the actual ORB engine
-        # For MVP, we'll implement a simplified version
+        # 1. Feed bars to engine (ingest_closed_bar)
+        for symbol, bar_data in bars_at_time:
+            # Convert SimHistoricalBar to Candle
+            candle = Candle(
+                at=datetime.fromisoformat(bar_data.timestamp),
+                open=bar_data.open,
+                high=bar_data.high,
+                low=bar_data.low,
+                close=bar_data.close,
+                volume=bar_data.volume
+            )
 
-        # 1. Feed bars to engine
+            # Feed to engine (non-provisional, authoritative historical data)
+            self.engine.ingest_closed_bar(
+                symbol=symbol,
+                candle=candle,
+                observed_at=self.current_time,
+                provisional=False
+            )
+
         # 2. Get engine snapshot
-        # 3. Record opportunities
+        state = self.engine.snapshot(reference_time=self.current_time)
+
+        # 3. Record opportunities (journal)
+        self._record_opportunities(state)
+
         # 4. Execute auto-trades
-        # 5. Process exits
+        self._execute_auto_trades(state)
 
-        # This is a placeholder - actual implementation will come
-        # once we integrate with the real engine
-
-        # For now, let's just record the bars were processed
-        pass
+        # 5. Process exits (stops/targets)
+        self._process_exits(bars_at_time)
 
     def _record_opportunities(self, state: dict):
         """
         Record opportunities (journal entries) from engine state.
 
         Similar to production journaling.py but writes to sim_signal_logs.
+        Applies prerequisite filters just like production.
         """
         from .journaling import ACTIONABLE, _PRIORITY
+        from .models import User
 
-        rows = [r for r in (state.get('all') or []) if r.get('state') in ACTIONABLE]
+        all_opps = state.get('all') or []
+        if not all_opps:
+            return
+
+        # Apply prerequisite filters (EXACT same logic as production)
+        user = self.db.query(User).get(self.sim_run.user_id)
+        if user:
+            from .journaling import apply_prerequisite_filters
+            filtered_opps, rejected_count = apply_prerequisite_filters(
+                all_opps, user, strategy='ORB'
+            )
+            if rejected_count > 0:
+                logger.debug(f"Prerequisite filters rejected {rejected_count} opportunities")
+            # Use filtered opportunities
+            rows = [r for r in filtered_opps if r.get('state') in ACTIONABLE]
+        else:
+            rows = [r for r in all_opps if r.get('state') in ACTIONABLE]
+
         if not rows:
             return
 
@@ -268,6 +384,8 @@ class SimulationController:
         - Instant fills at signal price
         - No broker API calls
         - Writes to sim_orders table
+
+        Applies EXACT same prerequisite filters as production.
         """
         # Check if auto-trade enabled
         if not self.config.get('auto_paper_trade'):
@@ -276,7 +394,20 @@ class SimulationController:
         # Get trigger state (RETEST_READY or CONFIRMED)
         trigger = self.config.get('auto_trade_trigger', 'RETEST_READY').upper()
 
-        for opp in state.get('all', []):
+        # Apply prerequisite filters (EXACT same as production)
+        from .models import User
+        all_opps = state.get('all', [])
+        if not all_opps:
+            return
+
+        user = self.db.query(User).get(self.sim_run.user_id)
+        if user:
+            from .journaling import apply_prerequisite_filters
+            filtered_opps, _ = apply_prerequisite_filters(all_opps, user, strategy='ORB')
+        else:
+            filtered_opps = all_opps
+
+        for opp in filtered_opps:
             if opp.get('state') != trigger:
                 continue
 
