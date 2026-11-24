@@ -167,7 +167,32 @@ export default function Radar() {
 }
 
 function humanNote(e) {
-  if (e.state === 'RETEST_READY') return `Pulled back to the level and held — ${e.net_rr || '—'}:1 reward.`
+  // Smart display for RETEST_READY based on entry_status
+  if (e.state === 'RETEST_READY') {
+    const baseNote = `Pulled back to the level and held — ${e.net_rr || '—'}:1 reward.`
+
+    // Position-aware context
+    if (e.entry_status === 'in_position') {
+      const timeStr = e.position_time || '—'
+      const entryPrice = e.position_entry ? `₹${e.position_entry.toFixed(2)}` : '—'
+      return `In position - entered at ${entryPrice} (${timeStr}).`
+    }
+
+    // Signal aging context
+    if (e.entry_status === 'aged') {
+      return `${baseNote} Entry window closed (signal >5 min old).`
+    }
+
+    if (e.entry_status === 'aging' && e.signal_age_sec != null) {
+      const mins = Math.floor(e.signal_age_sec / 60)
+      const secs = e.signal_age_sec % 60
+      return `${baseNote} Signal age: ${mins}m ${secs}s.`
+    }
+
+    // Fresh signal (0-2 min) or unknown - show default
+    return baseNote
+  }
+
   if (e.state === 'CONFIRMED') return 'Broke the opening range with strong volume.'
   if (e.state === 'BREAKOUT_PENDING') return 'Pushing through the range — waiting for the candle to close.'
   if (e.state === 'RETRACTED') return 'Breakout faded — stand down.'
