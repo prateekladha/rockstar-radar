@@ -309,3 +309,118 @@ class SupportMessage(Base):
     message = Column(Text)
     delivered = Column(Integer, default=0)          # 1 if Telegram delivery succeeded
     created_at = Column(DateTime, default=_now, index=True)
+
+
+# ============================================================================
+# Simulation / Backtesting Models
+# ============================================================================
+
+class SimRun(Base):
+    """A simulation/backtest run with specific configuration on historical data."""
+    __tablename__ = 'sim_runs'
+    id = Column(Integer, Identity(), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    config = Column(Text, nullable=False)          # JSON config snapshot
+    start_date = Column(String(10), nullable=False)  # "2024-11-15"
+    start_time = Column(String(5), nullable=False)   # "09:15"
+    end_date = Column(String(10), nullable=False)
+    end_time = Column(String(5), nullable=False)
+    bar_interval = Column(String(2), nullable=False)  # "1" or "5"
+    status = Column(String(16), default='pending', index=True)  # pending, fetching_data, running, completed, failed
+    progress_pct = Column(Integer, default=0)
+    error_message = Column(Text)
+    created_at = Column(DateTime, default=_now, index=True)
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    # Results summary
+    total_opportunities = Column(Integer)
+    total_trades = Column(Integer)
+    total_pnl = Column(Float)
+    win_rate = Column(Float)
+    expectancy_r = Column(Float)
+    total_r = Column(Float)
+    max_drawdown_r = Column(Float)
+
+    user = relationship('User')
+
+
+class SimHistoricalBar(Base):
+    """Cached historical market data (shared across all sim runs)."""
+    __tablename__ = 'sim_historical_bars'
+    id = Column(Integer, Identity(), primary_key=True)
+    symbol = Column(String(40), nullable=False, index=True)
+    date = Column(String(10), nullable=False, index=True)
+    bar_interval = Column(String(2), nullable=False, index=True)
+    timestamp = Column(String(32), nullable=False)  # ISO format with timezone
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=_now)
+
+
+class SimSignalLog(Base):
+    """Journal entries for each sim run (opportunities flagged)."""
+    __tablename__ = 'sim_signal_logs'
+    id = Column(Integer, Identity(), primary_key=True)
+    sim_run_id = Column(Integer, ForeignKey('sim_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    day = Column(String(10), nullable=False)
+    sim_time = Column(String(32), nullable=False)
+    symbol = Column(String(40))
+    side = Column(String(8))
+    state = Column(String(24), index=True)
+    score = Column(Integer, default=0)
+    entry = Column(String(16))
+    stop = Column(String(16))
+    target = Column(String(16))
+    net_rr = Column(String(16))
+    rvol = Column(String(16))
+    qty = Column(Integer)
+    provisional = Column(Integer, default=0)
+    note = Column(Text)
+    timeline = Column(Text)  # JSON array
+
+    sim_run = relationship('SimRun')
+    user = relationship('User')
+
+
+class SimOrder(Base):
+    """Orders/trades for each sim run."""
+    __tablename__ = 'sim_orders'
+    id = Column(Integer, Identity(), primary_key=True)
+    sim_run_id = Column(Integer, ForeignKey('sim_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    symbol = Column(String(40), nullable=False)
+    side = Column(String(8), nullable=False)
+    qty = Column(Integer, nullable=False)
+    entry = Column(Float, nullable=False)
+    stop = Column(Float, nullable=False)
+    target = Column(Float)
+    status = Column(String(16), default='open', index=True)
+    source = Column(String(16), default='auto')
+    created_at = Column(String(32), nullable=False)  # ISO timestamp (sim time)
+    closed_at = Column(String(32))
+    close_reason = Column(String(16))
+    close_price = Column(Float)
+    pnl = Column(Float)
+    result_r = Column(Float)
+
+    sim_run = relationship('SimRun')
+    user = relationship('User')
+
+
+class SimReplayEvent(Base):
+    """Replay events for visualization (optional, for replay viewer)."""
+    __tablename__ = 'sim_replay_events'
+    id = Column(Integer, Identity(), primary_key=True)
+    sim_run_id = Column(Integer, ForeignKey('sim_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    sim_time = Column(String(32), nullable=False, index=True)
+    event_type = Column(String(32), nullable=False)
+    symbol = Column(String(40))
+    data = Column(Text)  # JSON payload
+
+    sim_run = relationship('SimRun')
