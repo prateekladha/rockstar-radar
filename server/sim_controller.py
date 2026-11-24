@@ -84,8 +84,14 @@ class SimulationController:
         if profiles and not self.selected_symbols:
             self.selected_symbols = [p.symbol for p in profiles]
 
-        # Will be initialized during replay
-        self.engine: RadarEngine = None
+        # Which strategy this run replays: 'ORB' (RadarEngine) or 'SMC' (SMCEngine). Stored in the
+        # config JSON (no DB column), defaults to ORB for older runs.
+        self.strategy = str(self.config.get('strategy') or 'ORB').upper()
+        if self.strategy not in ('ORB', 'SMC'):
+            self.strategy = 'ORB'
+
+        # Will be initialized during replay (RadarEngine for ORB, SMCEngine for SMC)
+        self.engine = None
         self.open_orders: Dict[str, SimOrder] = {}  # symbol -> currently OPEN order
         # Symbols already auto-traded in this run. The engine keeps reporting a symbol as RETEST_READY
         # with FROZEN entry/stop/target after the breakout; once a position closes it leaves open_orders,
@@ -160,10 +166,12 @@ class SimulationController:
         return dict(bars_by_symbol)
 
     def _initialize_engine(self, symbols: List[str]):
-        """Initialize REAL ORB engine with simulation config."""
-        logger.info(f"Initializing ORB engine with {len(symbols)} symbols...")
-
+        """Initialize the REAL engine for this run's strategy with the simulation config."""
         self.symbols = symbols
+        if self.strategy == 'SMC':
+            self._initialize_smc_engine(symbols)
+            return
+        logger.info(f"Initializing ORB engine with {len(symbols)} symbols...")
 
         # Create Instrument objects
         # In production, this comes from universe.py with real median turnover data
@@ -195,6 +203,34 @@ class SimulationController:
         self._calculate_baselines()
 
         logger.info("ORB engine initialized successfully")
+
+    def _initialize_smc_engine(self, symbols: List[str]):
+        """Initialize the SMC engine and warm it up with prior-session intraday candles.
+
+        SMC swing detection needs >=101 candles (size=50 pivots) — far more than one day (75 5m bars) —
+        so every cached intraday bar BEFORE the sim day is preloaded as historical context. The sim-day
+        bars are then replayed one at a time through process_candle/process_tick during the replay loop.
+        """
+        from radar.smc_engine import SMCEngine
+        logger.info(f"Initializing SMC engine with {len(symbols)} symbols...")
+        instruments = [self._profiles_by_symbol.get(s) or Instrument(symbol=s, median_turnover_cr=1.0)
+                       for s in symbols]
+        self.engine = SMCEngine(instruments=instruments, config=self.config)
+        iv = self.sim_run.bar_interval
+        warmed = 0
+        for symbol in symbols:
+            prior = self.db.query(SimHistoricalBar).filter(
+                SimHistoricalBar.symbol == symbol,
+                SimHistoricalBar.bar_interval == iv,
+                SimHistoricalBar.date < self.sim_run.start_date
+            ).order_by(SimHistoricalBar.timestamp).all()
+            if not prior:
+                continue
+            candles = [Candle(at=datetime.fromisoformat(b.timestamp), open=b.open, high=b.high,
+                              low=b.low, close=b.close, volume=b.volume) for b in prior]
+            self.engine.load_historical_candles(symbol, candles)
+            warmed += 1
+        logger.info(f"SMC engine warmed up with prior-session candles for {warmed}/{len(symbols)} symbols")
 
     def _replay_bars(self, bars_by_symbol: Dict[str, List[SimHistoricalBar]]):
         """
@@ -287,11 +323,14 @@ class SimulationController:
 
     def _process_timestamp(self, bars_at_time: List[tuple]):
         """
-        Process all bars at a specific timestamp using REAL ORB engine.
+        Process all bars at a specific timestamp using the REAL engine for this run's strategy.
 
         Args:
             bars_at_time: List of (symbol, SimHistoricalBar) tuples
         """
+        if self.strategy == 'SMC':
+            self._process_timestamp_smc(bars_at_time)
+            return
         # 1. Feed bars to engine (ingest_closed_bar)
         for symbol, bar_data in bars_at_time:
             # Convert SimHistoricalBar to Candle
@@ -324,6 +363,136 @@ class SimulationController:
 
         # 5. Process exits (stops/targets)
         self._process_exits(bars_at_time)
+
+    # ---- SMC strategy path ----------------------------------------------------------------------
+
+    def _process_timestamp_smc(self, bars_at_time: List[tuple]):
+        """Feed bars to the SMC engine, then journal + auto-trade its opportunities, then run exits."""
+        from radar.models import Tick
+        bar_close = self.current_time + self._bar_delta
+        for symbol, bar_data in bars_at_time:
+            candle = Candle(at=datetime.fromisoformat(bar_data.timestamp), open=bar_data.open,
+                            high=bar_data.high, low=bar_data.low, close=bar_data.close,
+                            volume=bar_data.volume)
+            self.engine.process_candle(symbol, candle)
+            self.engine.process_tick(symbol, Tick(symbol=symbol, price=bar_data.close, time=bar_close))
+        opps = [self._smc_opp_to_dict(o) for o in self.engine.get_opportunities()]
+        self._record_opportunities_smc(opps)
+        self._execute_auto_trades_smc(opps)
+        self._process_exits(bars_at_time)
+
+    @staticmethod
+    def _smc_opp_to_dict(opp) -> dict:
+        """Serialize an SMCOpportunity to the dict the journaling/auto-trade code reads (mirrors the
+        radar.dashboard /api/smc-state payload)."""
+        return {
+            'symbol': opp.symbol,
+            'price': opp.price,
+            'score': opp.score,
+            'zone': opp.zone.zone_type if opp.zone else None,
+            'trade': opp.trade,     # {side, entry, stop, target, rr, in_fresh_ob} or None
+            'confluence': opp.confluence,
+        }
+
+    def _record_opportunities_smc(self, opps: list):
+        """Journal SMC opportunities that carry a trade plan — one row per (symbol, side), best score.
+
+        Uses the engine's raw opportunities (no prerequisite RVOL filter) to stay faithful to how live
+        SMC trading works: order_engine._auto_trade_smc trades off the raw score/zone/R:R, not the
+        prereq filter (which is an ORB radar/journaling concern).
+        """
+        if not opps:
+            return
+        day = self.sim_run.start_date
+        existing = {(s.symbol, s.side): s for s in self.db.query(SimSignalLog).filter_by(
+            sim_run_id=self.sim_run.id, day=day).all()}
+        changed = False
+        for o in opps:
+            plan = o.get('trade') or {}
+            side = plan.get('side')
+            if side not in ('LONG', 'SHORT'):
+                continue   # equilibrium / no fresh order block → not a tradeable setup
+            score = int(float(o.get('score') or 0))   # truncate, matching prod _auto_trade_smc
+            key = (o.get('symbol'), side)
+            prev = existing.get(key)
+            entry, stop = _fmt_num(plan.get('entry')), _fmt_num(plan.get('stop'))
+            target, net_rr = _fmt_num(plan.get('target')), _fmt_num(plan.get('rr'))
+            rvol = _fmt_num((o.get('confluence') or {}).get('rvol_cum'))
+            if prev is None:
+                log = SimSignalLog(
+                    sim_run_id=self.sim_run.id, user_id=self.sim_run.user_id, day=day,
+                    sim_time=self.current_time.isoformat(), symbol=o.get('symbol'), side=side,
+                    state=o.get('zone') or 'SMC', score=score, entry=entry, stop=stop, target=target,
+                    net_rr=net_rr, rvol=rvol, provisional=0, note=f"SMC {o.get('zone')} setup",
+                    timeline=json.dumps([{'t': self.current_time.strftime('%H:%M:%S'),
+                                          'event': o.get('zone') or 'SMC', 'detail': f"score {score}"}]))
+                self.db.add(log)
+                existing[key] = log
+                changed = True
+            elif score > (prev.score or 0):
+                prev.state = o.get('zone') or prev.state
+                prev.score = score
+                prev.entry = entry or prev.entry
+                prev.stop = stop or prev.stop
+                prev.target = target or prev.target
+                prev.net_rr = net_rr or prev.net_rr
+                prev.rvol = rvol or prev.rvol
+                prev.sim_time = self.current_time.isoformat()
+                changed = True
+        if changed:
+            self.db.commit()
+
+    def _execute_auto_trades_smc(self, opps: list):
+        """Auto paper-trade SMC opportunities — mirrors order_engine._auto_trade_smc, one entry/symbol."""
+        if not self.config.get('auto_paper_trade'):
+            return
+        try:
+            min_score = int(self.config.get('auto_trade_smc_min_score', 80) or 80)
+        except (TypeError, ValueError):
+            min_score = 80
+        min_rr = float(self.config.get('min_net_reward_risk', 2.0) or 2.0)
+        enforce_rr = bool(self.config.get('smc_enforce_min_rr', True))
+        runner = bool(self.config.get('smc_runner_target', False))
+        capital = self.config.get('capital_inr', 100000)
+        risk_pct = self.config.get('risk_pct', 1.0)
+        max_risk = capital * risk_pct / 100
+        if not max_risk:
+            return
+        # Trade off the engine's RAW opportunities — no prerequisite RVOL filter — exactly like
+        # order_engine._auto_trade_smc. The SMC score/zone/R:R are the quality gate.
+        placed = False
+        for o in opps:
+            try:
+                score = int(float(o.get('score') or 0))   # truncate, matching prod _auto_trade_smc
+            except (TypeError, ValueError):
+                continue
+            if score < min_score:
+                continue
+            plan = o.get('trade') or {}
+            side = plan.get('side')
+            entry, stop, target, rr = (plan.get('entry'), plan.get('stop'),
+                                       plan.get('target'), plan.get('rr'))
+            if side not in ('LONG', 'SHORT') or not entry or not stop or (not target and not runner):
+                continue
+            if enforce_rr and (rr is None or rr < min_rr):
+                continue
+            symbol = o.get('symbol')
+            if not symbol or symbol in self.open_orders or symbol in self.traded_symbols:
+                continue
+            rps = abs(entry - stop)
+            qty = int(max_risk / rps) if rps > 0 else 0
+            if qty < 1:
+                continue
+            order = SimOrder(
+                sim_run_id=self.sim_run.id, user_id=self.sim_run.user_id, symbol=symbol, side=side,
+                qty=qty, entry=entry, stop=stop, target=(None if runner else target),
+                status='open', source='auto_smc', created_at=self.current_time.isoformat())
+            self.db.add(order)
+            self.open_orders[symbol] = order
+            self.traded_symbols.add(symbol)
+            placed = True
+        if placed:
+            self.db.commit()
 
     def _record_opportunities(self, state: dict):
         """
@@ -525,23 +694,18 @@ class SimulationController:
 
             order = self.open_orders[symbol]
 
-            # Check if stop or target hit
+            # Check if stop or target hit. target may be None (SMC runner mode = ride to EOD square-off),
+            # so only test the target when it exists — otherwise only the stop can close intraday.
             if order.side == 'LONG':
-                # Long position
                 if bar.low <= order.stop:
-                    # Stop hit
                     self._close_order(order, order.stop, 'stop')
-                elif bar.high >= order.target:
-                    # Target hit
+                elif order.target is not None and bar.high >= order.target:
                     self._close_order(order, order.target, 'target')
 
             elif order.side == 'SHORT':
-                # Short position
                 if bar.high >= order.stop:
-                    # Stop hit
                     self._close_order(order, order.stop, 'stop')
-                elif bar.low <= order.target:
-                    # Target hit
+                elif order.target is not None and bar.low <= order.target:
                     self._close_order(order, order.target, 'target')
 
     def _close_order(self, order: SimOrder, close_price: float, reason: str):
