@@ -665,18 +665,32 @@ class RadarEngine:
                 stale = (t is None or
                          (self.mode == 'LIVE' and
                           (now - t.time).total_seconds() > self.config['market_feed_stale_seconds']))
+
+                # Determine visible state (for filtering/priority)
                 if self.halted:
                     visible = 'HALTED'
                 elif st.state == 'SESSION_CLOSED':
                     visible = 'SESSION_CLOSED'
                 elif stale and self.mode == 'LIVE':
                     visible = 'STALE' if st.opening else st.state
-                elif (self.mode == 'LIVE' and st.state == 'RETEST_READY' and
-                      st.last_signal_time is not None and
-                      (now - st.last_signal_time).total_seconds() > 300):
-                    visible = 'SIGNAL_AGED'  # 5-min old retest isn't a fresh entry
                 else:
+                    # Keep the actual state (don't change RETEST_READY to SIGNAL_AGED)
                     visible = st.state
+
+                # Calculate entry status for smart display
+                entry_status = None
+                signal_age_sec = None
+                if st.last_signal_time is not None:
+                    signal_age_sec = round((now - st.last_signal_time).total_seconds())
+
+                # For RETEST_READY signals, provide contextual status based on age
+                if st.state == 'RETEST_READY' and signal_age_sec is not None:
+                    if signal_age_sec <= 120:  # 0-2 minutes: Fresh
+                        entry_status = 'fresh'
+                    elif signal_age_sec <= 300:  # 2-5 minutes: Aging
+                        entry_status = 'aging'
+                    else:  # >5 minutes: Entry window closed
+                        entry_status = 'aged'
                 rows.append({
                     'symbol': st.info.symbol, 'source': st.info.source,
                     'state': visible, 'underlying_state': st.state,
@@ -696,8 +710,9 @@ class RadarEngine:
                     # Seconds since this state was reached (uses the engine's own clock, so it's
                     # correct in both LIVE and accelerated SIMULATION time). Lets the alert dispatcher
                     # skip a stale CONFIRMED that has sat on the radar for hours.
-                    'signal_age_sec': round((now - st.last_signal_time).total_seconds())
-                    if st.last_signal_time else None,
+                    'signal_age_sec': signal_age_sec,
+                    # Entry status for smart display: 'fresh' (0-2m), 'aging' (2-5m), 'aged' (>5m), or None
+                    'entry_status': entry_status,
                     **self._ticket_size(st)
                 })
             priority = {'RETEST_READY': 0, 'CONFIRMED': 1, 'BREAKOUT_PENDING': 2,
