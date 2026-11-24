@@ -1,0 +1,45 @@
+{{- if .Values.simWorker.enabled }}
+# Dedicated simulation worker. Runs backtests/sims OFF the web pod (which is multi-replica and
+# redeployed often) and off the live-feed scanner (heavy/bursty sim work must not risk OOM-ing live
+# scanning). It claims 'pending' SimRun rows from the DB and runs them one at a time (server/sim_worker).
+# Stateless and claim-based, so eviction is harmless — on restart it simply re-claims pending runs; the
+# orphaned-run reconciler (in the scanner's scheduler) fails anything left mid-run. Hence no PVC, no
+# Service, and no eviction guards.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim-worker
+  labels:
+    app: sim-worker
+    {{- include "rockstar.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy: { type: Recreate }   # singleton; claim is atomic regardless, but no reason to run two
+  selector: { matchLabels: { app: sim-worker } }
+  template:
+    metadata:
+      labels: { app: sim-worker }
+    spec:
+      imagePullSecrets: [{ name: ocir-pull }]
+      {{- include "rockstar.podSecurity" . | nindent 6 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: sim-worker
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- include "rockstar.commonEnv" . | nindent 12 }}
+            - { name: RADAR_SIM_WORKER, value: "1" }     # start the sim claim/run loop
+            - { name: RADAR_SCHED, value: "0" }          # not the scheduler/supervisor (scanner owns it)
+            - { name: RADAR_ORDER_ENGINE, value: "0" }   # not the paper order engine
+            # SCANNER_HOST intentionally unset: this pod does not serve or proxy the live feed.
+            - { name: HOST, value: "0.0.0.0" }
+            - { name: PORT, value: "8080" }
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe:  { httpGet: { path: /healthz, port: http }, periodSeconds: 20, failureThreshold: 3 }
+          startupProbe:   { httpGet: { path: /healthz, port: http }, periodSeconds: 5, failureThreshold: 60 }
+          resources: {{- toYaml .Values.simWorker.resources | nindent 12 }}
+          {{- include "rockstar.containerSecurity" . | nindent 10 }}
+{{- end }}

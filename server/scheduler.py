@@ -154,6 +154,24 @@ def _sweep_journal() -> None:
         db.close()
 
 
+def _reconcile_sims() -> None:
+    """Fail simulations orphaned by a pod restart. Sims are claimed and run by the sim-worker pod; if it
+    dies mid-run the row is left stuck non-terminal, so this fails it once its heartbeat goes stale.
+    Cheap indexed query, usually a no-op; runs here (scanner = singleton) so there's exactly one
+    reconciler, no races. (Lives in the scanner's scheduler, not the worker, so it also recovers runs
+    orphaned by the worker itself dying.)"""
+    db = SessionLocal()
+    try:
+        from .sim_controller import reconcile_orphaned_runs
+        n = reconcile_orphaned_runs(db)
+        if n:
+            print(f'[sim] reconciled {n} orphaned run(s) -> failed')
+    except Exception as e:
+        print(f'[sim] reconcile error: {e}')
+    finally:
+        db.close()
+
+
 def _supervise_scanners() -> None:
     """Auto-restart any scanner that should be running but isn't (crashed/OOM) — but never one that
     runtime-failed auth (start_for_broker skips those until the user re-logs in). Quiet unless it acts."""
@@ -199,6 +217,7 @@ async def run_scheduler() -> None:
             # and evenings, and the real gate is whether a scanner is up (see alerting.sweep).
             await asyncio.to_thread(_sweep_alerts)
             await asyncio.to_thread(_sweep_journal)
+            await asyncio.to_thread(_reconcile_sims)
         except Exception as e:  # the loop must survive anything
             print(f'[scheduler] tick error: {e}')
         await asyncio.sleep(_TICK_SECONDS)

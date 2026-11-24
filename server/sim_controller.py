@@ -15,7 +15,7 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import List, Dict, Any
 
 from sqlalchemy.orm import Session
@@ -110,6 +110,7 @@ class SimulationController:
             self.sim_run.status = 'running'
             self.sim_run.started_at = now_ist()
             self.sim_run.progress_pct = 0
+            self.sim_run.heartbeat_at = now_ist()   # liveness for the orphaned-run reconciler
             self.db.commit()
 
             # Load historical data
@@ -280,6 +281,7 @@ class SimulationController:
             if idx % 10 == 0:  # Update every 10 timestamps
                 progress = int((idx / total_timestamps) * 100)
                 self.sim_run.progress_pct = progress
+                self.sim_run.heartbeat_at = now_ist()   # liveness for the orphaned-run reconciler
                 self.db.commit()
 
         self.sim_run.progress_pct = 100
@@ -834,3 +836,53 @@ class SimulationController:
             'total_r': total_r,
             'max_drawdown_r': max_drawdown_r
         }
+
+
+# ---- orphaned-run recovery ---------------------------------------------------------------------
+# A sim is claimed and run by the sim-worker pod (server/sim_worker). If that pod dies mid-run the row
+# is left non-terminal forever at its last progress, so this reconciler fails it once its heartbeat goes
+# stale. A still-'pending' row is just queued (not orphaned) — see the long pending grace below.
+_NONTERMINAL_SIM_STATUSES = ('pending', 'fetching_data', 'running')
+_SIM_HEARTBEAT_STALE_SECONDS = 300   # a CLAIMED run stamps heartbeat_at per-symbol / per-10-timestamps;
+#                                      stale => the pod executing it died mid-run.
+# 'pending' is a durable queue entry the sim-worker will claim (server/sim_worker). The worker is a
+# singleton that restarts in seconds and runs sims sequentially, so a long wait means it's truly down or
+# the run is unclaimable — only then (2h) do we give up on it. Short enough and this would fight a
+# routine worker restart or a backed-up queue.
+_SIM_PENDING_GRACE_SECONDS = 7200
+
+
+def _age_seconds(dt: datetime | None, assume_tz) -> float | None:
+    """Seconds since `dt`, robust to this table's mixed tz conventions (heartbeat/started = aware IST
+    via now_ist(); created = naive UTC via models._now). A naive value is read as `assume_tz`."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=assume_tz)
+    return (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()
+
+
+def reconcile_orphaned_runs(db: Session) -> int:
+    """Fail any sim left non-terminal by a dead executor, so it stops showing 'running' forever.
+
+    A live run continuously stamps heartbeat_at; this marks 'failed' only a non-terminal run whose
+    heartbeat has gone stale (or that never started and is past the grace window), so a sim still
+    ticking on a sibling web replica is never touched. Idempotent — safe to call every scheduler tick."""
+    runs = db.query(SimRun).filter(SimRun.status.in_(_NONTERMINAL_SIM_STATUSES)).all()
+    n = 0
+    for run in runs:
+        hb_age = _age_seconds(run.heartbeat_at, IST)
+        if hb_age is not None:
+            if hb_age < _SIM_HEARTBEAT_STALE_SECONDS:
+                continue                     # fresh heartbeat -> still running somewhere
+        else:
+            created_age = _age_seconds(run.created_at, timezone.utc)
+            if created_age is not None and created_age < _SIM_PENDING_GRACE_SECONDS:
+                continue                     # queued recently; its executor may not have started yet
+        run.status = 'failed'
+        run.error_message = ('Interrupted by a server restart before it finished. Your historical data '
+                             'was cached, so re-running this simulation will be fast.')
+        n += 1
+    if n:
+        db.commit()
+    return n

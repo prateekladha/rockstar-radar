@@ -10,12 +10,12 @@ import logging
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from radar.selecting import load_universe
-from radar.utils import ROOT
+from radar.utils import ROOT, now_ist
 from ..auth import require_user
 from ..db import get_db
 from ..models import User, SimRun, SimSignalLog, SimOrder, SimHistoricalBar, BrokerConnection
@@ -76,14 +76,16 @@ class SimRunResponse(BaseModel):
 @router.post('/api/sim/runs', response_model=SimRunResponse)
 async def create_sim_run(
     request: CreateSimRunRequest,
-    background_tasks: BackgroundTasks,
     user: User = Depends(require_user),
     db: Session = Depends(get_db)
 ):
     """
     Create a new simulation run.
 
-    The simulation will be queued for execution in the background.
+    The run is persisted as 'pending' and executed by the dedicated sim-worker pod (server/sim_worker),
+    which claims pending runs from the DB. It deliberately does NOT run here as a FastAPI BackgroundTask:
+    that tied execution to the web pod (multi-replica, redeployed often), so a restart orphaned it. The
+    worker is isolated from web and the live-feed scanner. See docs / [[fyers-pilot-browser-session-deps]].
     """
     try:
         # Validate dates
@@ -122,14 +124,8 @@ async def create_sim_run(
         db.commit()
         db.refresh(sim_run)
 
-        # Queue for execution in background
-        background_tasks.add_task(
-            _run_simulation_background,
-            sim_run.id,
-            user.id
-        )
-
-        logger.info(f"Created sim run {sim_run.id} for user {user.email}")
+        # Left 'pending'; the sim-worker pod claims and runs it. No in-process execution here.
+        logger.info(f"Queued sim run {sim_run.id} for user {user.email} (sim-worker will execute)")
 
         return _sim_run_to_response(sim_run)
 
@@ -366,15 +362,13 @@ def estimate_data_size_endpoint(
 
 
 # ============================================================================
-# Background Tasks
+# Simulation execution (invoked by the sim-worker pod — see server/sim_worker.py)
 # ============================================================================
 
-def _run_simulation_background(sim_run_id: int, user_id: int):
-    """
-    Background task to run a simulation.
-
-    This runs asynchronously after the API returns the initial response.
-    """
+def execute_sim_run(sim_run_id: int, user_id: int):
+    """Fetch data + replay one simulation to completion. Called by the sim-worker after it claims a
+    'pending' run (never as a web BackgroundTask — that orphaned runs on a web-pod restart). Updates the
+    SimRun row's status/heartbeat/results; opens and closes its own DB session."""
     from ..db import SessionLocal
 
     db = SessionLocal()
@@ -385,6 +379,18 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
             return
 
         logger.info(f"Starting background simulation {sim_run_id}")
+
+        # Liveness heartbeat: a long fetch/replay keeps stamping this so the orphaned-run reconciler
+        # (sim_controller.reconcile_orphaned_runs) can tell a live run from one whose pod died. Commit
+        # is throttled — the fetcher already commits per symbol, so most calls are a cheap field set.
+        _beat_n = [0]
+        def _beat():
+            sim_run.heartbeat_at = now_ist()
+            _beat_n[0] += 1
+            if _beat_n[0] % 10 == 0:
+                db.commit()
+        sim_run.heartbeat_at = now_ist()
+        db.commit()
 
         # Get user's broker connection for data fetching
         user = db.query(User).get(user_id)
@@ -418,8 +424,9 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
         # Step 1: daily history for selection (cached across runs)
         sim_run.status = 'fetching_data'
         sim_run.progress_pct = 0
+        sim_run.heartbeat_at = now_ist()
         db.commit()
-        fetcher.fetch_daily_history([s for s, _ in universe], sim_run.start_date)
+        fetcher.fetch_daily_history([s for s, _ in universe], sim_run.start_date, on_heartbeat=_beat)
 
         # Step 2: select the ~100-symbol watchlist for the date (production selection logic). Keep the
         # full Instrument PROFILES (resistance/support/ATR/turnover), not just the symbols — the ORB
@@ -438,8 +445,9 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
 
         # Step 3: intraday for the selected symbols — sim day (replay) + prior sessions (baselines)
         sim_run.progress_pct = 40
+        sim_run.heartbeat_at = now_ist()
         db.commit()
-        have = fetcher.fetch_intraday_window(symbols, sim_run.start_date, interval)
+        have = fetcher.fetch_intraday_window(symbols, sim_run.start_date, interval, on_heartbeat=_beat)
         if have == 0:
             sim_run.status = 'failed'
             sim_run.error_message = (f"No intraday data for {sim_run.start_date}. It may be a market "
