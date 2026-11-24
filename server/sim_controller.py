@@ -44,6 +44,15 @@ class SimulationController:
         self.config = {**load_config(), **(sim_overrides or {})}
         self.current_time = None
         self.session_date = datetime.fromisoformat(sim_run.start_date).date()
+        # Width of a replayed bar. The engine only acts on a candle once the wall clock has passed the
+        # bar's CLOSE (engine.py guards against half-formed live bars: `candle.at + bar_delta > wall`).
+        # In replay we are the wall clock, so a bar opening at T is "observed" at its close, T + width —
+        # otherwise every bar looks unfinished, the opening range never forms and the whole day is stuck
+        # in WAIT_OR (0 opportunities/trades). bar_interval is '1' or '5' minutes.
+        try:
+            self._bar_delta = timedelta(minutes=int(sim_run.bar_interval or 5))
+        except (TypeError, ValueError):
+            self._bar_delta = timedelta(minutes=5)
         # The watchlist the live scanner would have traded that day (selected upstream). When set, the
         # replay and baselines are restricted to these symbols — so stale sim-day bars cached for other
         # symbols by an earlier run don't leak the full universe back into the sim.
@@ -257,16 +266,17 @@ class SimulationController:
                 volume=bar_data.volume
             )
 
-            # Feed to engine (non-provisional, authoritative historical data)
+            # Feed to engine (non-provisional, authoritative historical data). observed_at is the bar's
+            # CLOSE (open + width), the simulated moment the bar is fully known — see _bar_delta above.
             self.engine.ingest_closed_bar(
                 symbol=symbol,
                 candle=candle,
-                observed_at=self.current_time,
+                observed_at=self.current_time + self._bar_delta,
                 provisional=False
             )
 
-        # 2. Get engine snapshot
-        state = self.engine.snapshot(reference_time=self.current_time)
+        # 2. Get engine snapshot (as of the bar close, consistent with how the bars were ingested)
+        state = self.engine.snapshot(reference_time=self.current_time + self._bar_delta)
 
         # 3. Record opportunities (journal)
         self._record_opportunities(state)
