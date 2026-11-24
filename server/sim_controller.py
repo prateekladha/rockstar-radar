@@ -29,6 +29,22 @@ from .sim_data_fetcher import HistoricalDataFetcher
 logger = logging.getLogger(__name__)
 
 
+def _fmt_num(x, nd: int = 2):
+    """Round a numeric to a SHORT string for SimSignalLog's String(16) price columns.
+
+    The engine hands back unrounded floats (e.g. a stop of 213.15293999999997 = 18 chars). SQLite
+    (dev) ignores the column width, but Oracle ADB (prod) enforces VARCHAR(16) and rejects the row with
+    ORA-12899 — which aborts the commit, breaks the Session, and freezes the whole run at 0%. Rounding
+    to 2dp keeps every realistic NSE price/R:R/RVOL well inside 16 chars. None stays None.
+    """
+    if x is None:
+        return None
+    try:
+        return str(round(float(x), nd))
+    except (TypeError, ValueError):
+        return None
+
+
 class SimulationController:
     """Orchestrates simulation replay."""
 
@@ -360,11 +376,11 @@ class SimulationController:
                     side=r.get('side'),
                     state=state_name,
                     score=r.get('score') or 0,
-                    entry=str(r.get('entry')) if r.get('entry') else None,
-                    stop=str(r.get('stop')) if r.get('stop') else None,
-                    target=str(r.get('target')) if r.get('target') else None,
-                    net_rr=str(r.get('net_rr')) if r.get('net_rr') else None,
-                    rvol=str(r.get('rvol')) if r.get('rvol') else None,
+                    entry=_fmt_num(r.get('entry')),
+                    stop=_fmt_num(r.get('stop')),
+                    target=_fmt_num(r.get('target')),
+                    net_rr=_fmt_num(r.get('net_rr')),
+                    rvol=_fmt_num(r.get('rvol')),
                     qty=r.get('qty'),
                     provisional=1 if r.get('provisional') else 0,
                     note=r.get('reason'),
@@ -382,11 +398,11 @@ class SimulationController:
 
                 prev.state = state_name
                 prev.score = max(prev.score or 0, r.get('score') or 0)
-                prev.entry = str(r.get('entry')) if r.get('entry') else prev.entry
-                prev.stop = str(r.get('stop')) if r.get('stop') else prev.stop
-                prev.target = str(r.get('target')) if r.get('target') else prev.target
-                prev.net_rr = str(r.get('net_rr')) if r.get('net_rr') else prev.net_rr
-                prev.rvol = str(r.get('rvol')) if r.get('rvol') else prev.rvol
+                prev.entry = _fmt_num(r.get('entry')) or prev.entry
+                prev.stop = _fmt_num(r.get('stop')) or prev.stop
+                prev.target = _fmt_num(r.get('target')) or prev.target
+                prev.net_rr = _fmt_num(r.get('net_rr')) or prev.net_rr
+                prev.rvol = _fmt_num(r.get('rvol')) or prev.rvol
                 prev.provisional = 1 if r.get('provisional') else 0
                 prev.timeline = json.dumps(timeline)
                 prev.sim_time = self.current_time.isoformat()
