@@ -466,96 +466,15 @@ async def api_update_rvol_settings(request: Request, user: User = Depends(requir
     return api_get_rvol_settings(user)
 
 
-def _apply_prerequisite_filters(opportunities: list, user: User, strategy: str = 'ORB') -> tuple[list, int]:
-    """Apply user's prerequisite filters to opportunities.
-
-    Args:
-        opportunities: List of opportunity dicts
-        user: User with settings
-        strategy: 'ORB' or 'SMC' (determines where to find RVOL)
-
-    Returns:
-        (filtered_opportunities, rejected_count)
-    """
-    if not opportunities:
-        return opportunities, 0
-
-    # Load user's prerequisite configuration
-    if not user.settings:
-        return opportunities, 0  # No settings = no filtering
-
-    from radar.prerequisites import PrerequisiteConfig, PrerequisiteChecker
-    import json as json_lib
-
-    prereq_config = PrerequisiteConfig(
-        min_rvol=user.settings.prereq_min_rvol or 1.0,
-        rvol_enabled=bool(user.settings.prereq_rvol_enabled),
-        min_liquidity_cr=user.settings.prereq_min_liquidity_cr,
-        min_price=user.settings.prereq_min_price,
-        max_price=user.settings.prereq_max_price,
-        allowed_sectors=json_lib.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
-        blocked_symbols=json_lib.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None
-    )
-
-    # If RVOL check is disabled, skip filtering
-    if not prereq_config.rvol_enabled:
-        return opportunities, 0
-
-    checker = PrerequisiteChecker(prereq_config)
-    filtered = []
-    rejected = 0
-
-    for opp in opportunities:
-        # Extract data from opportunity
-        symbol = opp.get('symbol', '')
-        price = opp.get('price')
-
-        # Extract RVOL based on strategy
-        if strategy == 'ORB':
-            # ORB: RVOL is directly in opportunity
-            rvol = opp.get('rvol')
-        elif strategy == 'SMC':
-            # SMC: RVOL is in confluence.rvol_cum
-            confluence = opp.get('confluence') or {}
-            rvol = confluence.get('rvol_cum')
-        else:
-            rvol = None
-
-        # For ORB, liquidity might be available from instrument info
-        # For SMC, we might not have liquidity data readily available
-        liquidity_cr = None
-
-        # Run prerequisite check
-        result = checker.check(symbol, {
-            'rvol': rvol,
-            'price': price,
-            'liquidity_cr': liquidity_cr
-        })
-
-        # An "unavailable" (None) input means we could not MEASURE that factor — e.g. the SMC
-        # confluence buffer is too short for a cumulative RVOL, or liquidity isn't computed here — NOT
-        # that the factor is bad. Rejecting on that would empty the whole radar, so keep the
-        # opportunity when EVERY failed check is merely unmeasurable; reject only on a real threshold
-        # breach (a value that was actually computed and fell outside the limit).
-        unmeasurable = set()
-        if rvol is None:
-            unmeasurable.add('RVOL')
-        if liquidity_cr is None:
-            unmeasurable.add('Liquidity')
-        only_unmeasurable = bool(result.failed_checks) and set(result.failed_checks) <= unmeasurable
-        if result.passed or only_unmeasurable:
-            filtered.append(opp)
-        else:
-            rejected += 1
-            # Log rejection for debugging
-            print(f'[Prereq] {strategy} - Rejected {symbol}: {result.error_message} (RVOL={rvol})')
-
-    return filtered, rejected
+# Pre-requisite filtering lives in server.journaling so the server-side opportunity sweep
+# (journaling.sweep) and these radar endpoints share one implementation. Aliased to keep call sites
+# unchanged.
+from .journaling import apply_prerequisite_filters as _apply_prerequisite_filters
 
 
 @app.get('/api/radar')
 def api_radar(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    from . import journaling, scanners
+    from . import scanners
     state = scanners.radar_state(db, user)
 
     # Apply prerequisite filters to ORB opportunities
@@ -579,11 +498,9 @@ def api_radar(user: User = Depends(require_user), db: Session = Depends(get_db))
             state['prereq_filtered'] = rejected_count
             print(f'[Prereq] ORB - Filtered {rejected_count} opportunities for user {user.email}')
 
-    if state.get('data_mode') == 'live':
-        try:
-            journaling.record_opportunities(db, user.id, state)
-        except Exception as e:  # journaling must never break the radar
-            print(f'opportunity journaling skipped: {e}')
+    # Opportunity journaling is NOT done here any more — it ran only while a browser was polling, so a
+    # closed tab left gaps in the daily history. It now runs server-side on the scheduler
+    # (journaling.sweep), independent of the browser. This endpoint is display-only.
     return state
 
 

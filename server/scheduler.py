@@ -140,6 +140,20 @@ def _sweep_alerts() -> None:
         db.close()
 
 
+def _sweep_journal() -> None:
+    """Record each user's actionable opportunities to the daily history, server-side — so the journal
+    is complete even when no browser is open. Read-only on the feed (never starts a scanner); mirrors
+    what GET /api/radar used to journal on poll."""
+    db = SessionLocal()
+    try:
+        from .journaling import sweep
+        sweep(db)
+    except Exception as e:
+        print(f'[journal] sweep error: {e}')
+    finally:
+        db.close()
+
+
 def _supervise_scanners() -> None:
     """Auto-restart any scanner that should be running but isn't (crashed/OOM) — but never one that
     runtime-failed auth (start_for_broker skips those until the user re-logs in). Quiet unless it acts."""
@@ -184,6 +198,7 @@ async def run_scheduler() -> None:
             # Outside the trading-day guard on purpose: the practice simulation runs on weekends
             # and evenings, and the real gate is whether a scanner is up (see alerting.sweep).
             await asyncio.to_thread(_sweep_alerts)
+            await asyncio.to_thread(_sweep_journal)
         except Exception as e:  # the loop must survive anything
             print(f'[scheduler] tick error: {e}')
         await asyncio.sleep(_TICK_SECONDS)
