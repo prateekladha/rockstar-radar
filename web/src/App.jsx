@@ -16,6 +16,7 @@ import Brokers from './Brokers.jsx'
 import Alerts from './Alerts.jsx'
 import Insights from './Insights.jsx'
 import Journal from './Journal.jsx'
+import Simulation from './Simulation.jsx'
 import Family from './Family.jsx'
 import Landing from './Landing.jsx'
 import Support from './Support.jsx'
@@ -169,6 +170,7 @@ function Shell({ user, onLogout }) {
           <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/trades" element={<Trades />} />
           <Route path="/journal" element={<Journal />} />
+          <Route path="/simulation" element={<Simulation />} />
           <Route path="/insights" element={<Insights />} />
           <Route path="/brokers" element={<Brokers />} />
           <Route path="/alerts" element={<Alerts />} />
