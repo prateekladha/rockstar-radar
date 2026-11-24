@@ -421,8 +421,13 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
         db.commit()
         fetcher.fetch_daily_history([s for s, _ in universe], sim_run.start_date)
 
-        # Step 2: select the ~100-symbol watchlist for the date (production selection logic)
-        symbols = _select_watchlist_for_date(fetcher, universe, sim_run.start_date)
+        # Step 2: select the ~100-symbol watchlist for the date (production selection logic). Keep the
+        # full Instrument PROFILES (resistance/support/ATR/turnover), not just the symbols — the ORB
+        # engine derives targets from Instrument.resistance/support and widens stops by daily_atr_pct, so
+        # bare Instruments make every retest fail at RISK_FAIL ("no known target") and no entry is ever
+        # produced.
+        profiles = _select_watchlist_for_date(fetcher, universe, sim_run.start_date)
+        symbols = [p.symbol for p in profiles]
         logger.info(f"[sim {sim_run_id}] selected {len(symbols)} symbols for {sim_run.start_date}")
         if not symbols:
             sim_run.status = 'failed'
@@ -445,8 +450,9 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
         db.expire_all()
         db.refresh(sim_run)
 
-        # Step 4: replay the sim day through the real engine, restricted to the selected watchlist
-        controller = SimulationController(db, sim_run, symbols=symbols)
+        # Step 4: replay the sim day through the real engine, restricted to the selected watchlist,
+        # using the real per-symbol profiles so the engine can compute targets/stops.
+        controller = SimulationController(db, sim_run, symbols=symbols, profiles=profiles)
         controller.run()
 
         logger.info(f"Simulation {sim_run_id} completed successfully")
@@ -464,13 +470,17 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
 # Helper Functions
 # ============================================================================
 
-def _select_watchlist_for_date(fetcher, universe, sim_date: str) -> list[str]:
+def _select_watchlist_for_date(fetcher, universe, sim_date: str) -> list:
     """Replay the production morning selection for a PAST date, using cached DAILY bars.
 
     Builds a liquidity/ATR profile per symbol from the prior sessions' daily candles
     (radar.selecting.compute_daily_profile) and picks the top ~100 (choose_top100 — same price /
     turnover / ATR / industry-diversification filters the live scanner uses). On a thin date where
     fewer than the cap pass, falls back to taking whatever passed rather than hard-failing.
+
+    Returns the chosen Instrument PROFILES (not just symbols): each carries resistance/support,
+    daily_atr_pct, previous_close and median_turnover_cr, which the ORB engine needs to compute
+    retest targets and size stops. `[p.symbol for p in ...]` recovers the plain symbol list.
     """
     from datetime import timedelta
     from radar.selecting import compute_daily_profile, choose_top100, SelectionError
@@ -495,7 +505,7 @@ def _select_watchlist_for_date(fetcher, universe, sim_date: str) -> list[str]:
         chosen = choose_top100(profiles, config, morning_pins=[])
     except SelectionError:
         chosen = _relaxed_pick(profiles, config)
-    return [p.symbol for p in chosen]
+    return chosen
 
 
 def _relaxed_pick(profiles, config):
