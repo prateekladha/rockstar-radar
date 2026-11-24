@@ -114,11 +114,10 @@ class SimulationController:
         # For simulation, we'll use a simplified version
         instruments = []
         for symbol in symbols:
-            # Extract symbol name without exchange prefix
-            sym_name = symbol.split(':')[-1].replace('-EQ', '')
+            # Instrument (radar/models.py) has no 'name' field — its identity is `symbol`; the
+            # optional classifier is `industry`. median_turnover_cr is a placeholder for the sim.
             instruments.append(Instrument(
                 symbol=symbol,
-                name=sym_name,
                 median_turnover_cr=1.0  # Placeholder - could load from cache
             ))
 
