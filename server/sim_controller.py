@@ -20,7 +20,7 @@ from typing import List, Dict, Any
 
 from sqlalchemy.orm import Session
 
-from radar.engine import RadarEngine, same_time_baseline
+from radar.engine import RadarEngine
 from radar.models import Candle, Instrument
 from radar.utils import IST, now_ist
 from .models import SimRun, SimHistoricalBar, SimSignalLog, SimOrder
@@ -32,12 +32,16 @@ logger = logging.getLogger(__name__)
 class SimulationController:
     """Orchestrates simulation replay."""
 
-    def __init__(self, db: Session, sim_run: SimRun):
+    def __init__(self, db: Session, sim_run: SimRun, symbols: List[str] | None = None):
         self.db = db
         self.sim_run = sim_run
         self.config = json.loads(sim_run.config)
         self.current_time = None
         self.session_date = datetime.fromisoformat(sim_run.start_date).date()
+        # The watchlist the live scanner would have traded that day (selected upstream). When set, the
+        # replay and baselines are restricted to these symbols — so stale sim-day bars cached for other
+        # symbols by an earlier run don't leak the full universe back into the sim.
+        self.selected_symbols = list(symbols) if symbols else None
 
         # Will be initialized during replay
         self.engine: RadarEngine = None
@@ -90,10 +94,14 @@ class SimulationController:
         ).count()
         logger.info(f"Found {total_bars} total bars in database")
 
-        bars = self.db.query(SimHistoricalBar).filter(
+        q = self.db.query(SimHistoricalBar).filter(
             SimHistoricalBar.date == self.sim_run.start_date,
             SimHistoricalBar.bar_interval == self.sim_run.bar_interval
-        ).order_by(SimHistoricalBar.timestamp).all()
+        )
+        if self.selected_symbols:
+            # Replay only the selected watchlist (the ~100 the live scanner would have traded).
+            q = q.filter(SimHistoricalBar.symbol.in_(self.selected_symbols))
+        bars = q.order_by(SimHistoricalBar.timestamp).all()
 
         # Group by symbol
         bars_by_symbol = defaultdict(list)
@@ -191,62 +199,38 @@ class SimulationController:
         self.db.commit()
 
     def _calculate_baselines(self):
+        """Build RVOL baselines from the PRIOR sessions' intraday bars, using the SAME product-wide
+        builder as the live engine (radar.rvol.build_baseline). This yields the rich schema
+        ({'v', 'sessions', 'bar': {slot: median}, 'cum': {slot: mean_cumulative}}) that rvol_runtime
+        expects, so cumulative RVOL (the product default) is computed correctly — not the legacy flat
+        per-slot table reused for both modes. Requires the prior-session intraday history that
+        HistoricalDataFetcher.fetch_intraday_window caches alongside the sim day.
         """
-        Calculate RVOL baselines from historical data before simulation date.
+        from radar.rvol import build_baseline, RvolConfig
 
-        Uses same_time_baseline() from radar.engine to calculate median volume
-        at each clock slot from previous 20 trading days.
-        """
-        logger.info("Calculating RVOL baselines...")
-
-        # For each symbol, we need historical bars from 20 trading days before sim date
-        # For MVP, we'll use a simplified approach:
-        # - Query sim_historical_bars for previous 30 calendar days
-        # - Calculate baseline using same logic as production
-
+        logger.info("Calculating RVOL baselines (radar.rvol.build_baseline)...")
+        cfg = RvolConfig.from_config(self.config)
         cutoff_date = self.session_date
-        lookback_start = cutoff_date - timedelta(days=40)  # ~20 trading days
-
+        lookback_start = cutoff_date - timedelta(days=60)
+        built = 0
         for symbol in self.symbols:
-            # Get historical bars for this symbol (before simulation date)
             hist_bars_data = self.db.query(SimHistoricalBar).filter(
                 SimHistoricalBar.symbol == symbol,
                 SimHistoricalBar.bar_interval == self.sim_run.bar_interval,
                 SimHistoricalBar.date >= lookback_start.isoformat(),
                 SimHistoricalBar.date < cutoff_date.isoformat()
             ).order_by(SimHistoricalBar.timestamp).all()
-
             if not hist_bars_data:
-                logger.warning(f"No historical data for {symbol} baseline calculation")
                 continue
+            history = [Candle(at=datetime.fromisoformat(b.timestamp), open=b.open, high=b.high,
+                              low=b.low, close=b.close, volume=b.volume) for b in hist_bars_data]
+            baseline = build_baseline(history, cutoff_date, length=cfg.length)
+            if baseline.get('bar') or baseline.get('cum'):
+                self.engine.set_baseline(symbol, baseline)
+                built += 1
 
-            # Convert to Candle objects
-            history = []
-            for bar_data in hist_bars_data:
-                ts = datetime.fromisoformat(bar_data.timestamp)
-                candle = Candle(
-                    at=ts,
-                    open=bar_data.open,
-                    high=bar_data.high,
-                    low=bar_data.low,
-                    close=bar_data.close,
-                    volume=bar_data.volume
-                )
-                history.append(candle)
-
-            # Calculate baseline using production logic
-            baseline = same_time_baseline(history, cutoff_date, lookback_sessions=20)
-
-            # For now, set both bar and cumulative modes
-            # (The engine uses rvol_cfg.mode to pick which one)
-            baseline_dict = {
-                'bar': baseline,  # Per-bar mode
-                'cum': baseline   # Cumulative mode (same for now)
-            }
-
-            self.engine.set_baseline(symbol, baseline_dict)
-
-        logger.info(f"Baselines calculated for {len(self.symbols)} symbols")
+        logger.info(f"RVOL baselines built for {built}/{len(self.symbols)} symbols "
+                    f"(mode={cfg.mode}, length={cfg.length})")
 
     def _process_timestamp(self, bars_at_time: List[tuple]):
         """
