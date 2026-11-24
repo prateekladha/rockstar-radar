@@ -10,6 +10,7 @@ export default function Journal() {
   const [data, setData] = useState(null)
   const [day, setDay] = useState('')
   const [f, setF] = useState({ q: '', side: '' })
+  const [view, setView] = useState('tradeable')  // 'tradeable' or 'all'
   const [page, setPage] = useState(1)
   const [open, setOpen] = useState(null)       // row whose timeline is expanded
   const [replayFor, setReplayFor] = useState(null)
@@ -24,8 +25,22 @@ export default function Journal() {
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t) }, [f, page, day])
 
   if (!data) return <div className="empty">Loading…</div>
+
+  // Filter items based on view mode
+  const TRADEABLE_STATES = ['CONFIRMED', 'RETEST_READY']
+  const filteredItems = view === 'tradeable'
+    ? data.items.filter(item => TRADEABLE_STATES.includes(item.state))
+    : data.items
+  const filteredTotal = view === 'tradeable'
+    ? data.items.filter(item => TRADEABLE_STATES.includes(item.state)).length
+    : data.total
+
   const pages = Math.max(1, Math.ceil(data.total / data.page_size))
   const dayOpts = (data.days && data.days.length ? data.days : [data.day]).map(d => ({ value: d, label: fmtDay(d) }))
+  const viewOpts = [
+    { value: 'tradeable', label: 'Tradeable only' },
+    { value: 'all', label: 'All signals' }
+  ]
 
   return (
     <div className="panel">
@@ -33,16 +48,27 @@ export default function Journal() {
         <span className="hint">Every opportunity the radar flagged — and the ones you acted on</span></div>
       <div className="panel-b">
         <div className="filterbar">
+          <Select value={view} onChange={setView} options={viewOpts} width={160} />
           <Select value={day} onChange={setDay} options={dayOpts} width={180} />
           <SearchInput value={f.q} onChange={v => { setPage(1); setF({ ...f, q: v }) }} placeholder="Search symbol…" />
           <Select value={f.side} onChange={v => { setPage(1); setF({ ...f, side: v }) }} width={140}
             options={[{ value: '', label: 'Both sides' }, { value: 'LONG', label: 'Long' }, { value: 'SHORT', label: 'Short' }]} />
           <span className="spring" />
-          <span className="dim" style={{ fontSize: 13 }}>{data.total} opportunities</span>
+          <span className="dim" style={{ fontSize: 13 }}>
+            {view === 'tradeable' && filteredTotal < data.total
+              ? `${filteredTotal} tradeable (${data.total} total)`
+              : `${data.total} ${view === 'all' ? 'signals' : 'opportunities'}`}
+          </span>
         </div>
 
-        {data.items.length === 0 ? (
-          <div className="empty">No opportunities recorded for this day. The journal fills up live during market hours once your broker is connected.</div>
+        {filteredItems.length === 0 ? (
+          <div className="empty">
+            {data.items.length === 0
+              ? 'No opportunities recorded for this day. The journal fills up live during market hours once your broker is connected.'
+              : view === 'tradeable'
+              ? 'No tradeable signals (CONFIRMED/RETEST_READY) for this day. Switch to "All signals" to see pre-signals (READY/BREAKOUT_PENDING).'
+              : 'No signals match your filters.'}
+          </div>
         ) : (
           <div className="tbl-wrap" style={{ maxHeight: 'none' }}>
             <table>
@@ -51,7 +77,7 @@ export default function Journal() {
                 <th className="num">Entry / Stop / Target</th><th className="num">R:R</th><th>Acted</th><th></th>
               </tr></thead>
               <tbody>
-                {data.items.map(s => (
+                {filteredItems.map(s => (
                   <React.Fragment key={s.id}>
                     <tr>
                       <td className="sym-cell">{(s.symbol || '').split(':').pop().replace('-EQ', '')}</td>
