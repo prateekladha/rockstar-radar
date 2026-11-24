@@ -53,6 +53,20 @@ resource "oci_identity_policy" "workloads" {
   ]
 }
 
+# CI runs `helm upgrade` from GitHub Actions, which needs a kubeconfig token for the SHARED cluster
+# (dt-selfcare-oke). The cluster lives in the shared compartment, so this grant is scoped there.
+# "use clusters" is only enough to fetch a token + reach the API server — what the token can actually
+# DO is limited by in-cluster RBAC (a RoleBinding to the rockstar-radar namespace only; see
+# deploy/k8s/ci-rolebinding.yaml). So CI cannot touch dt-telekom's workloads.
+resource "oci_identity_policy" "ci_cluster" {
+  compartment_id = var.shared_compartment_ocid
+  name           = "${var.name}-ci-cluster"
+  description    = "Let ${var.name} CI fetch a kubeconfig token for the shared OKE cluster"
+  statements = [
+    "Allow group ${oci_identity_group.ci.name} to use clusters in compartment id ${var.shared_compartment_ocid}",
+  ]
+}
+
 resource "oci_identity_policy" "ocir_tenancy" {
   # OCIR namespace-level listing is a tenancy permission
   compartment_id = var.tenancy_ocid
