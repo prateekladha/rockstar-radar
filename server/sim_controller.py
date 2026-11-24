@@ -33,9 +33,15 @@ class SimulationController:
     """Orchestrates simulation replay."""
 
     def __init__(self, db: Session, sim_run: SimRun, symbols: List[str] | None = None):
+        from radar.utils import load_config
         self.db = db
         self.sim_run = sim_run
-        self.config = json.loads(sim_run.config)
+        # The RadarEngine expects the FULL product config (new_signals_stop, near_boundary_pct,
+        # orb_stop_mode, rvol_thresholds, …), exactly as production builds it. sim_run.config is only
+        # the user's sim-specific overrides, so layer it ON TOP of the full config.json defaults —
+        # otherwise the engine KeyErrors on the first key the sim subset omits.
+        sim_overrides = json.loads(sim_run.config) if sim_run.config else {}
+        self.config = {**load_config(), **(sim_overrides or {})}
         self.current_time = None
         self.session_date = datetime.fromisoformat(sim_run.start_date).date()
         # The watchlist the live scanner would have traded that day (selected upstream). When set, the
