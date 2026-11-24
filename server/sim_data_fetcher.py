@@ -7,6 +7,7 @@ Supports both 1-minute and 5-minute bars.
 from __future__ import annotations
 
 import logging
+import tempfile
 import time
 from datetime import datetime, timedelta
 from typing import List
@@ -125,12 +126,16 @@ class HistoricalDataFetcher:
             from_epoch = int(range_from.timestamp())
             to_epoch = int(range_to.timestamp())
 
-            # Initialize FYERS client
+            # Initialize FYERS client.
+            # log_path MUST be a writable directory: the SDK writes fyersApi.log there, and an empty
+            # string makes it fall back to the process CWD (/app in the web pod), which the non-root
+            # container user cannot write — that PermissionError aborted every history() call and made
+            # the whole fetch report "No data could be fetched for any symbols". Use the temp dir.
             fyers = fyersModel.FyersModel(
                 client_id=self.app_id,
                 token=self.token,
                 is_async=False,
-                log_path=""
+                log_path=tempfile.gettempdir()
             )
 
             # Fetch historical data
