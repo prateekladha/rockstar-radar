@@ -57,7 +57,7 @@ app = FastAPI(title='Rockstar Radar', lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site='lax', https_only=False)
 
 from .routers import (alerts, brokers, charts, family, insights,  # noqa: E402
-                      support, symbols, trading, watchlist)
+                      simulation, support, symbols, trading, watchlist)
 app.include_router(brokers.router)
 app.include_router(alerts.router)
 app.include_router(insights.router)
@@ -67,6 +67,7 @@ app.include_router(watchlist.router)
 app.include_router(charts.router)
 app.include_router(symbols.router)
 app.include_router(support.router)
+app.include_router(simulation.router)
 
 
 # ----------------------------------------------------------------- auth
