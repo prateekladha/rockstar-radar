@@ -1,94 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api.js'
-import { Select, Checkbox } from './ui.jsx'
 
 // User-level preferences, available to EVERY user (not just admins): practice simulation + alerts.
+// (Auto-trade settings live on their own "Auto-trade settings" page — not duplicated here.)
 export default function Preferences() {
   return (
     <>
       <SimulationSettings />
-      <AutoTradeSettings />
       <NotificationsSettings />
     </>
-  )
-}
-
-// Per-user auto-trade trigger. Available to every trader (saved via /api/settings, which is not
-// admin-gated). Your admin turns auto paper-trading on/off (Team page); this is YOUR choice of which
-// signal status opens a trade when it's on.
-function AutoTradeSettings() {
-  const [trig, setTrig] = useState(null)
-  const [smc, setSmc] = useState(false)
-  const [smcScore, setSmcScore] = useState(80)
-  const [msg, setMsg] = useState('')
-  useEffect(() => {
-    api('/api/settings').then(s => {
-      setTrig(s.auto_trade_trigger || 'RETEST_READY')
-      setSmc(!!s.auto_trade_smc)
-      setSmcScore(Number(s.auto_trade_smc_min_score ?? 80))
-    }).catch(() => {})
-  }, [])
-  if (trig === null) return null
-  const patch = async (body, optimistic) => {
-    if (optimistic) optimistic()
-    try { await api('/api/settings', { method: 'PATCH', body }); setMsg('Saved') }
-    catch (e) { setMsg(e.message) }
-  }
-  const saveTrig = (v) => patch({ auto_trade_trigger: v }, () => setTrig(v))
-  const saveSmc = (v) => patch({ auto_trade_smc: v }, () => setSmc(v))
-  const saveScore = (raw) => {
-    const n = Math.max(50, Math.min(100, parseInt(raw, 10) || 80))
-    patch({ auto_trade_smc_min_score: n }, () => setSmcScore(n))
-  }
-  return (
-    <div className="panel" style={{ marginBottom: 16 }}>
-      <div className="panel-h"><h2>⚡ Auto-trading</h2>
-        <span className="hint">What fires an automatic paper entry</span></div>
-      <div className="panel-b">
-        {msg && <div className="banner ok" style={{ marginBottom: 12 }}>{msg}</div>}
-        <div className="field" style={{ maxWidth: 440 }}>
-          <label>ORB signal trigger</label>
-          <Select value={trig} width={'100%'} onChange={saveTrig}
-            options={[
-              { value: 'RETEST_READY', label: 'Retest Ready — safer (double-confirmed)' },
-              { value: 'CONFIRMED', label: 'Confirmed — aggressive (enter on breakout)' },
-            ]} />
-          <p className="note" style={{ marginTop: 8 }}>
-            When auto paper-trading is on for you (your admin enables it on the Team page), this picks
-            which signal opens a paper trade. <strong>Retest Ready</strong> waits for price to pull back
-            and re-confirm the breakout — fewer, higher-quality trades. <strong>Confirmed</strong> enters
-            the moment a breakout is validated — earlier and many more trades, but riskier (no second
-            confirmation). Paper only — real orders always need your tap to confirm.
-          </p>
-        </div>
-
-        <div className="field" style={{ maxWidth: 440, marginTop: 22 }}>
-          <label>Smart Money (SMC) auto-trade</label>
-          <Checkbox checked={smc} onChange={saveSmc}>
-            Also auto-trade high-conviction SMC setups
-          </Checkbox>
-          {smc && (
-            <div style={{ marginTop: 12 }}>
-              <label>Minimum SMC score to enter (50–100)</label>
-              <input type="number" min={50} max={100} step={1} value={smcScore}
-                className="input"
-                onChange={e => setSmcScore(e.target.value)}
-                onBlur={e => saveScore(e.target.value)}
-                style={{ width: 110 }} />
-            </div>
-          )}
-          <p className="note" style={{ marginTop: 8 }}>
-            A separate strategy from the ORB trigger above. When on (and your admin has enabled auto
-            paper-trading), the algo also enters <strong>long in a discount zone / short in a premium
-            zone</strong> once an opportunity's SMC score clears the threshold below and its net
-            reward:risk clears 2:1. The stop hugs a fresh order block when price is sitting inside one,
-            otherwise it uses an ATR-based stop. A higher score demands stronger confluence (default
-            80; fewer, better setups). One entry per stock per day, shared with the ORB strategy.
-            <strong> Paper only</strong> — real orders always need your tap to confirm.
-          </p>
-        </div>
-      </div>
-    </div>
   )
 }
 
