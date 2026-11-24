@@ -76,9 +76,10 @@ class HistoricalDataFetcher:
                 if idx % 10 == 0:  # Commit every 10 symbols
                     self.db.commit()
 
-                # Rate limiting: FYERS allows ~100 requests/minute
-                # Sleep briefly to avoid hitting limits
-                time.sleep(0.1)
+                # FYERS Standard plan allows 5 history requests/second. Pace at <5/s (0.25s gap plus
+                # per-call latency keeps us safely under the cap). First run for a date fills the
+                # cache; subsequent runs for the same date/interval make zero FYERS calls.
+                time.sleep(0.25)
 
             sim_run.progress_pct = 100
             self.db.commit()
@@ -138,21 +139,34 @@ class HistoricalDataFetcher:
                 log_path=tempfile.gettempdir()
             )
 
-            # Fetch historical data
-            # resolution: "1" for 1-min, "5" for 5-min
+            # Fetch historical data.
+            # date_format "0" = epoch/Unix timestamp in range_from/range_to. This is the FYERS
+            # convention (matches radar/fyers.py); "1" means yyyy-mm-dd, and passing epoch values
+            # with "1" makes FYERS reject the request with "Invalid input".
             data = {
                 "symbol": symbol,
                 "resolution": interval,  # "1" or "5"
-                "date_format": "1",  # Unix timestamp
+                "date_format": "0",
                 "range_from": str(from_epoch),
                 "range_to": str(to_epoch),
                 "cont_flag": "1"
             }
 
-            response = fyers.history(data=data)
+            # FYERS Standard plan caps history at 5 requests/second; retry with backoff if we trip it.
+            response = None
+            for attempt in range(4):
+                response = fyers.history(data=data)
+                msg = str(response.get('message', '')).lower() if isinstance(response, dict) else ''
+                if isinstance(response, dict) and response.get('s') == 'ok':
+                    break
+                if 'second' in msg or 'too many' in msg or 'rate' in msg:
+                    time.sleep(0.5 * (attempt + 1))  # 0.5s, 1s, 1.5s
+                    continue
+                break  # non-rate-limit error — don't retry
 
-            if response.get('s') != 'ok':
-                logger.warning(f"FYERS API error for {symbol}: {response.get('message', 'Unknown error')}")
+            if not isinstance(response, dict) or response.get('s') != 'ok':
+                detail = response.get('message', 'Unknown error') if isinstance(response, dict) else response
+                logger.warning(f"FYERS API error for {symbol}: {detail}")
                 return False
 
             if 'candles' not in response or not response['candles']:
