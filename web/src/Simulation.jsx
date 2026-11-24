@@ -30,12 +30,18 @@ function CreateSimRunForm({ onCancel, onCreated }) {
     end_time: '15:30',
     bar_interval: '1',
     // Config
+    strategy: 'ORB',
     retest_tolerance_pct: 0.16,
     min_net_reward_risk: 2.0,
     prereq_min_rvol: 1.0,
     prereq_rvol_enabled: true,
     auto_paper_trade: true,
     auto_trade_trigger: 'RETEST_READY',
+    // SMC-specific
+    auto_trade_smc_min_score: 80,
+    smc_stop_mode: 'ob_atr',
+    smc_enforce_min_rr: true,
+    smc_runner_target: false,
     capital_inr: 100000,
     risk_pct: 1.0
   })
@@ -50,6 +56,7 @@ function CreateSimRunForm({ onCancel, onCreated }) {
     try {
       // Build config object
       const config = {
+        strategy: form.strategy,
         retest_tolerance_pct: parseFloat(form.retest_tolerance_pct),
         retest_expiry_minutes: 20,
         min_net_reward_risk: Number.isFinite(parseFloat(form.min_net_reward_risk)) ? parseFloat(form.min_net_reward_risk) : 2.0,
@@ -58,6 +65,11 @@ function CreateSimRunForm({ onCancel, onCreated }) {
         prereq_rvol_enabled: form.prereq_rvol_enabled ? 1 : 0,
         auto_paper_trade: form.auto_paper_trade ? 1 : 0,
         auto_trade_trigger: form.auto_trade_trigger,
+        // SMC strategy params (ignored by the ORB engine)
+        auto_trade_smc_min_score: parseInt(form.auto_trade_smc_min_score) || 80,
+        smc_stop_mode: form.smc_stop_mode,
+        smc_enforce_min_rr: form.smc_enforce_min_rr ? 1 : 0,
+        smc_runner_target: form.smc_runner_target ? 1 : 0,
         capital_inr: parseFloat(form.capital_inr),
         risk_pct: parseFloat(form.risk_pct),
         use_one_minute_candles: form.bar_interval === '1' ? 1 : 0
@@ -140,30 +152,90 @@ function CreateSimRunForm({ onCancel, onCreated }) {
               <h3 style={{ marginTop: 16, marginBottom: 8 }}>Strategy Configuration</h3>
             </div>
 
-            <div className="field">
-              <label>Retest Tolerance %</label>
-              <input type="number" step="0.01" value={form.retest_tolerance_pct} onChange={e => setForm({...form, retest_tolerance_pct: e.target.value})} />
-              <p className="note">Default: 0.16%. Test 0.18% or 0.20% for more opportunities.</p>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>Strategy</label>
+              <Select
+                value={form.strategy}
+                onChange={v => setForm({...form, strategy: v})}
+                options={[
+                  { value: 'ORB', label: 'ORB — Opening Range Breakout' },
+                  { value: 'SMC', label: 'SMC — Smart Money Concepts' }
+                ]}
+                width={'100%'}
+              />
+              <p className="note">{form.strategy === 'SMC'
+                ? 'Replays the SMC engine: premium/discount zones, order blocks, FVGs. Longs in discount, shorts in premium.'
+                : 'Replays the ORB engine: opening-range breakout, confirmation, then entry on the retest.'}</p>
             </div>
 
             <div className="field">
               <label>Min Reward:Risk</label>
               <input type="number" step="0.1" min="0" value={form.min_net_reward_risk} onChange={e => setForm({...form, min_net_reward_risk: e.target.value})} />
-              <p className="note">Net R:R gate (default 2.0). A retest below this becomes RISK_FAIL and isn't traded. Lower it (e.g. 1.5) for more trades; raise it for fewer, higher-quality ones.</p>
+              <p className="note">Net R:R gate (default 2.0). Below this a setup isn't traded. Lower it (e.g. 1.5) for more trades; raise it for fewer, higher-quality ones. Applies to both strategies.</p>
             </div>
 
-            <div className="field">
-              <label>Min RVOL</label>
-              <input type="number" step="0.1" value={form.prereq_min_rvol} onChange={e => setForm({...form, prereq_min_rvol: e.target.value})} />
-              <p className="note">Minimum relative volume threshold (default: 1.0)</p>
-            </div>
+            {form.strategy === 'ORB' && (
+              <>
+                <div className="field">
+                  <label>Retest Tolerance %</label>
+                  <input type="number" step="0.01" value={form.retest_tolerance_pct} onChange={e => setForm({...form, retest_tolerance_pct: e.target.value})} />
+                  <p className="note">Default: 0.16%. Test 0.18% or 0.20% for more opportunities.</p>
+                </div>
 
-            <div className="field">
-              <label>Enable RVOL Check</label>
-              <button type="button" className={'toggle' + (form.prereq_rvol_enabled ? ' on' : '')} onClick={() => setForm({...form, prereq_rvol_enabled: !form.prereq_rvol_enabled})}>
-                <span className="knob" />{form.prereq_rvol_enabled ? 'On' : 'Off'}
-              </button>
-            </div>
+                <div className="field">
+                  <label>Min RVOL</label>
+                  <input type="number" step="0.1" value={form.prereq_min_rvol} onChange={e => setForm({...form, prereq_min_rvol: e.target.value})} />
+                  <p className="note">Minimum relative volume threshold (default: 1.0)</p>
+                </div>
+
+                <div className="field">
+                  <label>Enable RVOL Check</label>
+                  <button type="button" className={'toggle' + (form.prereq_rvol_enabled ? ' on' : '')} onClick={() => setForm({...form, prereq_rvol_enabled: !form.prereq_rvol_enabled})}>
+                    <span className="knob" />{form.prereq_rvol_enabled ? 'On' : 'Off'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {form.strategy === 'SMC' && (
+              <>
+                <div className="field">
+                  <label>Min SMC Score</label>
+                  <input type="number" step="1" min="0" max="100" value={form.auto_trade_smc_min_score} onChange={e => setForm({...form, auto_trade_smc_min_score: e.target.value})} />
+                  <p className="note">Only trade setups scoring at least this (default 80). Lower → more trades; raise for A+ setups only.</p>
+                </div>
+
+                <div className="field">
+                  <label>SMC Stop Mode</label>
+                  <Select
+                    value={form.smc_stop_mode}
+                    onChange={v => setForm({...form, smc_stop_mode: v})}
+                    options={[
+                      { value: 'ob_atr', label: 'Order block / ATR (default)' },
+                      { value: 'structure', label: 'Structure (tighter, swing-based)' }
+                    ]}
+                    width={'100%'}
+                  />
+                  <p className="note">Where the stop sits: the order-block edge (ATR fallback), or just beyond the nearest swing.</p>
+                </div>
+
+                <div className="field">
+                  <label>Enforce Min R:R</label>
+                  <button type="button" className={'toggle' + (form.smc_enforce_min_rr ? ' on' : '')} onClick={() => setForm({...form, smc_enforce_min_rr: !form.smc_enforce_min_rr})}>
+                    <span className="knob" />{form.smc_enforce_min_rr ? 'On' : 'Off'}
+                  </button>
+                  <p className="note">When on, reject SMC setups below the Min Reward:Risk above.</p>
+                </div>
+
+                <div className="field">
+                  <label>Let Winners Run</label>
+                  <button type="button" className={'toggle' + (form.smc_runner_target ? ' on' : '')} onClick={() => setForm({...form, smc_runner_target: !form.smc_runner_target})}>
+                    <span className="knob" />{form.smc_runner_target ? 'On' : 'Off'}
+                  </button>
+                  <p className="note">When on, no fixed target — ride until the stop or end-of-day square-off.</p>
+                </div>
+              </>
+            )}
 
             {/* Auto-Trade */}
             <div className="field">
@@ -176,18 +248,20 @@ function CreateSimRunForm({ onCancel, onCreated }) {
 
             {form.auto_paper_trade && (
               <>
-                <div className="field">
-                  <label>Auto-Trade Trigger</label>
-                  <Select
-                    value={form.auto_trade_trigger}
-                    onChange={v => setForm({...form, auto_trade_trigger: v})}
-                    options={[
-                      { value: 'RETEST_READY', label: 'Retest Ready (conservative)' },
-                      { value: 'CONFIRMED', label: 'Confirmed (aggressive)' }
-                    ]}
-                    width={'100%'}
-                  />
-                </div>
+                {form.strategy === 'ORB' && (
+                  <div className="field">
+                    <label>Auto-Trade Trigger</label>
+                    <Select
+                      value={form.auto_trade_trigger}
+                      onChange={v => setForm({...form, auto_trade_trigger: v})}
+                      options={[
+                        { value: 'RETEST_READY', label: 'Retest Ready (conservative)' },
+                        { value: 'CONFIRMED', label: 'Confirmed (aggressive)' }
+                      ]}
+                      width={'100%'}
+                    />
+                  </div>
+                )}
 
                 <div className="field">
                   <label>Capital (₹)</label>
@@ -643,8 +717,16 @@ function SimComparison({ runIds, onBack }) {
             </thead>
             <tbody>
               <tr>
+                <td>Strategy</td>
+                {runs.map(r => <td key={r.id} className="num">{(r.config.strategy || 'ORB')}</td>)}
+              </tr>
+              <tr>
                 <td>Retest Tolerance %</td>
-                {runs.map(r => <td key={r.id} className="num">{r.config.retest_tolerance_pct ?? '—'}</td>)}
+                {runs.map(r => <td key={r.id} className="num">{r.config.strategy === 'SMC' ? '—' : (r.config.retest_tolerance_pct ?? '—')}</td>)}
+              </tr>
+              <tr>
+                <td>Min SMC Score</td>
+                {runs.map(r => <td key={r.id} className="num">{r.config.strategy === 'SMC' ? (r.config.auto_trade_smc_min_score ?? '—') : '—'}</td>)}
               </tr>
               <tr>
                 <td>Min Reward:Risk</td>
