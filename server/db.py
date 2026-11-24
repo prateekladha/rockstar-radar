@@ -7,10 +7,12 @@
 """
 from __future__ import annotations
 import os
+import time
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -114,18 +116,55 @@ def _add_column_ddl(dialect: str, table: str, col: str, sqltype: str) -> str:
     return f'ALTER TABLE {table} ADD COLUMN {col} {sqltype}'
 
 
+# Rolling deploys start several pods at once (web replicas + scanner + sim-worker), and they all run
+# these same ALTERs. A DB may then reject concurrent DDL (Oracle: ORA-14411) or the column may already
+# have been added by a sibling pod (ORA-01430) — neither is fatal, but either used to abort startup and
+# crash-loop the pod. So each ALTER runs in its own transaction with a bounded retry.
+_MIGRATION_ATTEMPTS = 6
+_MIGRATION_BACKOFF_S = 1.0
+
+
+def _execute_ddl(eng, ddl: str) -> None:
+    """Run one DDL statement in its own transaction (seam kept small so the retry is unit-testable)."""
+    with eng.begin() as conn:
+        conn.execute(text(ddl))
+
+
+def _column_exists(eng, table: str, col: str) -> bool:
+    """Fresh reflection (new Inspector each call) so we see a column a sibling pod just added."""
+    return col.lower() in {c['name'].lower() for c in inspect(eng).get_columns(table)}
+
+
+def _add_column_with_retry(eng, dialect: str, table: str, col: str, sqltype: str, *,
+                           attempts: int = _MIGRATION_ATTEMPTS, backoff: float = _MIGRATION_BACKOFF_S) -> None:
+    """Add one column, tolerating the rolling-deploy DDL race. Returns once the column exists (whether we
+    or a sibling added it); re-raises only if it is genuinely still missing after all attempts — so a
+    real schema error still surfaces instead of being silently swallowed."""
+    ddl = _add_column_ddl(dialect, table, col, sqltype)
+    for attempt in range(attempts):
+        if _column_exists(eng, table, col):
+            return                                   # present (we or a sibling added it) — done
+        try:
+            _execute_ddl(eng, ddl)
+            return                                   # we added it
+        except SQLAlchemyError:
+            # A concurrent DDL / duplicate-column error is expected under a rolling deploy. On the last
+            # attempt, only re-raise if the column is STILL absent (i.e. a genuine failure, not a race).
+            if attempt == attempts - 1:
+                if _column_exists(eng, table, col):
+                    return
+                raise
+            time.sleep(backoff)                      # let the concurrent DDL / sibling finish, then retry
+
+
 def _apply_additive_migrations() -> None:
-    insp = inspect(engine)
     dialect = engine.dialect.name
-    existing_tables = {t.lower() for t in insp.get_table_names()}
-    with engine.begin() as conn:
-        for table, cols in _ADDED_COLUMNS.items():
-            if table.lower() not in existing_tables:
-                continue  # create_all will build it fresh with all columns
-            have = {c['name'].lower() for c in insp.get_columns(table)}
-            for col, sqltype in cols.items():
-                if col.lower() not in have:
-                    conn.execute(text(_add_column_ddl(dialect, table, col, sqltype)))
+    existing_tables = {t.lower() for t in inspect(engine).get_table_names()}
+    for table, cols in _ADDED_COLUMNS.items():
+        if table.lower() not in existing_tables:
+            continue  # create_all will build it fresh with all columns
+        for col, sqltype in cols.items():
+            _add_column_with_retry(engine, dialect, table, col, sqltype)
 
 
 def init_db() -> None:
