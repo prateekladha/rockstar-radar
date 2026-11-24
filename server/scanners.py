@@ -30,7 +30,7 @@ from radar.utils import IST, now_ist
 
 from . import watchpins
 from .crypto import decrypt
-from .models import BrokerConnection, User
+from .models import BrokerConnection, Order, User
 
 _demo: ControlCenter | None = None
 _scanners: dict[str, ControlCenter] = {}   # key "u<owner_id>" -> ControlCenter
@@ -440,6 +440,69 @@ def _feed_stalled(st: dict) -> bool:
     return sum(1 for r in rows if r.get('stale')) / len(rows) >= 0.9
 
 
+def _enrich_with_position_context(db: Session, user: User, state: dict) -> dict:
+    """Enrich radar state with position-aware context for smart signal aging display.
+
+    For RETEST_READY signals with 'aged' entry_status (>5 minutes old), check if the user
+    has an open position. If so, update the entry_status to show position details instead
+    of "entry window closed".
+
+    This provides context-aware messaging:
+    - Fresh (0-2 min): No message needed
+    - Aging (2-5 min): Show signal age countdown
+    - Aged + No position (>5 min): "Entry window closed"
+    - Aged + Has position (>5 min): "In position - entered at ₹X (HH:MM)"
+    """
+    rows = state.get('all') or []
+    if not rows:
+        return state
+
+    # Query user's open positions (auto and manual) for today
+    today = now_ist().date().isoformat()
+    open_positions = {}
+
+    try:
+        positions = db.query(Order).filter(
+            Order.user_id == user.id,
+            Order.status == 'open'
+        ).all()
+
+        for pos in positions:
+            sym_bare = watchpins.bare(pos.symbol)
+            open_positions[sym_bare] = {
+                'entry': pos.entry,
+                'side': pos.side,
+                'created_at': pos.created_at,
+                'source': pos.source,  # 'auto' or 'manual'
+            }
+    except Exception as e:
+        # If position query fails, don't crash - just skip enrichment
+        import logging
+        logging.warning(f"Failed to query positions for entry_status enrichment: {e}")
+        return state
+
+    # Enrich each row with position-aware entry_status
+    for row in rows:
+        if row.get('entry_status') != 'aged':
+            continue
+
+        sym_bare = watchpins.bare(row.get('symbol') or '')
+        if not sym_bare:
+            continue
+
+        # Check if user has open position on this symbol
+        pos = open_positions.get(sym_bare)
+        if pos:
+            # User has position - show "in position" instead of "entry window closed"
+            row['entry_status'] = 'in_position'
+            row['position_entry'] = pos['entry']
+            row['position_side'] = pos['side']
+            row['position_time'] = pos['created_at'].astimezone(IST).strftime('%H:%M') if pos['created_at'] else None
+            row['position_source'] = pos['source']
+
+    return state
+
+
 def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
     """Try one broker's feed. Returns (status, state) where status is:
        'live'/'starting' → usable (return as-is); 'need_login' → prompt reconnect; 'down' → feed
@@ -520,6 +583,10 @@ def _feed_for(db, conn, user, source, idx) -> tuple[str, dict]:
 
     st.update({'data_mode': 'live', 'source': source, 'shared': source == 'shared',
                'universe': label, 'broker': conn.broker})
+
+    # Enrich with position-aware context for smart signal aging
+    st = _enrich_with_position_context(db, user, st)
+
     return 'live', st
 
 
@@ -544,6 +611,8 @@ def _radar_state_local(db: Session, user: User) -> dict:
             st['data_mode'] = 'live'
         st.update({'source': 'sim', 'sim': True, 'universe': 'Simulation', 'broker': 'sim',
                    'sim_start': user.sim_start or '09:15', 'sim_end': user.sim_end or '15:30'})
+        # Enrich with position-aware context for smart signal aging
+        st = _enrich_with_position_context(db, user, st)
         return st
     # Non-trading day (NSE holiday / weekend, unless a special Muhurat session): show a clean
     # "market closed" state and do NOT start a scanner — the broker has no data, so running one just
