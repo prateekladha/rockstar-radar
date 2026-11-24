@@ -1,10 +1,22 @@
 name: Deploy to OKE
 
-# OKE migration P5. MANUAL ONLY (workflow_dispatch) until the P6 cutover, so it can never fire on a
-# merge while the legacy VM is still production. At cutover, add `push: branches:[main]` here and
-# retire deploy.yml (the VM deploy). Builds one image, pushes to OCIR, and `helm upgrade`s — a web
-# code change rolls only the web Deployment; the scanner pod is untouched (its template unchanged).
+# Production deploy for the OKE cluster (intraday.live). Builds one image, pushes to OCIR, and
+# `helm upgrade`s into the rockstar-radar namespace on the shared dt-selfcare-oke cluster.
+#
+# Auto-fires on every push to main (post-P6 cutover — the legacy-VM deploy.yml has been retired).
+# A routine merge rolls ONLY the web Deployment; the stateful scanner pod is left on its currently
+# deployed image so the FYERS feed is never interrupted. When a change is scanner-side (radar/service
+# logic) and you want it live in the scanner too, run this workflow manually via "Run workflow" with
+# deploy_scanner=true — that rolls the scanner and briefly blips the feed, so do it off-market.
+#
+# CI auth: OCI user rockstar-radar-ci (terraform deploy/terraform/iam.tf) with "use clusters" on the
+# shared compartment; its in-cluster rights are the namespaced RoleBinding in deploy/k8s/ci-rbac.yaml.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
     inputs:
       deploy_scanner:
@@ -67,15 +79,15 @@ jobs:
             SCANNER_TAG="$CUR"
           fi
           echo "web tag=$SHA  scanner tag=$SCANNER_TAG"
-          $HELM upgrade --install rockstar deploy/helm/rockstar -n rockstar-radar --create-namespace \
-            -f deploy/helm/values-oci.yaml \
+          $HELM upgrade --install rockstar deploy/helm/rockstar -n rockstar-radar \
+            -f deploy/helm/values-shared.yaml \
             --set image.repository="$REGISTRY/app" --set image.tag="$SHA" \
             --set scanner.imageTag="$SCANNER_TAG" \
             --set oci.region="${{ vars.OCI_REGION }}" \
             --set oci.vaultId="${{ vars.OCI_VAULT_ID }}" \
             --set oci.compartmentId="${{ vars.OCI_COMPARTMENT_ID }}" \
             --set domain="${{ vars.DOMAIN }}" --set publicBaseUrl="https://${{ vars.DOMAIN }}" \
-            --set letsencryptEmail="${{ vars.LETSENCRYPT_EMAIL }}" \
+            --set letsencryptEmail="${{ secrets.LETSENCRYPT_EMAIL }}" \
             --wait --timeout 8m
 
       - name: Smoke test
