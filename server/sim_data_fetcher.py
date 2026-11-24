@@ -17,7 +17,7 @@ import logging
 import tempfile
 import time
 from datetime import datetime, timedelta
-from typing import List
+from typing import Callable, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -122,15 +122,21 @@ class HistoricalDataFetcher:
     # ---- high-level fetch: selection (daily) + replay/baselines (intraday) ----------------------
 
     def fetch_daily_history(self, symbols: List[str], sim_date: str,
-                            lookback_days: int = 90, min_sessions: int = 15) -> None:
+                            lookback_days: int = 90, min_sessions: int = 15,
+                            on_heartbeat: Optional[Callable[[], None]] = None) -> None:
         """Cache DAILY ('D') bars for the window BEFORE sim_date, used to rank the universe for
-        selection. One range call per symbol; skips symbols already holding >= min_sessions bars."""
+        selection. One range call per symbol; skips symbols already holding >= min_sessions bars.
+
+        on_heartbeat (optional) is called once per symbol so a long fetch keeps the SimRun liveness
+        stamp fresh (the orphaned-run reconciler would otherwise fail a sim that's just slow to fetch)."""
         cutoff = datetime.fromisoformat(sim_date).date()
         start = cutoff - timedelta(days=lookback_days)
         frm = int(market_dt(start, '00:00').timestamp())
         to = int(market_dt(cutoff, '00:00').timestamp()) - 1  # exclude sim day (no lookahead)
         total = len(symbols)
         for i, symbol in enumerate(symbols, 1):
+            if on_heartbeat:
+                on_heartbeat()
             have = self.db.query(SimHistoricalBar).filter(
                 SimHistoricalBar.symbol == symbol, SimHistoricalBar.bar_interval == 'D',
                 SimHistoricalBar.date >= start.isoformat(),
@@ -156,15 +162,20 @@ class HistoricalDataFetcher:
             seg_start = seg_end + timedelta(days=1)
 
     def fetch_intraday_window(self, symbols: List[str], sim_date: str, interval: str,
-                              lookback_days: int = 45, min_prior: int = 2) -> int:
+                              lookback_days: int = 45, min_prior: int = 2,
+                              on_heartbeat: Optional[Callable[[], None]] = None) -> int:
         """Cache intraday bars for [sim_date - lookback, sim_date] for the SELECTED symbols — the sim
         day (replayed) plus prior sessions (RVOL baselines). Returns the number of symbols that have
-        sim-day data. Skips a symbol that already holds sim-day + >= min_prior prior sessions."""
+        sim-day data. Skips a symbol that already holds sim-day + >= min_prior prior sessions.
+
+        on_heartbeat (optional): called once per symbol to keep the SimRun liveness stamp fresh."""
         cutoff = datetime.fromisoformat(sim_date).date()
         start = cutoff - timedelta(days=lookback_days)
         have_simday = 0
         total = len(symbols)
         for i, symbol in enumerate(symbols, 1):
+            if on_heartbeat:
+                on_heartbeat()
             dates = {d for (d,) in self.db.query(SimHistoricalBar.date).filter(
                 SimHistoricalBar.symbol == symbol, SimHistoricalBar.bar_interval == interval,
                 SimHistoricalBar.date >= start.isoformat(),

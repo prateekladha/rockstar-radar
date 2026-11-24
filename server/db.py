@@ -81,6 +81,9 @@ _ADDED_COLUMNS = {
         'smc_alerts_enabled': 'INTEGER DEFAULT 0',
         'smc_min_score': 'INTEGER DEFAULT 70',
     },
+    'sim_runs': {
+        'heartbeat_at': 'TIMESTAMP',   # liveness for the orphaned-run reconciler
+    },
     'settings': {
         # Prerequisite checks (mandatory before strategy evaluation) — PR #36
         'prereq_min_rvol': 'FLOAT DEFAULT 1.0',

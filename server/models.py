@@ -334,6 +334,10 @@ class SimRun(Base):
     created_at = Column(DateTime, default=_now, index=True)
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
+    # Liveness: the executing process stamps this as it works (fetch per-symbol, replay per-progress).
+    # A reconciler fails any non-terminal run whose heartbeat goes stale — i.e. the pod running it died
+    # (sims run as in-process FastAPI BackgroundTasks, so a pod restart silently orphans them otherwise).
+    heartbeat_at = Column(DateTime)
     # Results summary
     total_opportunities = Column(Integer)
     total_trades = Column(Integer)
