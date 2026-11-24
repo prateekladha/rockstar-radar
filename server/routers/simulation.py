@@ -399,32 +399,54 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
             db.commit()
             return
 
-        # Step 1: Fetch historical data
+        # Mirror production: rank the full universe on prior-session DAILY data, pick the ~100 symbols
+        # the live scanner would have traded that day, then fetch INTRADAY only for those (the sim day
+        # for the replay + prior sessions for RVOL baselines). This keeps the sim faithful to prod and
+        # bounds the FYERS cost (vs. fetching intraday for all ~500 symbols).
         fetcher = HistoricalDataFetcher(db, broker_conn)
+        interval = sim_run.bar_interval
 
-        # Get universe symbols
-        # TODO: Make this configurable per sim run
         universe_path = ROOT / 'data' / 'nifty500.csv'
-        logger.info(f"Loading universe from: {universe_path}")
-
         if not universe_path.exists():
             sim_run.status = 'failed'
             sim_run.error_message = f"Universe file not found: {universe_path}"
             db.commit()
             return
+        universe = load_universe(universe_path)  # [(symbol, industry), ...]
+        logger.info(f"[sim {sim_run_id}] universe: {len(universe)} symbols")
 
-        universe_data = load_universe(universe_path)
-        symbols = [symbol for symbol, industry in universe_data]
-        logger.info(f"Loaded {len(symbols)} symbols from universe")
+        # Step 1: daily history for selection (cached across runs)
+        sim_run.status = 'fetching_data'
+        sim_run.progress_pct = 0
+        db.commit()
+        fetcher.fetch_daily_history([s for s, _ in universe], sim_run.start_date)
 
-        fetcher.fetch_day_data(sim_run, symbols)
+        # Step 2: select the ~100-symbol watchlist for the date (production selection logic)
+        symbols = _select_watchlist_for_date(fetcher, universe, sim_run.start_date)
+        logger.info(f"[sim {sim_run_id}] selected {len(symbols)} symbols for {sim_run.start_date}")
+        if not symbols:
+            sim_run.status = 'failed'
+            sim_run.error_message = ("Could not select a watchlist for this date — insufficient daily "
+                                     "history. Try a more recent trading day.")
+            db.commit()
+            return
 
-        # Refresh session to see newly committed data
+        # Step 3: intraday for the selected symbols — sim day (replay) + prior sessions (baselines)
+        sim_run.progress_pct = 40
+        db.commit()
+        have = fetcher.fetch_intraday_window(symbols, sim_run.start_date, interval)
+        if have == 0:
+            sim_run.status = 'failed'
+            sim_run.error_message = (f"No intraday data for {sim_run.start_date}. It may be a market "
+                                     "holiday or outside FYERS' intraday history range.")
+            db.commit()
+            return
+
         db.expire_all()
         db.refresh(sim_run)
 
-        # Step 2: Run simulation
-        controller = SimulationController(db, sim_run)
+        # Step 4: replay the sim day through the real engine, restricted to the selected watchlist
+        controller = SimulationController(db, sim_run, symbols=symbols)
         controller.run()
 
         logger.info(f"Simulation {sim_run_id} completed successfully")
@@ -441,6 +463,61 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+def _select_watchlist_for_date(fetcher, universe, sim_date: str) -> list[str]:
+    """Replay the production morning selection for a PAST date, using cached DAILY bars.
+
+    Builds a liquidity/ATR profile per symbol from the prior sessions' daily candles
+    (radar.selecting.compute_daily_profile) and picks the top ~100 (choose_top100 — same price /
+    turnover / ATR / industry-diversification filters the live scanner uses). On a thin date where
+    fewer than the cap pass, falls back to taking whatever passed rather than hard-failing.
+    """
+    from datetime import timedelta
+    from radar.selecting import compute_daily_profile, choose_top100, SelectionError
+    from radar.models import Candle
+    from radar.utils import load_config
+
+    cutoff = datetime.fromisoformat(sim_date).date()
+    lookback_start = (cutoff - timedelta(days=90)).isoformat()
+    profiles = []
+    for symbol, industry in universe:
+        rows = fetcher.get_bars_in_range(symbol, 'D', lookback_start, cutoff.isoformat())
+        if not rows:
+            continue
+        candles = [Candle(at=datetime.fromisoformat(b.timestamp), open=b.open, high=b.high,
+                          low=b.low, close=b.close, volume=b.volume) for b in rows]
+        p = compute_daily_profile(symbol, industry, candles, cutoff)
+        if p:
+            profiles.append(p)
+
+    config = load_config()
+    try:
+        chosen = choose_top100(profiles, config, morning_pins=[])
+    except SelectionError:
+        chosen = _relaxed_pick(profiles, config)
+    return [p.symbol for p in chosen]
+
+
+def _relaxed_pick(profiles, config):
+    """Same filters/diversification as choose_top100 but without the hard 'need the full cap' error —
+    used when a historical date has thinner data than a live pre-open would."""
+    from collections import Counter
+    cap = min(config.get('max_symbols', 100), 100)
+    passed = [p for p in profiles if
+              p.previous_close >= config['min_price_inr'] and
+              p.median_turnover_cr >= config['min_median_daily_turnover_cr'] and
+              config['min_daily_atr_pct'] <= p.daily_atr_pct <= config['max_daily_atr_pct']]
+    passed.sort(key=lambda x: -x.selection_score)
+    chosen, industry_count = [], Counter()
+    for p in passed:
+        if industry_count[p.industry] >= config['max_industry_members']:
+            continue
+        chosen.append(p)
+        industry_count[p.industry] += 1
+        if len(chosen) == cap:
+            break
+    return chosen
+
 
 def _sim_run_to_response(run: SimRun) -> SimRunResponse:
     """Convert SimRun model to response object."""
