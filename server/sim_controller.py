@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 class SimulationController:
     """Orchestrates simulation replay."""
 
-    def __init__(self, db: Session, sim_run: SimRun, symbols: List[str] | None = None):
+    def __init__(self, db: Session, sim_run: SimRun, symbols: List[str] | None = None,
+                 profiles: List[Instrument] | None = None):
         from radar.utils import load_config
         self.db = db
         self.sim_run = sim_run
@@ -57,6 +58,15 @@ class SimulationController:
         # replay and baselines are restricted to these symbols — so stale sim-day bars cached for other
         # symbols by an earlier run don't leak the full universe back into the sim.
         self.selected_symbols = list(symbols) if symbols else None
+        # Real per-symbol daily profiles (resistance/support/daily_atr_pct/turnover) from the selection
+        # step. The ORB engine derives retest TARGETS from Instrument.resistance/support and widens the
+        # stop by daily_atr_pct; without them every retest dies at RISK_FAIL ("no known target"), nothing
+        # reaches RETEST_READY, and the journal only ever shows CONFIRMED (score 65) with no entry/stop/
+        # target. When profiles aren't supplied (e.g. a direct/legacy call) we fall back to bare
+        # Instruments, which still replay but produce no entry tickets.
+        self._profiles_by_symbol = {p.symbol: p for p in (profiles or [])}
+        if profiles and not self.selected_symbols:
+            self.selected_symbols = [p.symbol for p in profiles]
 
         # Will be initialized during replay
         self.engine: RadarEngine = None
@@ -137,12 +147,16 @@ class SimulationController:
         # For simulation, we'll use a simplified version
         instruments = []
         for symbol in symbols:
-            # Instrument (radar/models.py) has no 'name' field — its identity is `symbol`; the
-            # optional classifier is `industry`. median_turnover_cr is a placeholder for the sim.
-            instruments.append(Instrument(
-                symbol=symbol,
-                median_turnover_cr=1.0  # Placeholder - could load from cache
-            ))
+            # Prefer the real selection profile (resistance/support/ATR/turnover) so the ORB engine can
+            # compute retest targets and size stops. Fall back to a bare Instrument only when a profile
+            # wasn't supplied — that still replays but yields no entry tickets.
+            prof = self._profiles_by_symbol.get(symbol)
+            if prof is not None:
+                instruments.append(prof)
+            else:
+                # Instrument (radar/models.py) has no 'name' field — its identity is `symbol`; the
+                # optional classifier is `industry`. median_turnover_cr is a placeholder for the sim.
+                instruments.append(Instrument(symbol=symbol, median_turnover_cr=1.0))
 
         # Initialize RadarEngine in SIMULATION mode
         self.engine = RadarEngine(
