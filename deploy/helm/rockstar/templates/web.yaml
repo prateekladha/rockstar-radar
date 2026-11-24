@@ -16,6 +16,7 @@ spec:
     metadata:
       labels: { app: web }
     spec:
+      imagePullSecrets: [{ name: ocir-pull }]
       {{- include "rockstar.podSecurity" . | nindent 6 }}
       terminationGracePeriodSeconds: 30
       containers:
