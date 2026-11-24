@@ -322,3 +322,37 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 @media(max-width:860px){
   .rp-grid{grid-template-columns:1fr}
   .rp-side{border-left:none;padding-left:0;border-top:1px solid var(--border);padding-top:14px;max-height:none}}
+
+/* ============================================================
+   Premium polish pass — cohesive depth + accents to match the
+   homepage/login. Appended as overrides (visual-only, safe).
+   ============================================================ */
+/* app bar: subtle depth + brand mark glow */
+.appbar{background:linear-gradient(180deg,rgba(14,20,33,.9),rgba(10,14,22,.78));box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 10px 30px -22px rgba(0,0,0,.9)}
+.brand .mark{box-shadow:0 4px 14px -2px rgba(37,99,235,.55)}
+/* tabs: hover affordance + a soft glow under the active underline */
+.tabs{gap:2px}
+.tab{border-radius:9px 9px 0 0;transition:color .14s,background .14s}
+.tab:hover{background:rgba(255,255,255,.04)}
+.tab.active{box-shadow:0 1px 0 var(--accent),0 8px 16px -10px rgba(59,130,246,.7)}
+/* KPI cards: gradient depth, a thin accent rail, and a hover lift */
+.kpi{position:relative;overflow:hidden;background:linear-gradient(180deg,var(--surface-2),var(--surface));transition:transform .16s,border-color .16s,box-shadow .16s}
+.kpi::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:linear-gradient(90deg,var(--accent),transparent 72%);opacity:.35}
+.kpi:hover{transform:translateY(-2px);border-color:var(--border-2);box-shadow:var(--sh-lg)}
+.kpi.accent::before{background:linear-gradient(90deg,var(--accent-2),transparent 72%);opacity:.8}
+.kpi.live::before{background:linear-gradient(90deg,var(--long),transparent 72%);opacity:.75}
+.kpi .val{letter-spacing:-1.3px}
+.kpi .label{color:var(--faint)}
+/* panels: a whisper of gradient depth + crisper headers */
+.panel{background:linear-gradient(180deg,var(--surface),var(--elev))}
+.panel-h{background:linear-gradient(180deg,rgba(255,255,255,.018),transparent)}
+.panel-h h2{font-size:15.5px;letter-spacing:-.01em}
+/* tickets: lift on hover so the radar grid feels alive */
+.ticket{transition:transform .16s,border-color .16s,box-shadow .16s}
+.ticket:hover{transform:translateY(-2px);border-color:var(--border-2);box-shadow:var(--sh-lg)}
+/* primary buttons: a touch more presence */
+.btn.primary{box-shadow:0 10px 24px -12px rgba(59,130,246,.8)}
+.btn.primary:hover{filter:brightness(1.06)}
+/* empty states: a framed, calmer block instead of bare text */
+.empty{padding:52px 24px}
+.empty .big{font-weight:600;color:var(--text)}
