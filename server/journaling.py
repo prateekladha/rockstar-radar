@@ -4,6 +4,11 @@ The live scanner holds state in memory; this records a durable, per-user daily t
 actionable opportunity (what, which side, best state reached, levels, score) so the user can later
 review the day and see which signals they acted on. User actions live in the Order table; the
 journal API joins the two.
+
+Design Note: ACTIONABLE includes pre-signals (READY, BREAKOUT_PENDING) for progression tracking
+and "almost" opportunity analysis. Many READY stocks never confirm, but recording them helps
+answer: "How many watchlist candidates actually triggered?" and "Should I be more aggressive?"
+For a cleaner journal, the UI can filter to show only CONFIRMED/RETEST_READY (actual trade signals).
 """
 from __future__ import annotations
 
@@ -14,8 +19,14 @@ from radar.utils import now_ist
 from .models import SignalLog, User
 
 # States worth remembering (an actual actionable opportunity, not idle monitoring).
+# RETEST_READY has highest priority as it represents double-confirmation (breakout + support held).
 ACTIONABLE = {'CONFIRMED', 'RETEST_READY', 'BREAKOUT_PENDING', 'READY'}
-_PRIORITY = {'READY': 1, 'BREAKOUT_PENDING': 2, 'RETEST_READY': 3, 'CONFIRMED': 4}
+_PRIORITY = {
+    'READY': 1,              # Pre-signal: watching for breakout
+    'BREAKOUT_PENDING': 2,   # Pre-signal: breaking through, candle not closed
+    'CONFIRMED': 3,          # 1st confirmation: breakout + volume
+    'RETEST_READY': 4        # 2nd confirmation: support held (BEST signal)
+}
 
 
 def _s(v):
