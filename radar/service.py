@@ -472,8 +472,8 @@ def start_live(config: dict, selection_path: Path, port: int):
     if p.get('for_session') != today.isoformat():
         raise ValueError('Selection is not for today. Run `python launch.py prepare` each trading morning.')
     from .utils import holiday, is_market_day
-    if not is_market_day():
-        h = holiday()
+    if not is_market_day(today):
+        h = holiday(today)
         raise ValueError(f'Market closed today ({h or "weekend"} in IST). Live scanning disabled.')
     journal = SessionJournal(today)
     def on_signal(sig):
