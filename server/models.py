@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import (JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text,
-                        UniqueConstraint)
+from sqlalchemy import (JSON, Column, DateTime, Float, ForeignKey, Identity, Integer, String,
+                        Text, UniqueConstraint)
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -23,7 +23,7 @@ def _now():
 
 class Household(Base):
     __tablename__ = 'households'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     name = Column(String(120), nullable=False, default='My Household')
     owner_user_id = Column(Integer)   # the creator; protected from role change / removal by others
     created_at = Column(DateTime, default=_now)
@@ -32,7 +32,7 @@ class Household(Base):
 
 class User(Base):
     __tablename__ = 'users'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     household_id = Column(Integer, ForeignKey('households.id'), nullable=False)
     google_sub = Column(String(64), unique=True, index=True)   # Google account id
     email = Column(String(255), unique=True, index=True, nullable=False)
@@ -85,7 +85,7 @@ class User(Base):
 
 class Watchlist(Base):
     __tablename__ = 'watchlists'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), unique=True, nullable=False)
     symbols_text = Column(Text, default='')
     updated_at = Column(DateTime, default=_now, onupdate=_now)
@@ -94,7 +94,7 @@ class Watchlist(Base):
 
 class Settings(Base):
     __tablename__ = 'settings'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), unique=True, nullable=False)
     data = Column(JSON, default=dict)          # strategy/risk config overrides
     # Prerequisite checks (mandatory before strategy evaluation)
@@ -121,7 +121,7 @@ class Settings(Base):
 class AlertConfig(Base):
     """Per-user alert rules + channel config (Telegram token encrypted)."""
     __tablename__ = 'alert_configs'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), unique=True, nullable=False)
     enabled = Column(Integer, default=1)
     states = Column(JSON, default=lambda: ['RETEST_READY', 'CONFIRMED'])
@@ -147,7 +147,7 @@ class AlertDelivery(Base):
     on the same signal means one insert fails rather than two messages going out.
     """
     __tablename__ = 'alert_deliveries'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), index=True, nullable=False)
     day = Column(String(10), index=True)           # YYYY-MM-DD (IST trading day)
     symbol = Column(String(40))
@@ -163,7 +163,7 @@ class AlertDelivery(Base):
 class SignalLog(Base):
     """Every signal/trade a user saw — backbone of audit, insights, journal, debugger."""
     __tablename__ = 'signal_logs'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), index=True, nullable=False)
     ts = Column(DateTime, default=_now, index=True)
     day = Column(String(10), index=True)           # YYYY-MM-DD (IST trading day)
@@ -188,7 +188,7 @@ class SignalLog(Base):
 class Order(Base):
     """A trade the user took (paper or live). Source of truth for Journal, Positions, P&L."""
     __tablename__ = 'orders'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), index=True, nullable=False)
     created_at = Column(DateTime, default=_now, index=True)
     closed_at = Column(DateTime)
@@ -257,7 +257,7 @@ class Order(Base):
 class SmartPick(Base):
     """A daily smart-watchlist idea: one stock, with long and/or short plans + levels."""
     __tablename__ = 'smart_picks'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     household_id = Column(Integer, ForeignKey('households.id'), index=True, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'), index=True)   # whose feed produced this pick
     day = Column(String(10), index=True)     # YYYY-MM-DD
@@ -283,7 +283,7 @@ class BrokerConnection(Base):
     __tablename__ = 'broker_connections'
     __table_args__ = (UniqueConstraint('user_id', 'broker', 'capability',
                                        name='uq_user_broker_capability'),)
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     broker = Column(String(32), default='fyers')      # fyers | zerodha | ...
     capability = Column(String(16), default='data')   # data | orders
@@ -303,7 +303,7 @@ class SupportMessage(Base):
     """A query/issue/feature-request raised by a user from inside the product.
     Stored durably here AND delivered to the owner's Telegram (best-effort)."""
     __tablename__ = 'support_messages'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), index=True)
     kind = Column(String(16), default='question')   # question | issue | feature
     message = Column(Text)

@@ -7,9 +7,10 @@ metadata:
   name: rockstar-quota
 spec:
   hard:
+    # Cap total requests (scheduling fairness vs dt-telekom) + memory limits (OOM protection). No
+    # limits.cpu: it would force a CPU limit on every pod and throttle the bursty scanner.
     requests.cpu: {{ .Values.resourceQuota.requestsCpu | quote }}
     requests.memory: {{ .Values.resourceQuota.requestsMemory | quote }}
-    limits.cpu: {{ .Values.resourceQuota.limitsCpu | quote }}
     limits.memory: {{ .Values.resourceQuota.limitsMemory | quote }}
     persistentvolumeclaims: "2"
 {{- end }}
