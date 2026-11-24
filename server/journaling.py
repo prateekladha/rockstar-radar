@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from radar.utils import now_ist
 
-from .models import SignalLog
+from .models import SignalLog, User
 
 # States worth remembering (an actual actionable opportunity, not idle monitoring).
 ACTIONABLE = {'CONFIRMED', 'RETEST_READY', 'BREAKOUT_PENDING', 'READY'}
@@ -60,3 +60,86 @@ def record_opportunities(db: Session, user_id: int, state: dict) -> None:
             changed = True
     if changed:
         db.commit()
+
+
+def apply_prerequisite_filters(opportunities: list, user: User, strategy: str = 'ORB') -> tuple[list, int]:
+    """Apply a user's pre-requisite filters to a list of opportunity dicts.
+
+    Lives here (not in server.main) so the server-side journaling sweep AND the radar endpoints can
+    share one implementation. Returns (filtered_opportunities, rejected_count). Best-effort / pure.
+    """
+    if not opportunities:
+        return opportunities, 0
+    if not user.settings:
+        return opportunities, 0  # No settings = no filtering
+
+    from radar.prerequisites import PrerequisiteConfig, PrerequisiteChecker
+    import json as json_lib
+
+    prereq_config = PrerequisiteConfig(
+        min_rvol=user.settings.prereq_min_rvol or 1.0,
+        rvol_enabled=bool(user.settings.prereq_rvol_enabled),
+        min_liquidity_cr=user.settings.prereq_min_liquidity_cr,
+        min_price=user.settings.prereq_min_price,
+        max_price=user.settings.prereq_max_price,
+        allowed_sectors=json_lib.loads(user.settings.prereq_allowed_sectors) if user.settings.prereq_allowed_sectors else None,
+        blocked_symbols=json_lib.loads(user.settings.prereq_blocked_symbols) if user.settings.prereq_blocked_symbols else None,
+    )
+    if not prereq_config.rvol_enabled:
+        return opportunities, 0
+
+    checker = PrerequisiteChecker(prereq_config)
+    filtered: list = []
+    rejected = 0
+    for opp in opportunities:
+        symbol = opp.get('symbol', '')
+        price = opp.get('price')
+        if strategy == 'ORB':
+            rvol = opp.get('rvol')
+        elif strategy == 'SMC':
+            rvol = (opp.get('confluence') or {}).get('rvol_cum')
+        else:
+            rvol = None
+        liquidity_cr = None
+        result = checker.check(symbol, {'rvol': rvol, 'price': price, 'liquidity_cr': liquidity_cr})
+        # An unmeasurable (None) input isn't a failure — rejecting on it would empty the radar. Keep
+        # the opportunity when every failed check is merely unmeasurable; reject only a real breach.
+        unmeasurable = set()
+        if rvol is None:
+            unmeasurable.add('RVOL')
+        if liquidity_cr is None:
+            unmeasurable.add('Liquidity')
+        only_unmeasurable = bool(result.failed_checks) and set(result.failed_checks) <= unmeasurable
+        if result.passed or only_unmeasurable:
+            filtered.append(opp)
+        else:
+            rejected += 1
+    return filtered, rejected
+
+
+def sweep(db: Session) -> int:
+    """Server-side opportunity journaling — records each user's actionable opportunities to SignalLog
+    on the scheduler's cadence, so the daily history is captured even when the user's browser is
+    closed (the GET /api/radar journaling it replaces only ran while someone was polling).
+
+    Read-only on the feed: uses scanners.effective_feed, which NEVER starts a scanner — it journals
+    against whatever scanner is already running (started by the scheduler / order engine). Mirrors the
+    radar endpoint: same per-user prerequisite filter on the ORB opportunity list. Returns the number
+    of users whose journal advanced."""
+    from . import scanners
+    n = 0
+    for user in db.query(User).all():
+        try:
+            cc, state = scanners.effective_feed(db, user)
+            if cc is None or not state or state.get('offline'):
+                continue
+            opps = state.get('all') or []
+            if not opps:
+                continue
+            filtered, _ = apply_prerequisite_filters(opps, user, 'ORB')
+            record_opportunities(db, user.id, {'all': filtered})
+            n += 1
+        except Exception as e:     # one user's failure must never stop the others
+            db.rollback()
+            print(f'[journal] sweep failed for user {user.id}: {type(e).__name__}: {e}')
+    return n
