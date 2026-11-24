@@ -31,6 +31,7 @@ function CreateSimRunForm({ onCancel, onCreated }) {
     bar_interval: '1',
     // Config
     retest_tolerance_pct: 0.16,
+    min_net_reward_risk: 2.0,
     prereq_min_rvol: 1.0,
     prereq_rvol_enabled: true,
     auto_paper_trade: true,
@@ -51,6 +52,7 @@ function CreateSimRunForm({ onCancel, onCreated }) {
       const config = {
         retest_tolerance_pct: parseFloat(form.retest_tolerance_pct),
         retest_expiry_minutes: 20,
+        min_net_reward_risk: Number.isFinite(parseFloat(form.min_net_reward_risk)) ? parseFloat(form.min_net_reward_risk) : 2.0,
         orb_stop_mode: 'structure',
         prereq_min_rvol: parseFloat(form.prereq_min_rvol),
         prereq_rvol_enabled: form.prereq_rvol_enabled ? 1 : 0,
@@ -142,6 +144,12 @@ function CreateSimRunForm({ onCancel, onCreated }) {
               <label>Retest Tolerance %</label>
               <input type="number" step="0.01" value={form.retest_tolerance_pct} onChange={e => setForm({...form, retest_tolerance_pct: e.target.value})} />
               <p className="note">Default: 0.16%. Test 0.18% or 0.20% for more opportunities.</p>
+            </div>
+
+            <div className="field">
+              <label>Min Reward:Risk</label>
+              <input type="number" step="0.1" min="0" value={form.min_net_reward_risk} onChange={e => setForm({...form, min_net_reward_risk: e.target.value})} />
+              <p className="note">Net R:R gate (default 2.0). A retest below this becomes RISK_FAIL and isn't traded. Lower it (e.g. 1.5) for more trades; raise it for fewer, higher-quality ones.</p>
             </div>
 
             <div className="field">
@@ -637,6 +645,10 @@ function SimComparison({ runIds, onBack }) {
               <tr>
                 <td>Retest Tolerance %</td>
                 {runs.map(r => <td key={r.id} className="num">{r.config.retest_tolerance_pct ?? '—'}</td>)}
+              </tr>
+              <tr>
+                <td>Min Reward:Risk</td>
+                {runs.map(r => <td key={r.id} className="num">{r.config.min_net_reward_risk ?? '—'}</td>)}
               </tr>
               <tr>
                 <td>Min RVOL</td>
