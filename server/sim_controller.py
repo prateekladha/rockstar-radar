@@ -86,7 +86,13 @@ class SimulationController:
 
         # Will be initialized during replay
         self.engine: RadarEngine = None
-        self.open_orders: Dict[str, SimOrder] = {}  # symbol -> order
+        self.open_orders: Dict[str, SimOrder] = {}  # symbol -> currently OPEN order
+        # Symbols already auto-traded in this run. The engine keeps reporting a symbol as RETEST_READY
+        # with FROZEN entry/stop/target after the breakout; once a position closes it leaves open_orders,
+        # so without this guard the next bar re-enters the identical setup and it re-closes at the same
+        # stop/target — spawning one duplicate trade per bar (prod blocks this via held + trades-per-day).
+        # One entry per symbol per run: a replayed frozen signal never represents a genuinely new setup.
+        self.traded_symbols: set[str] = set()
         self.symbols: List[str] = []
 
     def run(self) -> None:
@@ -450,8 +456,9 @@ class SimulationController:
             if not symbol:
                 continue
 
-            # Check if already in position
-            if symbol in self.open_orders:
+            # Skip if currently in a position OR already traded this symbol in the run (no re-entering
+            # the same frozen replayed signal — that was the source of 200+ duplicate trades).
+            if symbol in self.open_orders or symbol in self.traded_symbols:
                 continue
 
             # Create simulated order
@@ -488,6 +495,7 @@ class SimulationController:
             )
             self.db.add(order)
             self.open_orders[symbol] = order
+            self.traded_symbols.add(symbol)
 
         self.db.commit()
 
