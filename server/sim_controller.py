@@ -23,7 +23,6 @@ from sqlalchemy.orm import Session
 from radar.engine import RadarEngine, same_time_baseline
 from radar.models import Candle, Instrument
 from radar.utils import IST, now_ist
-from radar import universe as U
 from .models import SimRun, SimHistoricalBar, SimSignalLog, SimOrder
 from .sim_data_fetcher import HistoricalDataFetcher
 

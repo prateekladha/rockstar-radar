@@ -14,7 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from radar import universe as U
+from radar.selecting import load_universe
+from radar.utils import ROOT
 from ..auth import require_user
 from ..db import get_db
 from ..models import User, SimRun, SimSignalLog, SimOrder, SimHistoricalBar, BrokerConnection
@@ -403,8 +404,9 @@ def _run_simulation_background(sim_run_id: int, user_id: int):
 
         # Get universe symbols
         # TODO: Make this configurable per sim run
-        universe_index = "nifty500"
-        symbols = U.read_universe(universe_index)
+        universe_path = ROOT / 'data' / 'nifty500.csv'
+        universe_data = load_universe(universe_path)
+        symbols = [symbol for symbol, industry in universe_data]
 
         fetcher.fetch_day_data(sim_run, symbols)
 
