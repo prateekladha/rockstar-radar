@@ -107,9 +107,14 @@ def apply_prerequisite_filters(opportunities: list, user: User, strategy: str = 
         price = opp.get('price')
         if strategy == 'ORB':
             rvol = opp.get('rvol')
-        elif strategy == 'SMC':
-            rvol = (opp.get('confluence') or {}).get('rvol_cum')
         else:
+            # SMC (and anything else) is structure-based (order blocks / premium-discount zones), not a
+            # momentum-RVOL breakout. Its only volume figure is a CUMULATIVE-since-open RVOL
+            # (confluence.rvol_cum) that a mid-session scanner restart resets to ~0 — which silently
+            # rejected EVERY SMC opportunity for the rest of the day via the min_rvol gate. So RVOL is
+            # NOT a hard gate for SMC: it stays in the opportunity's confluence for display/ranking,
+            # while price / liquidity / sector / blocked-symbol prereqs still apply. (Passed as None =>
+            # unmeasurable => the only_unmeasurable keep-path below lets it through.)
             rvol = None
         liquidity_cr = None
         result = checker.check(symbol, {'rvol': rvol, 'price': price, 'liquidity_cr': liquidity_cr})
