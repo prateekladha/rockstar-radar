@@ -50,7 +50,7 @@ function ScanUniverse() {
     <div className="panel" style={{ marginBottom: 16 }}>
       <div className="panel-h"><h2>🎯 Stocks to scan</h2><span className="hint">The group of stocks your radar watches each day</span></div>
       <div className="panel-b">
-        {msg && <div className={'banner ' + (msg.startsWith('Error') ? 'err' : 'ok')}>{msg}</div>}
+        {msg && <div className={'banner toast ' + (msg.startsWith('Error') ? 'err' : 'ok')}>{msg}</div>}
         <div className="field" style={{ maxWidth: 360 }}><label>Scan this group</label>
           <Select value={uni.current} onChange={saveUni} width={'100%'}
             options={uni.catalog.map(c => ({ value: c.id, label: `${c.cap} — ${c.label}` }))} />
@@ -87,7 +87,7 @@ function StrategyRisk() {
     <div className="panel" style={{ marginBottom: 16 }}>
       <div className="panel-h"><h2>🛠️ Strategy &amp; risk</h2><span className="hint">Your personal tuning for the scanner &amp; risk engine</span></div>
       <div className="panel-b">
-        {msg && <div className={'banner ' + (msg.startsWith('Error') ? 'err' : 'ok')}>{msg}</div>}
+        {msg && <div className={'banner toast ' + (msg.startsWith('Error') ? 'err' : 'ok')}>{msg}</div>}
         <div className="settings-grid">
           {Object.entries(cfg).filter(([k]) => !STRATEGY_SET.has(k)).map(([k, v]) => {
             const e = err(k, v)
@@ -146,7 +146,7 @@ function AutoTradeFlags() {
         <span className="hint">How the automated paper trader enters and exits (ORB + SMC)</span>
       </div>
       <div className="panel-b">
-        {msg && <div className={'banner ' + (msg.startsWith('Error') ? 'err' : 'ok')}>{msg}</div>}
+        {msg && <div className={'banner toast ' + (msg.startsWith('Error') ? 'err' : 'ok')}>{msg}</div>}
         <p className="note" style={{ marginBottom: 16 }}>
           These control the automated <b>paper</b> trader only — live never auto-fires. Each is your
           personal setting; changes apply on the next engine pass.
@@ -247,7 +247,7 @@ function PrerequisiteChecks() {
         <span className="hint">Mandatory checks before strategy evaluation (applies to both ORB and SMC)</span>
       </div>
       <div className="panel-b">
-        {msg && <div className="banner ok">{msg}</div>}
+        {msg && <div className="banner toast ok">{msg}</div>}
         <p className="note" style={{ marginBottom: 16 }}>
           All checks are mandatory (AND logic). If any check fails, the stock will not be evaluated by the selected strategy and will not appear in opportunities.
         </p>
@@ -296,7 +296,7 @@ function RvolSettings() {
         <span className="hint">Configure how Relative Volume is calculated</span>
       </div>
       <div className="panel-b">
-        {msg && <div className="banner ok">{msg}</div>}
+        {msg && <div className="banner toast ok">{msg}</div>}
         <p className="note" style={{ marginBottom: 16 }}>
           These settings control how RVOL (Relative Volume) is calculated for opportunities.
           Changes apply to both ORB and SMC scanners on next restart.
@@ -358,7 +358,7 @@ function EmaSettings() {
     <div className="panel" style={{ marginBottom: 16 }}>
       <div className="panel-h"><h2>📈 EMA Crossover Settings</h2></div>
       <div className="panel-b">
-        {msg && <div className="banner ok">{msg}</div>}
+        {msg && <div className="banner toast ok">{msg}</div>}
         <p className="note" style={{ marginBottom: 16 }}>
           Two EMAs on the Debug tab (and EMA trend). EMA fast crossing above the slow is bullish;
           below is bearish. Defaults: 5 / 20, Close, offset 0.
