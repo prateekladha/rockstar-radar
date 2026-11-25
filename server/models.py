@@ -8,11 +8,11 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import (JSON, Column, DateTime, Float, ForeignKey, Identity, Integer, String,
+from sqlalchemy import (Column, DateTime, Float, ForeignKey, Identity, Integer, String,
                         Text, UniqueConstraint)
 from sqlalchemy.orm import relationship
 
-from .db import Base
+from .db import Base, DecimalSafeJSON
 
 ROLES = ('admin', 'trader')   # admin manages org + members + strategy; trader trades
 
@@ -96,7 +96,7 @@ class Settings(Base):
     __tablename__ = 'settings'
     id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), unique=True, nullable=False)
-    data = Column(JSON, default=dict)          # strategy/risk config overrides
+    data = Column(DecimalSafeJSON, default=dict)          # strategy/risk config overrides
     # Prerequisite checks (mandatory before strategy evaluation)
     prereq_min_rvol = Column(Float, default=1.0)
     prereq_rvol_enabled = Column(Integer, default=1)
@@ -124,12 +124,12 @@ class AlertConfig(Base):
     id = Column(Integer, Identity(), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), unique=True, nullable=False)
     enabled = Column(Integer, default=1)
-    states = Column(JSON, default=lambda: ['RETEST_READY', 'CONFIRMED'])
+    states = Column(DecimalSafeJSON, default=lambda: ['RETEST_READY', 'CONFIRMED'])
     min_score = Column(Integer, default=0)
     # SMC (Smart Money Concepts) alert settings
     smc_alerts_enabled = Column(Integer, default=0)
     smc_min_score = Column(Integer, default=70)
-    channels = Column(JSON, default=lambda: {'telegram': True, 'inapp': True, 'email': False})
+    channels = Column(DecimalSafeJSON, default=lambda: {'telegram': True, 'inapp': True, 'email': False})
     telegram_token_enc = Column(Text)
     telegram_chat_id = Column(String(64))
     quiet_from = Column(String(5))     # HH:MM
@@ -182,7 +182,7 @@ class SignalLog(Base):
     note = Column(Text)
     outcome = Column(String(16), default='open')   # target | stop | open | expired
     result_r = Column(String(16))                  # realised R multiple
-    timeline = Column(JSON, default=list)          # list of {t, event, detail} for the debugger
+    timeline = Column(DecimalSafeJSON, default=list)          # list of {t, event, detail} for the debugger
 
 
 class Order(Base):
@@ -265,8 +265,8 @@ class SmartPick(Base):
     name = Column(String(120))
     bias = Column(String(10))                # long | short | both | avoid
     focus = Column(Integer, default=0)       # top focus of the day
-    long_plan = Column(JSON)                 # {entry, sl, invalidation, targets:[], note}
-    short_plan = Column(JSON)
+    long_plan = Column(DecimalSafeJSON)                 # {entry, sl, invalidation, targets:[], note}
+    short_plan = Column(DecimalSafeJSON)
     note = Column(Text)
     source = Column(String(10), default='auto')   # auto (from scanner) | manual (admin-added)
     created_at = Column(DateTime, default=_now)

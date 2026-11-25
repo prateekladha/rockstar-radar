@@ -16,6 +16,14 @@ def position_size(entry: Optional[float], stop: Optional[float],
     qty = floor(risk_budget / per_share_risk). Returns qty 0 when it cannot be sized
     (missing/zero prices or non-positive stop distance), never a negative or guessed size.
     """
+    # Inputs can arrive as decimal.Decimal from Oracle NUMBER columns (capital/risk_pct come from
+    # the per-user DB config; entry/stop from persisted signal rows) or as str/None from loose
+    # configs. Mixing Decimal with the float literals below raises TypeError — which only bit on the
+    # Oracle prod DB, since SQLite (dev/tests) hands back plain floats. Coerce everything up front.
+    capital = float(capital or 0)
+    risk_pct = float(risk_pct or 0)
+    entry = float(entry) if entry else None
+    stop = float(stop) if stop else None
     risk_budget = round(max(0.0, capital) * max(0.0, risk_pct) / 100.0, 2)
     if not entry or not stop or entry <= 0 or stop <= 0:
         return {'qty': 0, 'risk_budget': risk_budget, 'per_share_risk': None, 'actual_risk': 0.0}
