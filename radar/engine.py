@@ -521,16 +521,22 @@ class RadarEngine:
         #       more exposed to noise. ATR is still the fallback when there's no structural level.
         atr_mult = self.config.get('intraday_atr_stop_mult', 0.5)
         stop_mode = self.config.get('orb_stop_mode', 'atr_floor')
+        # Structural stop buffer: how far BEYOND the OR level / retest wick the stop sits. Historically
+        # hardcoded at 0.10% (OR level) + 0.05% (retest wick); now config-driven so the stop's tightness
+        # can be tuned without changing mode. The wick buffer tracks at half the OR buffer, preserving
+        # the original 2:1 ratio. Default 0.10 reproduces the old behaviour exactly.
+        struct_buf = (self.config.get('orb_struct_buffer_pct', 0.10) or 0.10) / 100.0
+        wick_buf = struct_buf / 2.0
         atr_dist = entry * (st.info.daily_atr_pct or 0) / 100 * atr_mult
         if st.confirmed_side == 'LONG':
-            struct_stop = min(op.high * (1 - 0.001), c.low * (1 - 0.0005))
+            struct_stop = min(op.high * (1 - struct_buf), c.low * (1 - wick_buf))
             if stop_mode == 'structure':
                 stop = struct_stop
             else:
                 stop = min(struct_stop, entry - atr_dist) if atr_dist else struct_stop
             targets = sorted(x for x in st.info.resistance if x > entry * 1.001)
         else:
-            struct_stop = max(op.low * (1 + 0.001), c.high * (1 + 0.0005))
+            struct_stop = max(op.low * (1 + struct_buf), c.high * (1 + wick_buf))
             if stop_mode == 'structure':
                 stop = struct_stop
             else:
