@@ -37,6 +37,16 @@ class PositionSizeTests(unittest.TestCase):
         self.assertEqual(s['risk_budget'], 3000.0)
         self.assertEqual(s['qty'], 1500)          # 3000 / 2.0
 
+    def test_decimal_inputs_from_oracle(self):
+        # Oracle NUMBER columns hand back decimal.Decimal, not float. Mixing those with the float
+        # literals inside position_size used to raise TypeError in prod (SQLite returns floats, so
+        # the suite never caught it). All four args may be Decimal; sizing must still work.
+        from decimal import Decimal
+        s = position_size(Decimal('101.0'), Decimal('100.0'), Decimal('600000'), Decimal('1.0'))
+        self.assertEqual(s['risk_budget'], 6000.0)
+        self.assertEqual(s['qty'], 6000)
+        self.assertEqual(s['actual_risk'], 6000.0)
+
 
 def _sig(state, **kw):
     base = dict(time='2026-11-05 10:00:00', symbol='NSE:BHARTIARTL-EQ', side='LONG',
