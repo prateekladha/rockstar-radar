@@ -246,7 +246,11 @@ async def api_put_watchlist(request: Request, user: User = Depends(require_user)
 @app.get('/api/settings')
 def api_get_settings(user: User = Depends(require_user)):
     base = {k: load_config().get(k) for k in EDITABLE_CONFIG}
-    base.update((user.settings.data if user.settings else {}) or {})
+    # Only expose EDITABLE keys. A non-editable key that happens to live in settings.data (e.g.
+    # sim_speed, which the Preferences page manages via /api/me) would otherwise be echoed back by the
+    # settings grid's Save and rejected by validate_config_patch ("Unknown or protected config field").
+    overrides = (user.settings.data if user.settings else {}) or {}
+    base.update({k: v for k, v in overrides.items() if k in EDITABLE_CONFIG})
     return base
 
 
