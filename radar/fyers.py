@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import secrets
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -27,6 +28,14 @@ class ApiRateLimitError(ApiError):
 
 class ApiPermissionError(ApiError):
     pass
+
+
+# The FYERS SDK writes fyersApi.log / fyersDataSocket.log into log_path, falling back to the process
+# CWD when it is empty. The scanner's CWD is /app, which the non-root (uid 10001) container user cannot
+# write, so an empty log_path raises PermissionError at client/socket construction and the scanner
+# crash-loops on start with zero live feed. Point it at the temp dir, which is always writable. (Mirrors
+# server/broker_orders.py and server/sim_data_fetcher.py, which already do this.)
+_FYERS_LOG_DIR = tempfile.gettempdir()
 
 
 class ApiInputError(ApiError):
@@ -88,7 +97,7 @@ class FyersAdapter:
         except ImportError as e:
             raise ApiError('Install FYERS SDK first: python -m pip install -r requirements.txt') from e
         self.client = fyersModel.FyersModel(client_id=self.app_id, token=self.token,
-                                           is_async=False, log_path='')
+                                           is_async=False, log_path=_FYERS_LOG_DIR)
         self.limit = RateLimiter(config.get('history_request_interval_seconds', 2.5))
 
     def request(self, method: str, data: dict) -> dict:
@@ -334,7 +343,7 @@ class FyersAdapter:
             on_health('DISCONNECTED: ' + str(msg)[:140])
 
         holder['socket'] = data_ws.FyersDataSocket(
-            access_token=token, log_path='', litemode=False,
+            access_token=token, log_path=_FYERS_LOG_DIR, litemode=False,
             write_to_file=False, reconnect=True, reconnect_retry=10,
             on_connect=on_connect, on_message=handle_message,
             on_error=on_error, on_close=on_close
