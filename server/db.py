@@ -6,16 +6,58 @@
   - SQLite (dev/tests): the default.
 """
 from __future__ import annotations
+import json
 import os
 import time
+from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import JSON, create_engine, inspect, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.types import TypeDecorator
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+# --- Oracle native-JSON Decimal hardening -------------------------------------------------------
+# Oracle 23ai's native JSON type hands numeric scalars back as decimal.Decimal (via python-oracledb).
+# The rest of the app treats JSON config values (capital_inr, risk_pct, strategy params, …) as plain
+# floats, so a stray Decimal both (a) breaks float arithmetic — e.g. radar.risk.position_size did
+# `Decimal * float`, which 500'd the Telegram test and every live signal alert — and (b) is not
+# JSON-serializable on the next write, which 500'd saving settings. SQLite (dev/tests) returns plain
+# floats, so none of this showed up in the suite. We normalise Decimal -> float at the DB boundary so
+# nothing downstream ever sees a Decimal.
+def _decimals_to_float(obj):
+    """Recursively replace decimal.Decimal with float anywhere in a JSON-like value."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _decimals_to_float(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_decimals_to_float(v) for v in obj]
+    return obj
+
+
+def _json_serializer(value):
+    """json.dumps that tolerates Decimal — engine-wide backstop for any JSON written as a plain
+    Column(JSON) (DecimalSafeJSON already coerces on its own)."""
+    return json.dumps(_decimals_to_float(value))
+
+
+class DecimalSafeJSON(TypeDecorator):
+    """A JSON column immune to Oracle returning JSON numbers as decimal.Decimal: coerces Decimal ->
+    float on both bind (write) and result (read), so consumers always get plain floats. impl stays
+    JSON, so the stored column type — and therefore the schema — is unchanged."""
+    impl = JSON
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return _decimals_to_float(value)
+
+    def process_result_value(self, value, dialect):
+        return _decimals_to_float(value)
 
 
 def _build_engine():
@@ -25,10 +67,12 @@ def _build_engine():
                          username=os.environ.get('DB_USER', 'ROCKSTAR_APP'),
                          password=os.environ.get('DB_APP_PASSWORD', ''))
         return create_engine(url, connect_args={'dsn': dsn}, pool_pre_ping=True,
-                             pool_size=5, max_overflow=5, pool_recycle=1800, future=True)
+                             pool_size=5, max_overflow=5, pool_recycle=1800, future=True,
+                             json_serializer=_json_serializer)
     db_url = os.environ.get('DATABASE_URL', f'sqlite:///{ROOT / "data" / "radar.db"}')
     connect_args = {'check_same_thread': False} if db_url.startswith('sqlite') else {}
-    return create_engine(db_url, connect_args=connect_args, pool_pre_ping=True, future=True)
+    return create_engine(db_url, connect_args=connect_args, pool_pre_ping=True, future=True,
+                         json_serializer=_json_serializer)
 
 
 engine = _build_engine()
