@@ -87,6 +87,7 @@ EDITABLE_CONFIG = {
     # widened to >= ATR floor ('atr_floor') or the bare structural level ('structure').
     'smc_stop_mode': ('choice', ('ob_atr', 'structure'), None),
     'orb_stop_mode': ('choice', ('atr_floor', 'structure'), None),
+    'orb_struct_buffer_pct': ('num', 0, 5),
     # Max auto entries per symbol per day (both auto strategies share the count); re-entry churn guard.
     'max_trades_per_symbol': ('int', 1, 20),
     # --- Paper→live parity (docs/PAPER_LIVE_PARITY.md) --------------------------------------------
