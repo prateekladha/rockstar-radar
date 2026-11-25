@@ -254,6 +254,19 @@ def api_get_settings(user: User = Depends(require_user)):
     return base
 
 
+@app.get('/api/activity')
+def api_activity(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Unseen-activity signal for the nav 'new' dots: the latest Order id and latest SignalLog id for
+    this user. The client compares these to what it last saw (localStorage) and shows a dot on the
+    Trades / Journal tabs — cleared when the tab is opened, re-shown on the next new row. Two cheap
+    indexed MAX queries; polled from the nav."""
+    from sqlalchemy import func
+    from .models import Order, SignalLog
+    trades = db.query(func.max(Order.id)).filter(Order.user_id == user.id).scalar()
+    journal = db.query(func.max(SignalLog.id)).filter(SignalLog.user_id == user.id).scalar()
+    return {'trades': int(trades or 0), 'journal': int(journal or 0)}
+
+
 @app.patch('/api/settings')
 async def api_patch_settings(request: Request, user: User = Depends(require_user),
                              db: Session = Depends(get_db)):

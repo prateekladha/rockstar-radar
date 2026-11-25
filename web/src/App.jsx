@@ -103,12 +103,58 @@ function RouteTracker() {
   return null
 }
 
+// Shows a 'new' dot on the Trades / Journal tabs when a new order / journal row appeared since the user
+// last opened that tab. Polls the cheap /api/activity (latest ids), remembers what was seen per user in
+// localStorage, and clears the dot the moment the user is on that tab.
+function useActivityDots(user) {
+  const loc = useLocation()
+  const uid = user?.id
+  const [activity, setActivity] = useState(null)   // {trades, journal} latest ids; null until first poll
+  const [seen, setSeen] = useState(null)           // {trades, journal} last-seen ids
+  const key = uid ? 'rr_seen_activity_' + uid : null
+  const save = (s) => { try { if (key) localStorage.setItem(key, JSON.stringify(s)) } catch {} }
+
+  useEffect(() => { setActivity(null); setSeen(null) }, [uid])   // reset on user switch
+
+  useEffect(() => {
+    if (!uid) return
+    let alive = true
+    const poll = () => api('/api/activity').then(a => { if (alive) setActivity(a) }).catch(() => {})
+    poll(); const t = setInterval(poll, 15000)
+    return () => { alive = false; clearInterval(t) }
+  }, [uid])
+
+  // Initialise `seen` once we have activity: from localStorage, else baseline to current so pre-existing
+  // rows don't light the dot on first load — only NEW rows after this point do.
+  useEffect(() => {
+    if (!uid || !activity || seen !== null) return
+    let s = null
+    try { s = JSON.parse(localStorage.getItem(key) || 'null') } catch {}
+    if (!s) { s = { ...activity }; save(s) }
+    setSeen(s)
+  }, [uid, activity, seen, key])
+
+  // Clear the dot for whichever tab the user is currently on.
+  useEffect(() => {
+    if (!activity || !seen) return
+    const k = { '/trades': 'trades', '/journal': 'journal' }[loc.pathname]
+    if (k && (activity[k] || 0) > (seen[k] || 0)) {
+      const s = { ...seen, [k]: activity[k] }; setSeen(s); save(s)
+    }
+  }, [loc.pathname, activity, seen])
+
+  const a = activity || { trades: 0, journal: 0 }
+  const s = seen || a
+  return { trades: (a.trades || 0) > (s.trades || 0), journal: (a.journal || 0) > (s.journal || 0) }
+}
+
 function Shell({ user, onLogout }) {
   const [menu, setMenu] = useState(false)
   const [support, setSupport] = useState(false)
   const menuRef = useRef(null)
   const nav = useNavigate()
   const loc = useLocation()
+  const dots = useActivityDots(user)
   useEffect(() => {
     const close = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenu(false) }
     document.addEventListener('click', close); return () => document.removeEventListener('click', close)
@@ -158,7 +204,10 @@ function Shell({ user, onLogout }) {
         ) : (
           <div className="tabs">
             {NAV.map(([p, lbl]) => (
-              <NavLink key={p} to={p} className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>{lbl}</NavLink>
+              <NavLink key={p} to={p} className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>
+                {lbl}{((p === '/trades' && dots.trades) || (p === '/journal' && dots.journal))
+                  && <span className="nav-dot" title="New activity since you last viewed" />}
+              </NavLink>
             ))}
           </div>
         )}
