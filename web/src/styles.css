@@ -140,6 +140,10 @@ textarea{min-height:160px;resize:vertical;font-family:var(--mono)}
 .banner.warn{border-color:#6a561f;background:var(--warn-bg);color:var(--warn-ink)}
 .banner.ok{border-color:#1f6f49;background:var(--long-bg);color:var(--long-ink)}
 .banner.err{border-color:#8a2b42;background:var(--short-bg);color:var(--short-ink)}
+/* Toast modifier: float the save/confirmation banner fixed bottom-right so it's visible regardless of
+   how far down a long settings page the Save button is (the inline banner rendered above the fold). */
+.banner.toast{position:fixed;right:16px;bottom:16px;z-index:1000;margin:0;max-width:min(360px,calc(100vw - 32px));box-shadow:0 8px 24px rgba(0,0,0,.4);animation:toastIn .2s ease-out}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
 /* profile menu */
 .menu{position:absolute;top:118%;right:0;min-width:240px;max-width:300px;background:var(--surface-2);border:1px solid var(--border-2);border-radius:12px;padding:6px;box-shadow:var(--sh-lg);z-index:60}
