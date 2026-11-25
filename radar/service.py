@@ -191,6 +191,30 @@ def restore_today_from_local_logs(engine: RadarEngine, journal: SessionJournal,
     return restored_candles, restored_events
 
 
+def seed_smc_with_restored_today(engine, smc_engine) -> int:
+    """Seed the SMC engine with TODAY's restored bars so its cumulative RVOL survives a mid-session
+    restart. restore_today_from_local_logs() restores today's completed candles into the ORB engine
+    (engine.states[*].completed) from the local-log CSVs; the SMC warm-up (load_smc_history) deliberately
+    loads only PRIOR sessions (up to 09:15), so after a restart the SMC candle buffer holds no morning
+    bars and its rvol_from_candles() reads ~0 for the rest of the day — collapsing the SMC confluence /
+    ranking (and, before we decoupled it, emptying the SMC radar). We merge today's already-restored bars
+    (same local-log source as ORB — no extra FYERS REST) into each SMC symbol's buffer and re-run its
+    analysis. Call AFTER load_smc_history so the prior-session history is already loaded. Returns the
+    number of symbols seeded. Best-effort: the caller guards it so warm-up never breaks."""
+    seeded = 0
+    for symbol, st in engine.states.items():
+        todays = list(getattr(st, 'completed', {}).values())
+        if not todays or symbol not in smc_engine.states:
+            continue
+        by_ts = {int(c.at.timestamp()): c for c in smc_engine.states[symbol].candles}
+        for c in todays:                       # today's restored bars win over any 09:15 boundary overlap
+            by_ts[int(c.at.timestamp())] = c
+        merged = [by_ts[k] for k in sorted(by_ts)]
+        smc_engine.load_historical_candles(symbol, merged)
+        seeded += 1
+    return seeded
+
+
 def cache_smc_history(adapter: FyersAdapter, symbols: list[str], day: date,
                       config: dict, force: bool = False) -> dict[str, bool]:
     """Pre-fetch and cache SMC historical candles (for warmup phase).
@@ -536,6 +560,18 @@ def start_live(config: dict, selection_path: Path, port: int):
     except Exception as e:
         print(f'SMC history loading failed (non-critical): {type(e).__name__}: {e}')
         print('SMC engine will build context from real-time data (slower to start)')
+
+    # Restart-safe SMC RVOL: after a mid-session restart, fold today's RESTORED bars (ORB already
+    # restored them into engine.states[*].completed from the local logs) into the SMC candle buffer, so
+    # SMC cumulative RVOL reflects the full session instead of reading ~0. No-op on a clean morning start
+    # (nothing restored). Guarded so it can never break warm-up.
+    if restored_candles:
+        try:
+            _smc_seeded = seed_smc_with_restored_today(engine, smc_engine)
+            print(f"Seeded SMC engine with today's restored bars for {_smc_seeded} symbols "
+                  '(restart-safe RVOL).')
+        except Exception as e:
+            print(f'SMC restart-seed failed (non-critical): {type(e).__name__}: {e}')
 
     # Realtime path: aggregate websocket ticks into completed signal-interval candles and feed
     # them as PROVISIONAL bars (confirm ~1s after close). REST history reconciles each one.
