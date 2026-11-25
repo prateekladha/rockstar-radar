@@ -75,19 +75,28 @@ def notify_daily_pnl(db: Session) -> None:
 
 
 def remind_reconnect(db: Session, conns: list[BrokerConnection]) -> int:
-    """DM each user (who gave a Telegram chat id) whose broker needs today's login, with the link."""
-    token = _support_token()
-    if not token:
-        return 0
+    """DM each user whose broker needs today's login, with the link — via their OWN registered Telegram
+    bot (the per-user alert bot: AlertConfig.telegram_token_enc + telegram_chat_id, the same creds that
+    deliver their signal alerts), NOT the shared support bot (which isn't provisioned on OKE). A user
+    with no per-user bot configured simply gets no reminder."""
+    from .crypto import decrypt
+    from .models import AlertConfig
     sent = 0
     for c in conns:
         u = c.user
-        if not u or not u.telegram_chat_id:
+        if not u:
+            continue
+        cfg = db.query(AlertConfig).filter_by(user_id=u.id).first()
+        if cfg is None:
+            continue
+        token = decrypt(cfg.telegram_token_enc)
+        chat = (cfg.telegram_chat_id or '').strip()
+        if not token or not chat:
             continue
         text = (f'🔔 <b>Rockstar Radar</b> — log in to your broker for today before the market opens '
                 f'so your scan runs.\n👉 {_site()}/brokers')
         try:
-            if send_telegram(text, token=token, chat_id=u.telegram_chat_id).get('ok'):
+            if send_telegram(text, token=token, chat_id=chat).get('ok'):
                 sent += 1
         except Exception as e:
             print(f'reconnect reminder failed for {u.email}: {e}')
