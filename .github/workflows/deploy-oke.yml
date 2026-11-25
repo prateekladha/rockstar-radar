@@ -73,16 +73,21 @@ jobs:
           # its pod template is unchanged and the stateful scanner is NOT restarted. Only bump it when
           # deploy_scanner=true (or on the very first install, where there's nothing running yet).
           CUR=$(kubectl -n rockstar-radar get deploy scanner -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://')
+          # deployScanner=true renders (and therefore may roll) the stateful scanner. We do that ONLY
+          # on a deliberate manual run (deploy_scanner=true) or the first install (no scanner yet). On
+          # a routine auto PR-merge push it stays false: the scanner Deployment is omitted from the
+          # manifest and its resource-policy:keep leaves the running pod untouched (no feed blip).
           if [ "${{ github.event.inputs.deploy_scanner }}" = "true" ] || [ -z "$CUR" ]; then
-            SCANNER_TAG="$SHA"
+            SCANNER_TAG="$SHA"; DEPLOY_SCANNER=true
           else
-            SCANNER_TAG="$CUR"
+            SCANNER_TAG="$CUR"; DEPLOY_SCANNER=false
           fi
-          echo "web tag=$SHA  scanner tag=$SCANNER_TAG"
+          echo "web tag=$SHA  scanner tag=$SCANNER_TAG  deployScanner=$DEPLOY_SCANNER"
           $HELM upgrade --install rockstar deploy/helm/rockstar -n rockstar-radar \
             -f deploy/helm/values-shared.yaml \
             --set image.repository="$REGISTRY/app" --set image.tag="$SHA" \
             --set scanner.imageTag="$SCANNER_TAG" \
+            --set scanner.deployScanner=$DEPLOY_SCANNER \
             --set oci.region="${{ vars.OCI_REGION }}" \
             --set oci.vaultId="${{ vars.OCI_VAULT_ID }}" \
             --set oci.compartmentId="${{ vars.OCI_COMPARTMENT_ID }}" \

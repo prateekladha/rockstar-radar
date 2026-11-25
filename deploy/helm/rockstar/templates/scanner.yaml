@@ -1,7 +1,23 @@
+{{- /* The scanner is a stateful singleton (one owner of the FYERS locks + live feed). This Deployment
+       is rendered ONLY on a deliberate scanner deploy (scanner.deployScanner=true — the manual
+       "Run workflow" path / first install). On a ROUTINE auto PR-merge deploy it is omitted from the
+       manifest, and helm.sh/resource-policy:keep tells Helm to leave the running scanner untouched
+       (not prune it) — so an auto-merge can NEVER roll the live feed, even if the scanner template
+       itself changed. Migration-safe: until the live Deployment already carries the keep annotation,
+       the gate below still renders it, so it is never pruned. (lookup is empty during `helm template`,
+       which likewise renders it — the fail-safe direction is "render", never "delete".) */}}
+{{- $live := lookup "apps/v1" "Deployment" .Release.Namespace "scanner" }}
+{{- $hasKeep := false }}
+{{- if $live }}
+{{-   $hasKeep = hasKey ($live.metadata.annotations | default dict) "helm.sh/resource-policy" }}
+{{- end }}
+{{- if or .Values.scanner.deployScanner (not $hasKeep) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: scanner
+  annotations:
+    helm.sh/resource-policy: keep
   labels:
     app: scanner
     {{- include "rockstar.labels" . | nindent 4 }}
@@ -54,7 +70,9 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: scanner-data }
+{{- end }}
 ---
+# Service / PVC / PDB are stable singletons — always rendered (applying them never rolls the pod).
 apiVersion: v1
 kind: Service
 metadata: { name: scanner, labels: { app: scanner } }

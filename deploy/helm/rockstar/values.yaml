@@ -39,6 +39,10 @@ web:
 # scanner: stateful (live FYERS feed + per-user subprocesses + day-state on a PVC). Single replica,
 # Recreate — never two managers fighting over the FYERS locks. Deployed only when scanner code changes.
 scanner:
+  # false on a routine auto PR-merge deploy -> the scanner Deployment is NOT rendered and the running
+  # pod is left untouched (helm.sh/resource-policy:keep), so an auto-merge can never roll the live feed.
+  # CI sets this true only on a manual "Run workflow" with deploy_scanner=true (or first install).
+  deployScanner: false
   imageTag: ""                # pinned by CI to the currently-deployed tag on a web-only deploy
   storageSize: 10Gi
   storageClass: oci-bv        # OCI Block Volume (default on OKE)
