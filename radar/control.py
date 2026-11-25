@@ -86,6 +86,11 @@ EDITABLE_CONFIG = {
     # ATR distance ('ob_atr') or the nearest swing ('structure'). ORB retest: structural level
     # widened to >= ATR floor ('atr_floor') or the bare structural level ('structure').
     'smc_stop_mode': ('choice', ('ob_atr', 'structure'), None),
+    # Noise-clearing floor: widen the SMC stop to >= smc_atr_stop_floor_mult x the symbol's DAILY ATR
+    # so an order-block/structure stop doesn't sit inside the 5m noise band (the hair-trigger stop-outs
+    # that bled the SMC backtests). Off by default; mult default 0.5 (1.0 was best in validation).
+    'smc_atr_stop_floor': ('bool', None, None),
+    'smc_atr_stop_floor_mult': ('float', 0.0, 5.0),
     'orb_stop_mode': ('choice', ('atr_floor', 'structure'), None),
     'orb_struct_buffer_pct': ('num', 0, 5),
     # Max auto entries per symbol per day (both auto strategies share the count); re-entry churn guard.

@@ -25,7 +25,7 @@ export default function AutoTrade() {
 const STRATEGY_KEYS = [
   'auto_trade_smc', 'auto_trade_smc_min_score', 'auto_trade_smc_atr_stop_mult', 'auto_trade_trigger',
   'smc_runner_target', 'smc_enforce_min_rr', 'smc_block_reentry_after_stop',
-  'smc_stop_mode', 'orb_stop_mode', 'max_trades_per_symbol',
+  'smc_stop_mode', 'smc_atr_stop_floor', 'smc_atr_stop_floor_mult', 'orb_stop_mode', 'max_trades_per_symbol',
 ]
 const STRATEGY_SET = new Set(STRATEGY_KEYS)
 // Keys in the /api/settings payload that aren't plain numbers — rendered specially in <StrategyRisk/>.
@@ -190,6 +190,19 @@ function AutoTradeFlags() {
                 { value: 'structure', label: 'Structure (nearest swing)' },
               ]} />
             <p className="note" style={{ marginTop: 8 }}>Where the SMC stop sits when price isn't inside a fresh order block.</p>
+          </div>
+          <div className="field"><label>SMC noise-clearing stop floor</label>
+            <button className={'toggle' + (cfg.smc_atr_stop_floor ? ' on' : '')} role="switch" aria-checked={!!cfg.smc_atr_stop_floor}
+              onClick={() => set('smc_atr_stop_floor', !cfg.smc_atr_stop_floor)}><span className="knob" />{cfg.smc_atr_stop_floor ? 'On' : 'Off'}</button>
+            <p className="note" style={{ marginTop: 8 }}>On: widen the SMC stop to at least a fraction of the symbol's daily ATR so it clears the 5-min noise band — the fix for the hair-trigger stop-outs. In the 10-day validation this cut SMC from −₹52k to −₹5k.</p>
+            {cfg.smc_atr_stop_floor && (
+              <div style={{ marginTop: 10 }}>
+                <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Floor = this × daily ATR</label>
+                <input type="number" step="0.1" min="0" max="5" value={cfg.smc_atr_stop_floor_mult ?? 0.5}
+                  onChange={ev => set('smc_atr_stop_floor_mult', ev.target.value)} />
+                <p className="note" style={{ marginTop: 6 }}>1.0 = one full day-ATR below/above entry (best in validation); 0.5 is the default.</p>
+              </div>
+            )}
           </div>
           <div className="field"><label>ORB retest stop placement</label>
             <Select value={cfg.orb_stop_mode || 'atr_floor'} width={'100%'}
