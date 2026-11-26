@@ -250,6 +250,7 @@ class Order(Base):
             'status': self.status, 'order_type': self.order_type, 'mode': self.mode,
             'working': self.status == 'pending', 'source': self.source,
             'pnl': self.pnl, 'result_r': self.result_r, 'unrealized': unreal, 'note': self.note,
+            'ltp': last_price,   # live price (open positions) so the UI can show it next to entry
             'gross_pnl': self.gross_pnl, 'charges': self.charges, 'exit_reason': self.exit_reason,
         }
 

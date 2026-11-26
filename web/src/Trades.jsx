@@ -76,17 +76,18 @@ export default function Trades() {
         <div className="tbl-wrap" style={{ maxHeight: 'none' }}>
           <table>
             <thead><tr><th>Symbol</th><th>Via</th><th>Side</th><th className="num">Qty</th><th className="num">Fill</th>
-              <th className="num">Stop</th><th className="num">Target</th><th className="num">Running P&L</th><th></th></tr></thead>
+              <th className="num">LTP</th><th className="num">Stop</th><th className="num">Target</th><th className="num">Running P&L</th><th></th></tr></thead>
             <tbody>
               {positions.length ? positions.map(o => (
                 <tr key={o.id}><td className="sym-cell">{bare(o.symbol)}</td>
                   <td><SourceTag src={o.source} /></td>
                   <td className={o.side === 'LONG' ? 'up' : 'down'}>{label(o.side)}</td>
                   <td className="num">{o.qty}</td><td className="num">{fmt(o.fill_price != null ? o.fill_price : o.entry)}</td>
+                  <td className="num">{o.ltp != null ? fmt(o.ltp) : '—'}</td>
                   <td className="num">{fmt(o.stop)}</td><td className="num">{fmt(o.target)}</td>
                   <td className={'num ' + (o.unrealized != null ? (o.unrealized >= 0 ? 'up' : 'down') : '')}>{o.unrealized != null ? money(o.unrealized) : '—'}</td>
                   <td className="num"><button className="btn danger" onClick={() => close(o.id)}>Close</button></td></tr>
-              )) : <tr><td colSpan="9"><div className="empty">No open positions. Place an order or act on a radar signal.</div></td></tr>}
+              )) : <tr><td colSpan="10"><div className="empty">No open positions. Place an order or act on a radar signal.</div></td></tr>}
             </tbody>
           </table>
         </div>
