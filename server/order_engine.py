@@ -195,11 +195,18 @@ def _parity_ctx(db: Session, user: User, cfg: dict):
 
 
 def _gate_entry(cfg: dict, *, app_id, token, side, fy_symbol, qty, entry, turnover_cr,
-                committed: float):
+                committed: float, paper_capital: float | None = None):
     """All pre-placement parity gates for ONE candidate. Returns the ₹ margin to reserve for it
     (0.0 when the margin gate is off), or None to SKIP the entry.
-    Gates: liquidity sanity (notional vs daily turnover), real broker margin fundability, and the
-    intraday-leverage floor (a ~1x stock gets no real MIS benefit). See docs/PAPER_LIVE_PARITY.md."""
+    Gates: liquidity sanity (notional vs daily turnover), margin fundability, and the intraday-leverage
+    floor (a ~1x stock gets no real MIS benefit). See docs/PAPER_LIVE_PARITY.md.
+
+    Fundability is checked against `paper_capital` — the user's CONFIGURED paper capital — when given,
+    not the real broker balance. Paper trading funds against your settings balance; the live broker
+    balance is irrelevant to paper and is often ₹0 for a data/unfunded FYERS login, which would
+    (wrongly) block every paper entry. The margin REQUIREMENT and the leverage still come from the real
+    FYERS margin API, so sizing stays realistic — a position still can't exceed what the paper capital
+    can margin. Falls back to the broker's available balance only when no paper_capital is supplied."""
     cap_pct = float(cfg.get('fill_max_pct_daily_turnover', 0) or 0)
     if cap_pct > 0 and turnover_cr and (qty * entry / 1e7) > cap_pct / 100.0 * float(turnover_cr):
         return None
@@ -213,7 +220,8 @@ def _gate_entry(cfg: dict, *, app_id, token, side, fy_symbol, qty, entry, turnov
     lev = _intraday_leverage(qty * entry, mg['margin_total'])
     if lev is not None and lev < float(cfg.get('intraday_leverage_floor', 1.0) or 1.0):
         return None
-    if not _fundable(mg['margin_total'], mg['margin_avail'], committed):
+    avail = float(paper_capital) if paper_capital is not None else mg['margin_avail']
+    if not _fundable(mg['margin_total'], avail, committed):
         return None
     return mg['margin_total']
 
@@ -441,7 +449,8 @@ def _auto_trade(db: Session) -> int:
             if gate_on:
                 margin_used = _gate_entry(cfg, app_id=app_id, token=token, side=side,
                                           fy_symbol=_fy_symbol(r.get('symbol')), qty=qty, entry=entry,
-                                          turnover_cr=r.get('turnover_cr'), committed=committed)
+                                          turnover_cr=r.get('turnover_cr'), committed=committed,
+                                          paper_capital=capital)
                 if margin_used is None:
                     continue   # not fundable / no intraday leverage / too illiquid -> skip
                 committed += margin_used
@@ -558,7 +567,8 @@ def _auto_trade_smc(db: Session) -> int:
             if gate_on:
                 margin_used = _gate_entry(cfg, app_id=app_id, token=token, side=side,
                                           fy_symbol=_fy_symbol(o.get('symbol')), qty=qty, entry=entry,
-                                          turnover_cr=o.get('turnover_cr'), committed=committed)
+                                          turnover_cr=o.get('turnover_cr'), committed=committed,
+                                          paper_capital=capital)
                 if margin_used is None:
                     continue
                 committed += margin_used
