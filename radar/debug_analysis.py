@@ -1,6 +1,8 @@
 """Debug single-stock SMC analysis — fetch historical data and run SMC engine for one symbol."""
 from __future__ import annotations
 import json
+import os
+import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -10,16 +12,29 @@ from .models import Candle, Instrument, Tick
 from .selecting import normalize_morning_symbol
 from .service import baseline_history, signal_bar_minutes
 from .smc_engine import SMCEngine, calculate_smc_score_with_breakdown
-from .utils import ROOT, market_dt, now_ist
+from .utils import market_dt, now_ist
 from .prerequisites import PrerequisiteChecker, PrerequisiteConfig
+
+
+# Writable cache location for the debug tab. The `web` pod (which serves /api/debug-stock) runs
+# non-root with a read-only /app and no data PVC mounted, so the old ROOT/data/debug path raised
+# PermissionError on mkdir and broke every analysis. Default to a writable tempdir (ephemeral — this
+# is just a per-day refetch-saver); DEBUG_CACHE_DIR can point it at a persistent volume where one
+# exists. Same fix family as the FYERS log_path move (PR #84).
+_DEBUG_CACHE_DIR = os.environ.get('DEBUG_CACHE_DIR') or str(Path(tempfile.gettempdir()) / 'rockstar_debug')
 
 
 def debug_cache_path(symbol: str, day: date, bar_minutes: int = 5) -> Path:
     """Path for debug cache file (per symbol, per day, per resolution)."""
     # Clean symbol name for filesystem
     clean_symbol = symbol.replace('NSE:', '').replace('-EQ', '').replace(':', '_')
-    debug_dir = ROOT / 'data' / 'debug'
-    debug_dir.mkdir(parents=True, exist_ok=True)
+    debug_dir = Path(_DEBUG_CACHE_DIR)
+    try:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Last-resort fallback if the configured dir is not writable.
+        debug_dir = Path(tempfile.gettempdir()) / 'rockstar_debug'
+        debug_dir.mkdir(parents=True, exist_ok=True)
     return debug_dir / f'{clean_symbol}_{day.isoformat()}_{int(bar_minutes)}m.json'
 
 
