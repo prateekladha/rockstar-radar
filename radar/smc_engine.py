@@ -1200,6 +1200,45 @@ class SMCEngine:
             opportunities.sort(key=lambda x: x.score, reverse=True)
             return opportunities
 
+    def debug_scores(self) -> dict:
+        """Read-only visibility into WHY the SMC radar is (or isn't) firing: every symbol's live zone
+        and score WITHOUT the >=35 opportunity filter, plus a summary. Explains an empty radar at a
+        glance (e.g. 'max score 28; 94/100 in EQUILIBRIUM' -> no premium/discount extreme to fade).
+        Never mutates engine state — it reuses the same zone/score math get_opportunities relies on,
+        but skips the order-block mitigation refresh (so scores can trail the live value by at most one
+        tick; good enough for a diagnostic)."""
+        from collections import Counter
+        with self.lock:
+            rows = []
+            for symbol, state in self.states.items():
+                n = len(state.candles)
+                price = state.last_tick.price if state.last_tick else None
+                zone = score = None
+                if n >= 101 and price and state.trailing_high and state.trailing_low:
+                    zhi, zlo = zone_range(state)
+                    if zhi and zlo and zhi > zlo:
+                        zc = get_current_zone(price, calculate_zones(zhi, zlo))
+                        zone = zc.zone_type if zc else None
+                    score = calculate_smc_score(state, price)
+                rows.append({
+                    'symbol': symbol, 'price': price, 'zone': zone, 'score': score,
+                    'candles': n, 'order_blocks': len(state.order_blocks),
+                    'fresh_order_blocks': sum(1 for ob in state.order_blocks if not ob.mitigated),
+                })
+            scored = [r for r in rows if r['score'] is not None]
+            return {
+                'symbols': len(rows),
+                'scored': len(scored),
+                'warming': sum(1 for r in rows if r['candles'] < 101),
+                'opportunity_threshold': 35,
+                'max_score': max((r['score'] for r in scored), default=None),
+                'at_or_above_threshold': sum(1 for r in scored if r['score'] >= 35),
+                'near_miss_20_to_34': sum(1 for r in scored if 20 <= r['score'] < 35),
+                'zone_distribution': dict(Counter(r['zone'] for r in scored)),
+                'rows': sorted(rows, key=lambda r: (r['score'] if r['score'] is not None else -1),
+                               reverse=True),
+            }
+
     def get_state(self, symbol: str) -> Optional[SMCSymbolState]:
         """Get SMC state for a specific symbol"""
         with self.lock:

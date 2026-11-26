@@ -565,6 +565,15 @@ def api_smc_radar(user: User = Depends(require_user), db: Session = Depends(get_
     return state
 
 
+@app.get('/api/smc-debug')
+def api_smc_debug(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Read-only SMC diagnostic: every symbol's live zone + score with NO >=35 opportunity filter, so
+    an empty SMC radar can be explained at a glance (zone distribution, top score, near-misses).
+    Reflects THIS user's scanner; 'offline' when it isn't running."""
+    from . import scanners
+    return scanners.smc_debug(db, user)
+
+
 def _internal_authorized(request: Request) -> bool:
     """Cluster-internal endpoints are reachable only inside the K8s network and gated by a shared
     token (INTERNAL_TOKEN). When no token is configured (single container / dev) they're open —
@@ -596,6 +605,18 @@ def internal_smc_state(user_id: int, request: Request, db: Session = Depends(get
     if not u:
         return {'offline': True, 'opportunities': []}
     return scanners._smc_state_local(db, u)
+
+
+@app.get('/internal/smc-debug')
+def internal_smc_debug(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """The scanner pod serves the local SMC debug view (zone + score per symbol) for the web pod. Not public."""
+    from . import scanners
+    if not _internal_authorized(request):
+        return JSONResponse({'error': 'forbidden'}, status_code=403)
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        return {'offline': True, 'rows': []}
+    return scanners._smc_debug_local(db, u)
 
 
 @app.get('/healthz')
