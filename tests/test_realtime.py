@@ -67,6 +67,23 @@ class RealtimeTests(unittest.TestCase):
         self.assertNotIn(int(market_dt(DAY, '09:25').timestamp()), st.provisional_ts)
         self.assertFalse(any(ev.state == 'RETRACTED' for ev in e.events))
 
+    def test_confirmed_breakout_ticket_repriced_on_authoritative_validation(self):
+        # The breakout ticket (what lets trigger=CONFIRMED enter on the breakout) is attached on the
+        # provisional confirmation AND re-priced when the authoritative bar validates it, so a live
+        # trigger=CONFIRMED entry is always sized off real (non-provisional) data.
+        e = base_engine()
+        set_fresh_tick(e, CONFIRM_OBS)
+        e.ingest_live_bar(SYM, CONFIRM_BAR, observed_at=CONFIRM_OBS)
+        st = e.states[SYM]
+        self.assertEqual(st.entry, 101.3)                 # ticket present on the provisional confirm
+        self.assertEqual(st.target, 105.0)
+        set_fresh_tick(e, CONFIRM_OBS)
+        e.ingest_closed_bar(SYM, CONFIRM_BAR, observed_at=CONFIRM_OBS, provisional=False)
+        self.assertFalse(st.confirm_provisional)
+        self.assertEqual(st.entry, 101.3)                 # still priced after authoritative validation
+        self.assertEqual(st.target, 105.0)
+        self.assertGreater(st.net_rr, 2)
+
     def test_authoritative_bar_retracts_false_provisional_confirmation(self):
         e = base_engine()
         set_fresh_tick(e, CONFIRM_OBS)

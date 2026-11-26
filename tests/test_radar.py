@@ -86,6 +86,30 @@ class RadarTests(unittest.TestCase):
         self.assertEqual(e.states[SYM].state, 'RETEST_READY')
         self.assertGreater(e.states[SYM].net_rr, 2)
 
+    def test_confirmed_carries_breakout_ticket(self):
+        # A CONFIRMED breakout whose net-R:R clears the gate must carry an entry/stop/target so
+        # trigger=CONFIRMED can enter on the breakout itself (not only on a later retest).
+        e = engine(highs=[1020])            # target far enough above the 1005 breakout to clear 2:1
+        e.ingest_closed_bar(SYM, cd('09:15', 1000, 1004, 998, 1002, 20000), market_dt(DAY, '09:20'))
+        e.ingest_closed_bar(SYM, cd('09:20', 1002, 1007, 1001, 1005, 20000), market_dt(DAY, '09:25'))
+        st = e.states[SYM]
+        self.assertEqual(st.state, 'CONFIRMED')
+        self.assertEqual(st.entry, 1005)                 # the confirming close
+        self.assertAlmostEqual(st.stop, 1000.4995, places=3)  # structural, below the OR high
+        self.assertEqual(st.target, 1020)
+        self.assertGreater(st.net_rr, 2)
+
+    def test_confirmed_no_ticket_when_rr_fails(self):
+        # A CONFIRMED breakout whose nearest target is too close to clear 2:1 must leave the ticket
+        # UNSET and stay CONFIRMED — the pre-fix behaviour: it waits for a tighter-risk retest entry.
+        e = engine(highs=[1010])            # target only ~5 pts above a ~5-pt risk -> net R:R < 2
+        e.ingest_closed_bar(SYM, cd('09:15', 1000, 1004, 998, 1002, 20000), market_dt(DAY, '09:20'))
+        e.ingest_closed_bar(SYM, cd('09:20', 1002, 1007, 1001, 1005, 20000), market_dt(DAY, '09:25'))
+        st = e.states[SYM]
+        self.assertEqual(st.state, 'CONFIRMED')
+        self.assertIsNone(st.entry)
+        self.assertIsNone(st.stop)
+
     def test_failed_retest(self):
         e = engine()
         e.ingest_closed_bar(SYM, cd('09:15', 1000, 1004, 998, 1002, 20000), market_dt(DAY, '09:20'))
