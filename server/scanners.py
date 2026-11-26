@@ -415,6 +415,38 @@ def start_for_broker(db: Session, conn: BrokerConnection) -> bool:
 start_for_household = start_for_broker
 
 
+def stop_all_scanner_processes(proc_root: str = '/proc') -> int:
+    """EOD / new-day cleanup: SIGTERM+SIGKILL every live `launch.py run` scanner process in this
+    container so none lingers overnight holding a per-owner FYERS lock (a stale scanner blocks the next
+    day's feed until it is manually killed). cc-independent — works even if the in-memory _scanners map
+    was lost to a container restart. Linux /proc only (returns 0 elsewhere). Returns how many it hit."""
+    import signal as _sig
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return 0
+    pids = []
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            parts = open(f'{proc_root}/{name}/cmdline', 'rb').read().split(b'\x00')
+        except OSError:
+            continue
+        if b'launch.py' in b' '.join(parts) and b'run' in parts:   # a live 'run' scanner (not sim/demo)
+            pids.append(int(name))
+    for sig in (_sig.SIGTERM, _sig.SIGKILL):
+        for pid in pids:
+            try:
+                os.killpg(os.getpgid(pid), sig)
+            except (OSError, ProcessLookupError):
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+    return len(pids)
+
+
 def _need_login_state(conn, source, label, reason=None) -> dict:
     if not reason:
         reason = (('Your broker session has expired. SEBI requires a fresh login each trading day — '
