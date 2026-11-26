@@ -39,6 +39,29 @@ def test_fundable_unknown_inputs_are_not_fundable():
     assert _fundable(40_000, None, 0) is False
 
 
+def test_gate_entry_funds_against_paper_capital_not_broker_balance(monkeypatch):
+    # Paper must fund against the user's CONFIGURED capital, not the real broker balance — which is
+    # often ₹0 for a data/unfunded FYERS login and would otherwise block every paper entry.
+    import server.order_engine as oe
+    from server import broker_orders
+    # Broker returns a real margin requirement but ZERO available balance (the live situation).
+    monkeypatch.setattr(broker_orders, 'fetch_order_margin',
+                        lambda *a, **k: {'margin_total': 140_000.0, 'margin_avail': 0.0})
+    cfg = {'paper_margin_gate': True, 'intraday_leverage_floor': 1.5, 'fill_max_pct_daily_turnover': 0}
+    common = dict(app_id='A', token='T', side='LONG', fy_symbol='NSE:LT-EQ',
+                  qty=170, entry=4138.1, turnover_cr=None, committed=0.0)
+    # Old behaviour (no paper_capital) funds against broker avail (₹0) -> SKIP. This was the bug.
+    assert oe._gate_entry(cfg, **common) is None
+    # Fix: fund against ₹2L configured capital -> the ₹1.4L position is fundable -> reserve ₹1.4L.
+    assert oe._gate_entry(cfg, paper_capital=200_000.0, **common) == 140_000.0
+    # Realistic discipline preserved: a position too big for the paper capital is still rejected.
+    assert oe._gate_entry(cfg, paper_capital=100_000.0, **common) is None
+    # And the leverage floor still bites (same order, but the broker gives ~1x margin).
+    monkeypatch.setattr(broker_orders, 'fetch_order_margin',
+                        lambda *a, **k: {'margin_total': 700_000.0, 'margin_avail': 0.0})
+    assert oe._gate_entry(cfg, paper_capital=2_000_000.0, **common) is None  # lev ~1.0 < 1.5 floor
+
+
 def test_intraday_leverage():
     # ₹5,00,000 notional on ₹1,00,000 margin = 5x.
     assert _intraday_leverage(500_000, 100_000) == 5.0
