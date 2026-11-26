@@ -597,18 +597,19 @@ def _auto_trade_smc(db: Session) -> int:
 
 
 def _square_off_paper(db: Session) -> int:
-    """Intraday safety at session end (15:15 live, or when the feed's session closes): force-close any
-    still-open real PAPER position whose stop/target didn't trigger, AND cancel any still-WORKING
-    (pending, unfilled) order — a working order must never carry past the square-off into the next day.
-    Simulation orders are EXCLUDED: they live in accelerated sim-time (real 15:15 is irrelevant) and are
-    handled by _square_off_sim."""
+    """Intraday safety at session end (the per-user `square_off_time`, default 15:00, or when the feed's
+    session closes): force-close any still-open real PAPER position whose stop/target didn't trigger, AND
+    cancel any still-WORKING (pending, unfilled) order — a working order must never carry past the
+    square-off into the next day. Simulation orders are EXCLUDED: they live in accelerated sim-time (the
+    real wall-clock cutoff is irrelevant) and are handled by _square_off_sim."""
     from radar.utils import now_ist, load_config
-    slip = load_config().get('paper_slippage_bps', 0)
+    cfg = load_config()
+    slip = cfg.get('paper_slippage_bps', 0)
     orders = (db.query(Order).filter_by(mode='paper').filter(Order.sim == 0)
               .filter(Order.status.in_(('open', 'pending'))).all())
     if not orders:
         return 0
-    live_cutoff = now_ist().strftime('%H:%M') >= '15:15'
+    now_hhmm = now_ist().strftime('%H:%M')
     by_user: dict[int, list[Order]] = {}
     for o in orders:
         by_user.setdefault(o.user_id, []).append(o)
@@ -617,6 +618,10 @@ def _square_off_paper(db: Session) -> int:
         user = db.get(User, uid)
         if user is None:
             continue
+        # Per-user intraday force-flat time (settings override the global default); default 15:00.
+        sdata = (user.settings.data or {}) if user.settings else {}
+        cutoff = str(sdata.get('square_off_time', cfg.get('square_off_time', '15:15')) or '15:15')
+        live_cutoff = now_hhmm >= cutoff
         try:
             st = scanners.radar_state(db, user)
         except Exception:

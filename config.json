@@ -13,6 +13,7 @@
   "use_one_minute_candles": false,
   "watch_start": "09:20",
   "new_signals_stop": "15:00",
+  "square_off_time": "15:00",
   "near_boundary_pct": 0.35,
   "ready_boundary_pct": 0.18,
   "reconcile_signals_only": true,
