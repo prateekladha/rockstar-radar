@@ -350,6 +350,30 @@ def _smc_state_local(db: Session, user: User) -> dict:
         return {'offline': True, 'opportunities': []}
 
 
+def smc_debug(db: Session, user: User) -> dict:
+    """Read-only SMC score/zone diagnostic for this user (every symbol, no >=35 filter). Proxies to
+    the scanner pod on the `web` pod; otherwise runs locally. Mirrors smc_state()."""
+    if SCANNER_HOST:
+        return _proxy_internal('smc-debug', user.id)
+    return _smc_debug_local(db, user)
+
+
+def _smc_debug_local(db: Session, user: User) -> dict:
+    """The local SMC debug view: read-only, never starts a scanner (mirrors _smc_state_local)."""
+    import json
+    import urllib.request
+    import urllib.error
+    cc = effective_cc(db, user)
+    if cc is None:
+        return {'offline': True, 'rows': []}
+    try:
+        with urllib.request.urlopen(
+                f'http://127.0.0.1:{cc.scanner_port}/api/smc-debug', timeout=3) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except (urllib.error.URLError, OSError, ValueError):
+        return {'offline': True, 'rows': []}
+
+
 def connected_brokers(db: Session) -> list[BrokerConnection]:
     """All registered broker connections (for the scheduler to start/refresh)."""
     return (db.query(BrokerConnection)

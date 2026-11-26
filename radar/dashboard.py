@@ -89,6 +89,13 @@ def serve(engine: RadarEngine, port: int = 8765, mode: str = 'LIVE', smc_engine:
                 }
                 content = json.dumps(data, allow_nan=False).encode('utf-8')
                 mime = 'application/json; charset=utf-8'
+            elif route.path == '/api/smc-debug':
+                if smc_engine is None:
+                    self.send_error(404)
+                    return
+                # Per-symbol live zone + score WITHOUT the >=35 filter — explains an empty SMC radar.
+                content = json.dumps(smc_engine.debug_scores(), allow_nan=False).encode('utf-8')
+                mime = 'application/json; charset=utf-8'
             elif route.path == '/api/replay':
                 symbol = (parse_qs(route.query).get('symbol') or [''])[0]
                 data = engine.replay(symbol)

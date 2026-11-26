@@ -323,6 +323,67 @@ class RadarEngine:
         """
         return self.config['min_bar_turnover_cr'] * self.bar_minutes / 5
 
+    def _breakout_levels(self, st: SymbolState, op, entry: float, side: str,
+                         ref_low: float, ref_high: float):
+        """Stop / nearest prior-session target / net-R:R for an entry at `entry`. Shared by the retest
+        entry and the aggressive CONFIRMED (breakout) entry so both price the trade identically.
+        `ref_low`/`ref_high` are the signal candle's wick (the retest candle, or the confirming candle
+        for a breakout entry).
+
+        Stop placement (orb_stop_mode):
+          'atr_floor': stop beyond the OR level and the signal wick, WIDENED to at least atr_mult ×
+              daily ATR so it isn't a sub-0.2% hair-trigger noise takes out. Risk = max(structure
+              distance, atr_mult × ATR). On a nearby target the wide risk can drop net R:R under the
+              gate (setup then hidden / not entered).
+          'structure': stop at the structural level only (just beyond the OR level / wick), no ATR
+              widening — the way a discretionary trader places it. Tighter risk, better R:R, more
+              exposed to noise. ATR is still the fallback when there's no structural level.
+        The struct buffer (orb_struct_buffer_pct, default 0.10%) is how far beyond the OR level the
+        stop sits; the wick buffer tracks at half of it, preserving the original 2:1 ratio."""
+        atr_mult = self.config.get('intraday_atr_stop_mult', 0.5)
+        stop_mode = self.config.get('orb_stop_mode', 'atr_floor')
+        struct_buf = (self.config.get('orb_struct_buffer_pct', 0.10) or 0.10) / 100.0
+        wick_buf = struct_buf / 2.0
+        atr_dist = entry * (st.info.daily_atr_pct or 0) / 100 * atr_mult
+        if side == 'LONG':
+            struct_stop = min(op.high * (1 - struct_buf), ref_low * (1 - wick_buf))
+            stop = struct_stop if stop_mode == 'structure' else (
+                min(struct_stop, entry - atr_dist) if atr_dist else struct_stop)
+            targets = sorted(x for x in st.info.resistance if x > entry * 1.001)
+        else:
+            struct_stop = max(op.low * (1 + struct_buf), ref_high * (1 + wick_buf))
+            stop = struct_stop if stop_mode == 'structure' else (
+                max(struct_stop, entry + atr_dist) if atr_dist else struct_stop)
+            targets = sorted((x for x in st.info.support if x < entry * 0.999), reverse=True)
+        target = targets[0] if targets else None
+        rr = None
+        if target:
+            cost = entry * self.config['estimated_roundtrip_cost_pct'] / 100
+            reward = ((target - entry) if side == 'LONG' else (entry - target)) - cost
+            risk = abs(entry - stop) + cost
+            if risk > 0:
+                rr = reward / risk
+        return stop, target, rr
+
+    def _attach_breakout_ticket(self, st: SymbolState, side: str, candle: Candle):
+        """Price the breakout (CONFIRMED) entry itself and attach it to the state, so auto-trade with
+        trigger=CONFIRMED can enter on the breakout instead of only on a later retest. Entry is the
+        confirming close; stop/target/net-R:R come from the shared pricing. Gated by the SAME net-R:R
+        floor as the retest: if the breakout entry doesn't clear it (or there's no prior-session
+        target), the ticket is left UNSET and the signal simply waits for a tighter-risk retest entry
+        — exactly the pre-fix behaviour for those breakouts. Idempotent: safe to re-run when an
+        authoritative bar validates a provisional confirmation (re-prices off the authoritative bar)."""
+        op = st.opening
+        if op is None:
+            st.entry = st.stop = st.target = st.net_rr = None
+            return
+        entry = candle.close
+        stop, target, rr = self._breakout_levels(st, op, entry, side, candle.low, candle.high)
+        if rr is not None and rr >= self.config['min_net_reward_risk']:
+            st.entry, st.stop, st.target, st.net_rr = entry, stop, target, rr
+        else:
+            st.entry = st.stop = st.target = st.net_rr = None
+
     def _apply_confirmation(self, st: SymbolState, side: str, level: float,
                             candle: Candle, ts: int, provisional: bool):
         st.state, st.confirmed_side = 'CONFIRMED', side
@@ -334,6 +395,10 @@ class RadarEngine:
         st.reason = (('PROVISIONAL (live) — ' if provisional else '') +
                      f'Completed {self.bar_minutes}m close beyond OR + RVOL + VWAP; '
                      'waiting for retest')
+        # Attach a breakout-entry ticket so trigger=CONFIRMED can enter on the breakout itself (was a
+        # no-op before: CONFIRMED carried no entry/stop and the order engine skipped it). Gated by the
+        # same net-R:R floor; set BEFORE the event so the CONFIRMED signal is recorded with its ticket.
+        self._attach_breakout_ticket(st, side, candle)
         self._event(st, 'CONFIRMED', st.confirmed_at, st.reason, level, provisional=provisional)
 
     def _retract(self, st: SymbolState, candle: Candle, reason: str):
@@ -360,6 +425,9 @@ class RadarEngine:
                 st.confirm_provisional = False
                 st.reason = (f'Breakout validated by authoritative FYERS {self.bar_minutes}m '
                              'candle; waiting for retest')
+                # Re-price the breakout ticket off the authoritative bar: only now (non-provisional)
+                # will trigger=CONFIRMED actually enter, so the entry/stop must reflect real data.
+                self._attach_breakout_ticket(st, st.confirmed_side, candle)
                 return
             self._retract(st, candle,
                           'Provisional breakout not confirmed by authoritative data: ' + reason)
@@ -511,46 +579,9 @@ class RadarEngine:
         if not retest_ok:
             return
         entry = c.close
-        # Stop placement (orb_stop_mode):
-        #   'atr_floor' (default): stop beyond the OR level and the retest wick, but WIDENED to at least
-        #       atr_mult × daily ATR so it isn't a sub-0.2% hair-trigger noise takes out. Risk distance =
-        #       max(structure distance, atr_mult × ATR). Protects against noise, but on a nearby target
-        #       the wide risk can drop net R:R under the gate (→ RISK_FAIL, setup hidden).
-        #   'structure': stop at the structural level only (just beyond the OR level / retest wick), no
-        #       ATR widening — the way a discretionary trader places it. Tighter risk, better R:R, but
-        #       more exposed to noise. ATR is still the fallback when there's no structural level.
-        atr_mult = self.config.get('intraday_atr_stop_mult', 0.5)
-        stop_mode = self.config.get('orb_stop_mode', 'atr_floor')
-        # Structural stop buffer: how far BEYOND the OR level / retest wick the stop sits. Historically
-        # hardcoded at 0.10% (OR level) + 0.05% (retest wick); now config-driven so the stop's tightness
-        # can be tuned without changing mode. The wick buffer tracks at half the OR buffer, preserving
-        # the original 2:1 ratio. Default 0.10 reproduces the old behaviour exactly.
-        struct_buf = (self.config.get('orb_struct_buffer_pct', 0.10) or 0.10) / 100.0
-        wick_buf = struct_buf / 2.0
-        atr_dist = entry * (st.info.daily_atr_pct or 0) / 100 * atr_mult
-        if st.confirmed_side == 'LONG':
-            struct_stop = min(op.high * (1 - struct_buf), c.low * (1 - wick_buf))
-            if stop_mode == 'structure':
-                stop = struct_stop
-            else:
-                stop = min(struct_stop, entry - atr_dist) if atr_dist else struct_stop
-            targets = sorted(x for x in st.info.resistance if x > entry * 1.001)
-        else:
-            struct_stop = max(op.low * (1 + struct_buf), c.high * (1 + wick_buf))
-            if stop_mode == 'structure':
-                stop = struct_stop
-            else:
-                stop = max(struct_stop, entry + atr_dist) if atr_dist else struct_stop
-            targets = sorted((x for x in st.info.support if x < entry * 0.999), reverse=True)
-        target = targets[0] if targets else None
-        rr = None
-        if target:
-            cost = entry * self.config['estimated_roundtrip_cost_pct'] / 100
-            directional_reward = ((target - entry) if st.confirmed_side == 'LONG'
-                                  else (entry - target)) - cost
-            directional_risk = (abs(entry - stop) + cost)
-            if directional_risk > 0:
-                rr = directional_reward / directional_risk
+        # Retest enters at the OR level; stop / nearest prior-session target / net-R:R are priced by the
+        # shared helper (orb_stop_mode honoured) — the identical math the aggressive CONFIRMED entry uses.
+        stop, target, rr = self._breakout_levels(st, op, entry, st.confirmed_side, c.low, c.high)
         st.entry, st.stop, st.target, st.net_rr = entry, stop, target, rr
         if rr is None or rr < self.config['min_net_reward_risk']:
             st.state = 'RISK_FAIL'
