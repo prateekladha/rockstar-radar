@@ -379,14 +379,84 @@ class ControlCenter:
                 return None
         return None
 
-    def scanner_status(self) -> dict:
-        pid = self._read_pid()
-        running = bool(pid and self._pid_alive(pid))
-        if not running and self.pid_path.exists():
+    def _scanner_procs(self, proc_root: str = '/proc'):
+        """(pid, port) for every LIVE (non-zombie) scanner process of THIS owner, identified by its
+        per-owner selection file in the cmdline. Reliable across the new port a restart assigns and
+        across container restarts — unlike the per-port pid file, which an orphaned old-port scanner
+        slips past (it keeps running, holding its per-owner FYERS lock, and blocks the next start).
+        Returns None when it can't scan (sim/demo carry no per-owner selection; non-Linux dev has no
+        /proc), so callers fall back to the pid-file check."""
+        if self.sim or self.demo:
+            return None
+        try:
+            entries = os.listdir(proc_root)
+        except OSError:
+            return None
+        sel = str(self.selection_path).encode()
+        found = []
+        for name in entries:
+            if not name.isdigit():
+                continue
             try:
-                self.pid_path.unlink()
-            except OSError:
+                raw = Path(f'{proc_root}/{name}/cmdline').read_bytes()
+            except (OSError, ValueError):
+                continue
+            if b'launch.py' not in raw or sel not in raw:
+                continue
+            try:   # a zombie is already dead and holds no lock — ignore it
+                if Path(f'{proc_root}/{name}/stat').read_text().rsplit(')', 1)[1].split()[0] == 'Z':
+                    continue
+            except (OSError, IndexError):
                 pass
+            port, parts = 0, raw.split(b'\x00')
+            for i, tok in enumerate(parts):
+                if tok == b'--port' and i + 1 < len(parts):
+                    try:
+                        port = int(parts[i + 1])
+                    except ValueError:
+                        port = 0
+            found.append((int(name), port))
+        return found
+
+    def _signal_procs(self, pids, sig) -> None:
+        """Send `sig` to each pid's process group (fallback: the bare pid), swallowing the race where it
+        already exited."""
+        for pid in pids:
+            try:
+                os.killpg(os.getpgid(pid), sig)
+            except (OSError, ProcessLookupError):
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+
+    def scanner_status(self) -> dict:
+        procs = self._scanner_procs()
+        if procs is not None:
+            # Authoritative: find our live scanner by its per-owner selection, independent of the port
+            # (which changes on every restart). This stops a stale pid file from (a) hiding an orphan on
+            # an old port and (b) reading "not running" and spawning a duplicate that just fails on the
+            # lock. Align our port tracking to the real process so the web proxy hits the right port.
+            if procs:
+                pid, port = procs[0]
+                if port:
+                    self.scanner_port = port
+                running = True
+            else:
+                pid, running = None, False
+                if self.pid_path.exists():
+                    try:
+                        self.pid_path.unlink()
+                    except OSError:
+                        pass
+        else:
+            pid = self._read_pid()
+            running = bool(pid and self._pid_alive(pid))
+            if not running and self.pid_path.exists():
+                try:
+                    self.pid_path.unlink()
+                except OSError:
+                    pass
         uptime = int(time.time() - self._started_at) if (running and self._started_at) else None
         return {'running': running, 'pid': pid if running else None,
                 'scanner_port': self.scanner_port, 'uptime_seconds': uptime}
@@ -415,15 +485,24 @@ class ControlCenter:
         return self.scanner_status()
 
     def stop_scanner(self) -> dict:
-        pid = self._read_pid()
-        if pid and self._pid_alive(pid):
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-            except (OSError, ProcessLookupError):
+        procs = self._scanner_procs()
+        if procs is not None:
+            # Kill EVERY scanner of ours (not only the tracked pid) — an orphan on an old port, or a
+            # duplicate from a start race — and SIGKILL after SIGTERM so a hung one that ignores SIGTERM
+            # still dies and frees its per-owner FYERS lock. The OS releases the lock on process death.
+            pids = [p for p, _ in procs]
+            self._signal_procs(pids, signal.SIGTERM)
+            self._signal_procs(pids, signal.SIGKILL)
+        else:
+            pid = self._read_pid()
+            if pid and self._pid_alive(pid):
                 try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
-                    pass
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                except (OSError, ProcessLookupError):
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except OSError:
+                        pass
         if self.pid_path.exists():
             try:
                 self.pid_path.unlink()

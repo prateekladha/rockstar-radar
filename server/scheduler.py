@@ -28,6 +28,9 @@ _START_AT = os.environ.get('RADAR_SCHED_START_HHMM', '09:08')
 _PNL_AT = os.environ.get('RADAR_SCHED_PNL_HHMM', '15:35')
 _SUPERVISE_UNTIL = os.environ.get('RADAR_SCHED_SUPERVISE_UNTIL_HHMM', '15:35')
 _SUPERVISE_EVERY_MIN = int(os.environ.get('RADAR_SCHED_SUPERVISE_EVERY_MIN', '2'))
+# After the supervisor stops (so it won't just restart them), kill any lingering scanner processes so
+# none survives overnight holding its per-owner FYERS lock and blocks tomorrow's feed.
+_EOD_CLEANUP_AT = os.environ.get('RADAR_SCHED_EOD_CLEANUP_HHMM', '15:40')
 # Loop period. Also the worst-case delay between a signal appearing on the radar and the Telegram
 # alert going out; well inside a 5-minute bar. Every other action is day- or minute-gated, so a
 # faster tick only affects alert latency.
@@ -104,6 +107,16 @@ def _daily_pnl_summary() -> None:
         print(f'[scheduler] daily P&L summary failed: {e}')
     finally:
         db.close()
+
+
+def _eod_cleanup() -> None:
+    """Session-end sweep: kill every lingering scanner process so none survives overnight holding its
+    per-owner FYERS lock (a stale scanner blocks the next day's feed until it is manually killed)."""
+    try:
+        n = scanners.stop_all_scanner_processes()
+        print(f'[scheduler] EOD cleanup: stopped {n} scanner process(es)')
+    except Exception as e:
+        print(f'[scheduler] EOD cleanup failed: {e}')
 
 
 def _start_all_scanners() -> None:
@@ -206,6 +219,8 @@ async def run_scheduler() -> None:
                     await asyncio.to_thread(_start_all_scanners)
                 if hhmm >= _PNL_AT and _run_once('pnl', today):
                     await asyncio.to_thread(_daily_pnl_summary)
+                if hhmm >= _EOD_CLEANUP_AT and _run_once('eod_cleanup', today):
+                    await asyncio.to_thread(_eod_cleanup)
                 # Supervisor: during market hours, keep scanners up (restart crashes) every few min.
                 global _last_supervise_min
                 if _START_AT <= hhmm <= _SUPERVISE_UNTIL:
