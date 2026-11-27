@@ -46,6 +46,7 @@ EDITABLE_CONFIG = {
     'use_one_minute_candles': ('bool', None, None),
     'watch_start': ('time', None, None),
     'new_signals_stop': ('time', None, None),
+    'square_off_time': ('time', None, None),            # intraday force-flat time (paper square-off)
     'near_boundary_pct': ('num', 0, 10),
     'ready_boundary_pct': ('num', 0, 10),
     'min_confirm_rvol': ('num', 0, 100),
