@@ -14,6 +14,7 @@
   "watch_start": "09:20",
   "new_signals_stop": "15:00",
   "square_off_time": "15:00",
+  "new_trade_cutoff": "14:30",
   "near_boundary_pct": 0.35,
   "ready_boundary_pct": 0.18,
   "reconcile_signals_only": true,

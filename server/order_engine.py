@@ -332,6 +332,19 @@ def _trades_today(db: Session, user_id: int, sym: str, today: str) -> int:
                o.created_at.replace(tzinfo=_tz.utc).astimezone(IST).date().isoformat() == today)
 
 
+def _entries_cut_off(sdata: dict, cfg: dict, *, sim: bool) -> bool:
+    """True when new auto-trade ENTRIES should stop for the day: now (IST) is at/after the per-user
+    `new_trade_cutoff` (default 14:30). A late entry has little runway before the square-off, so we
+    simply stop opening fresh positions past this time. This gates ENTRIES only — open positions
+    still take their reversal/stop/target exits and the end-of-session square-off. Sim is accelerated
+    practice on an arbitrary wall clock, so the real-time cutoff never applies there."""
+    if sim:
+        return False
+    from radar.utils import now_ist
+    cutoff = str(sdata.get('new_trade_cutoff', cfg.get('new_trade_cutoff', '14:30')) or '14:30')
+    return now_ist().strftime('%H:%M') >= cutoff
+
+
 def _auto_trade(db: Session) -> int:
     """Per-user auto PAPER trading (admin-enabled). For each user with it on, drive trades off their
     live feed with no delay:
@@ -375,6 +388,7 @@ def _auto_trade(db: Session) -> int:
         pending_auto = {watchpins.bare(o.symbol) for o in db.query(Order)
                         .filter_by(user_id=u.id, source='auto', status='pending').all()}
         sdata = (u.settings.data if u.settings else {}) or {}
+        entries_off = _entries_cut_off(sdata, cfg, sim=bool(u.sim_enabled))
         capital = float(sdata.get('capital_inr', cfg.get('capital_inr', 0)) or 0)
         risk_pct = float(sdata.get('risk_pct', cfg.get('risk_pct', 0)) or 0)
         max_risk = capital * risk_pct / 100 if (capital and risk_pct) else 0
@@ -432,6 +446,11 @@ def _auto_trade(db: Session) -> int:
                     del open_auto[sym]
                     changed += 1
                 continue
+            # Session-end entry cutoff: stop opening NEW positions at/after `new_trade_cutoff`
+            # (default 14:30). Exits above (reversal) and the stop/target/square-off passes are
+            # unaffected — only fresh entries are blocked.
+            if entries_off:
+                continue
             # No open position: don't double-enter. Real trading = one entry per symbol/day; the
             # simulation may re-enter each cycle (after the prior position closed) so trades keep
             # flowing while you watch — but NOT after the session has ended.
@@ -484,6 +503,10 @@ def _auto_trade_smc(db: Session) -> int:
     for u in users:
         sdata = (u.settings.data if u.settings else {}) or {}
         if not bool(sdata.get('auto_trade_smc', cfg.get('auto_trade_smc', False))):
+            continue
+        # Session-end entry cutoff (default 14:30): SMC is entry-only here (stop/target/square-off
+        # handle exits), so past the cutoff there is nothing to do for this user.
+        if _entries_cut_off(sdata, cfg, sim=bool(u.sim_enabled)):
             continue
         try:
             st = scanners.radar_state(db, u)
